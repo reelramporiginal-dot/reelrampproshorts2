@@ -3003,9 +3003,6 @@ useEffect(() => {
       setDownloads(storedVids.filter(v => Array.isArray(dlIds) && dlIds.includes(v.id)));
     }
 
-    // Load downloads
-    dlIds = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
-    setDownloads(storedVids.filter(v => dlIds.includes(v.id)));
   }, []);
 
   const updateName = (newName: string) => {
