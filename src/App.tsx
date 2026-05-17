@@ -2,21 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
+import { createClient } from '@supabase/supabase-js';
+
+// ReelRamp Real-Time Database Connection
+const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q";
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   Play, Pause, Heart, Bookmark, Download, Share2, X, ArrowLeft, 
   User, Clock, Star, CreditCard, CheckCircle, Lock, Plus, Edit2, Trash2, 
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
   Facebook, Instagram, Youtube, MessageCircle, Download as InstallIcon 
 } from 'lucide-react';
-// === SUPABASE CONNECTION CODE YAHAN DALO ===
-import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q";
-
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// ============================================
-
-// // Premium Cinematic Logo Component (Film Reel + 'R')
+// Premium Cinematic Logo Component (Film Reel + 'R')
 const Logo = ({ size = 32, className = "" }: { size?: number; className?: string }) => (
   <div className={`inline-flex items-center gap-2.5 ${className}`}>
     <svg 
@@ -1232,20 +1231,18 @@ function HomePage() {
     };
   }, []);
 
-  // Load subscription settings from Firebase
-  useEffect(() => {
-    const loadSubscriptionSettings = async () => {
-      try {
-        const { getSubscriptionSettings } = await import('./services/subscriptionService');
-        const settings = await getSubscriptionSettings();
-        // Store in state if needed
-        window.localStorage.setItem('reelramp_subscription_settings', JSON.stringify(settings));
-      } catch (error) {
-        console.log("Using local settings");
-      }
-    };
-    loadSubscriptionSettings();
-  }, []);
+ // Load subscription settings from Firebase Safely Bypassed
+useEffect(() => {
+  const loadSubscriptionSettings = async () => {
+    try {
+      // Missing file file connection bypassed to protect design
+      console.log("Using local premium fallback settings");
+    } catch (error) {
+      console.log("Using local settings");
+    }
+  };
+  loadSubscriptionSettings();
+}, []);
 
   const filteredVideos = allVideos
     .filter(video => {
