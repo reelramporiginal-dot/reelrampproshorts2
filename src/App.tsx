@@ -182,7 +182,7 @@ const defaultPromoVideo: PromoVideoSettings = {
 // LOCAL STORAGE HELPERS (production-safe, no sim UIDs)
 // ─────────────────────────────────────────────────────────────────────────────
 const ls = {
-  get: <T>(key: string, fallback: T): T => {
+ get: <T>(key: string, fallback: T): T => {
     try {
       const v = localStorage.getItem(key);
       return v ? (JSON.parse(v) as T) : fallback;
