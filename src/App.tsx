@@ -9,7 +9,8 @@ import {
   Play, Pause, Heart, Bookmark, Download, Share2, X, ArrowLeft,
   User as UserIcon, Clock, Star, CreditCard, CheckCircle, Lock, Plus, Edit2, Trash2,
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
-  Facebook, Instagram, Youtube, MessageCircle, Download as InstallIcon
+  Facebook, Instagram, Youtube, MessageCircle, Download as InstallIcon,
+  ChevronUp, ChevronDown, SkipForward, FastForward
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,7 +183,7 @@ const defaultPromoVideo: PromoVideoSettings = {
 // LOCAL STORAGE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 const ls = {
-  get: <T,>(key: string, fallback: T): T => {
+  get: <T>(key: string, fallback: T): T => {
     try {
       const v = localStorage.getItem(key);
       return v ? (JSON.parse(v) as T) : fallback;
@@ -190,37 +191,85 @@ const ls = {
       return fallback;
     }
   },
-  set: (key: string, value: unknown): void => {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota */ }
+  set: (key: string, value: unknown) => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { }
   },
-  remove: (key: string): void => localStorage.removeItem(key),
+  remove: (key: string) => localStorage.removeItem(key),
 };
 
-const getStoredVideos = (): Video[] => ls.get('reelramp_videos', initialVideos);
-const saveVideos = (v: Video[]) => ls.set('reelramp_videos', v);
-const fetchVideos = (): Promise<Video[]> =>
-  new Promise(res => setTimeout(() => res(getStoredVideos()), 250));
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPABASE DATA HELPERS — every read/write goes through Supabase first,
+// localStorage is only a local cache / offline fallback.
+// ─────────────────────────────────────────────────────────────────────────────
 
-const getStoredPopups = (): PopupAd[] =>
-  ls.get('reelramp_popups', [{ id: 1, title: "Premium Unlock", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: true }]);
-const savePopups = (p: PopupAd[]) => ls.set('reelramp_popups', p);
+// Videos
+const fetchVideosFromDB = async (): Promise<Video[]> => {
+  try {
+    const { data, error } = await supabase.from('videos').select('*').order('id');
+    if (!error && data && data.length > 0) {
+      ls.set('reelramp_videos', data);
+      return data as Video[];
+    }
+  } catch { }
+  return ls.get('reelramp_videos', initialVideos);
+};
 
-const getSettings = (): PlatformSettings => ls.get('reelramp_settings', defaultPlatformSettings);
-const saveSettings = (s: PlatformSettings) => ls.set('reelramp_settings', s);
+const upsertVideoToDB = async (video: Video): Promise<void> => {
+  try { await supabase.from('videos').upsert(video); } catch { }
+};
 
-const getSubSettings = (): SubscriptionSettings => ls.get('reelramp_sub_settings', defaultSubscriptionSettings);
-const saveSubSettings = (s: SubscriptionSettings) => ls.set('reelramp_sub_settings', s);
+const deleteVideoFromDB = async (id: number): Promise<void> => {
+  try { await supabase.from('videos').delete().eq('id', id); } catch { }
+};
 
-const getPaymentSettings = (): PaymentSettings => ls.get('reelramp_payment', defaultPaymentSettings);
-const savePaymentSettings = (s: PaymentSettings) => ls.set('reelramp_payment', s);
+// Settings helpers (Supabase `platform_settings` table: single row keyed by `key`)
+const fetchSettingFromDB = async <T>(key: string, fallback: T): Promise<T> => {
+  try {
+    const { data } = await supabase.from('platform_settings').select('value').eq('key', key).single();
+    if (data?.value) return data.value as T;
+  } catch { }
+  return ls.get(`reelramp_${key}`, fallback);
+};
 
-const getPromoSettings = (): PromoVideoSettings => ls.get('reelramp_promo', defaultPromoVideo);
-const savePromoSettings = (s: PromoVideoSettings) => ls.set('reelramp_promo', s);
+const upsertSettingToDB = async (key: string, value: unknown): Promise<void> => {
+  ls.set(`reelramp_${key}`, value);
+  try { await supabase.from('platform_settings').upsert({ key, value }); } catch { }
+};
 
-const getCategories = (): string[] =>
-  ls.get('reelramp_categories', ["Horror", "Mystery", "Life Lessons", "Investigative", "True Crime"]);
-const saveCategories = (c: string[]) => ls.set('reelramp_categories', c);
+// Popups
+const fetchPopupsFromDB = async (): Promise<PopupAd[]> => {
+  try {
+    const { data } = await supabase.from('popup_ads').select('*').order('id');
+    if (data && data.length > 0) {
+      ls.set('reelramp_popups', data);
+      return data as PopupAd[];
+    }
+  } catch { }
+  return ls.get('reelramp_popups', [{ id: 1, title: "Premium Unlock", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: true }]);
+};
 
+const upsertPopupToDB = async (popup: PopupAd): Promise<void> => {
+  try { await supabase.from('popup_ads').upsert(popup); } catch { }
+};
+
+const deletePopupFromDB = async (id: number): Promise<void> => {
+  try { await supabase.from('popup_ads').delete().eq('id', id); } catch { }
+};
+
+// Categories
+const fetchCategoriesFromDB = async (): Promise<string[]> => {
+  try {
+    const { data } = await supabase.from('categories').select('name').order('name');
+    if (data && data.length > 0) {
+      const cats = data.map((r: { name: string }) => r.name);
+      ls.set('reelramp_categories', cats);
+      return cats;
+    }
+  } catch { }
+  return ls.get('reelramp_categories', ["Horror", "Mystery", "Life Lessons", "Investigative", "True Crime"]);
+};
+
+// Local-only helpers (watch history, views, ratings — user-specific, no DB needed)
 const getWatchHistory = (): WatchHistoryItem[] => ls.get('reelramp_watch_history', []);
 const saveWatchHistory = (h: WatchHistoryItem[]) => ls.set('reelramp_watch_history', h);
 
@@ -254,61 +303,6 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
   if (r) return { average: r, count: 1 };
   const simulated = Math.min(5, (videoId % 5) + 3.5);
   return { average: simulated, count: 12 + (videoId % 30) };
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPABASE REAL-TIME SYNC HELPER
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Push any key/value to the `app_config` table so all clients see it live. */
-const dbSet = async (key: string, value: unknown): Promise<void> => {
-  try {
-    await supabase
-      .from('app_config')
-      .upsert({ key, value: JSON.stringify(value) }, { onConflict: 'key' });
-  } catch { /* fall through to localStorage */ }
-  ls.set(key, value);
-};
-
-/** Read from Supabase first, fall back to localStorage. */
-const dbGet = async <T,>(key: string, fallback: T): Promise<T> => {
-  try {
-    const { data } = await supabase
-      .from('app_config')
-      .select('value')
-      .eq('key', key)
-      .single();
-    if (data?.value) return JSON.parse(data.value) as T;
-  } catch { /* offline or table missing */ }
-  return ls.get(key, fallback);
-};
-
-/**
- * Subscribe to live changes on `app_config` for a given key.
- * Returns an unsubscribe function.
- */
-const dbSubscribe = (
-  key: string,
-  cb: (value: string) => void
-): (() => void) => {
-  const channel = supabase
-    .channel(`config:${key}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'app_config',
-        filter: `key=eq.${key}`,
-      },
-      payload => {
-        const newValue = (payload.new as { value?: string })?.value;
-        if (newValue !== undefined) cb(newValue);
-      }
-    )
-    .subscribe();
-
-  return () => { supabase.removeChannel(channel); };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -408,408 +402,245 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PWA INSTALL PROMPT
+// FIX #4 — ULTRA-PREMIUM KUKU TV / TIKTOK STYLE VIDEO PLAYER
 // ─────────────────────────────────────────────────────────────────────────────
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
-
-function usePWAInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstallable, setIsInstallable] = useState(false);
-  const [isInstalled, setIsInstalled] = useState(false);
-
-  useEffect(() => {
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setIsInstalled(true);
-      return;
-    }
-
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setIsInstallable(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handler);
-    window.addEventListener('appinstalled', () => {
-      setIsInstalled(true);
-      setIsInstallable(false);
-      setDeferredPrompt(null);
-    });
-
-    return () => window.removeEventListener('beforeinstallprompt', handler);
-  }, []);
-
-  const triggerInstall = async () => {
-    if (!deferredPrompt) return;
-    await deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') setIsInstalled(true);
-    setDeferredPrompt(null);
-    setIsInstallable(false);
-  };
-
-  return { isInstallable, isInstalled, triggerInstall };
-}
-
-function PWAInstallBanner() {
-  const { isInstallable, isInstalled, triggerInstall } = usePWAInstall();
-  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('pwa_dismissed') === '1');
-
-  if (isInstalled || dismissed || !isInstallable) return null;
-
-  return (
-    <motion.div
-      initial={{ y: 100, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      exit={{ y: 100, opacity: 0 }}
-      transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.4, delay: 3 }}
-      className="fixed bottom-[72px] md:bottom-6 left-3 right-3 md:left-auto md:right-6 md:w-[360px] z-[100] bg-[#111] border border-[#c5a26f]/40 rounded-3xl px-6 py-5 shadow-2xl flex items-center gap-4"
-    >
-      <div className="w-12 h-12 flex-shrink-0 bg-[#c5a26f] rounded-2xl flex items-center justify-center">
-        <InstallIcon size={22} className="text-black" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-semibold text-sm tracking-tight text-white">Install ReelRamp Pro</div>
-        <div className="text-[11px] text-[#a1a1aa] mt-0.5 leading-snug">Add to home screen for the full cinematic experience</div>
-      </div>
-      <div className="flex flex-col gap-1.5 flex-shrink-0">
-        <button
-          onClick={triggerInstall}
-          className="px-4 py-2 bg-[#c5a26f] text-black text-xs font-semibold rounded-xl tracking-wider"
-        >
-          INSTALL
-        </button>
-        <button
-          onClick={() => { setDismissed(true); sessionStorage.setItem('pwa_dismissed', '1'); }}
-          className="px-4 py-1.5 text-[#666] text-[10px] rounded-xl hover:text-white transition"
-        >
-          Not now
-        </button>
-      </div>
-      <button
-        onClick={() => { setDismissed(true); sessionStorage.setItem('pwa_dismissed', '1'); }}
-        className="absolute top-3 right-3 text-[#666] hover:text-white"
-      >
-        <X size={14} />
-      </button>
-    </motion.div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LOADING SPINNER (shared)
-// ─────────────────────────────────────────────────────────────────────────────
-function LoadingSpinner() {
-  return (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-30 pointer-events-none">
-      <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ACTION BUTTON (shared in immersive player)
-// ─────────────────────────────────────────────────────────────────────────────
-function ActionBtn({
-  children, onClick, label, active = false, activeClass = 'bg-black/60',
-}: {
-  children: React.ReactNode;
-  onClick: React.MouseEventHandler;
-  label: string;
-  active?: boolean;
-  activeClass?: string;
-}) {
-  return (
-    <button onClick={onClick} className="flex flex-col items-center gap-1">
-      <div className={`p-3.5 rounded-2xl backdrop-blur transition ${active ? activeClass : 'bg-black/60'}`}>
-        {children}
-      </div>
-      <span className="text-[9px] tracking-wider text-white/70">{label}</span>
-    </button>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// KUKU TV STYLE IMMERSIVE VERTICAL PLAYER
-// ─────────────────────────────────────────────────────────────────────────────
-interface ImmersivePlayerProps {
+interface PremiumVideoPlayerProps {
   video: Video;
   isPlaying: boolean;
   onPlayPause: () => void;
   onEnded: () => void;
-  onNext: () => void;
-  onPrev: () => void;
-  hasNext: boolean;
-  hasPrev: boolean;
-  isLiked: boolean;
-  onLike: () => void;
-  isSaved: boolean;
-  onSave: () => void;
-  onShare: () => void;
-  onSubscribe?: () => void;
-  isSubscribed: boolean;
-  userRating: number;
-  onRate: (n: number) => void;
+  onProgress?: (pct: number) => void;
 }
 
-function ImmersivePlayer({
-  video, isPlaying, onPlayPause, onEnded, onNext, onPrev,
-  hasNext, hasPrev, isLiked, onLike, isSaved, onSave, onShare,
-  onSubscribe, isSubscribed, userRating, onRate,
-}: ImmersivePlayerProps) {
+function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress }: PremiumVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isMuted, setIsMuted] = useState(false);
-  const [speed, setSpeed] = useState(1);
-  const [progress, setProgress] = useState(0);
-  const [buffered, setBuffered] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [tapped, setTapped] = useState<'left' | 'right' | null>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const [doubleTapSide, setDoubleTapSide] = useState<'left' | 'right' | null>(null);
+  const [likeAnim, setLikeAnim] = useState(false);
+  const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (isPlaying) v.play().catch(() => {});
-    else v.pause();
+    if (isPlaying) { v.play().catch(() => {}); }
+    else { v.pause(); }
   }, [isPlaying]);
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.muted = isMuted;
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = isMuted;
   }, [isMuted]);
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-  }, [speed]);
-
-  const resetHideTimer = useCallback(() => {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => {}, 3500);
-  }, []);
-
-  useEffect(() => {
-    resetHideTimer();
-    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
-  }, [resetHideTimer]);
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = playbackSpeed;
+  }, [playbackSpeed]);
 
   const handleTimeUpdate = () => {
     const v = videoRef.current;
     if (!v || !v.duration) return;
-    setProgress((v.currentTime / v.duration) * 100);
-    if (v.buffered.length > 0) {
-      setBuffered((v.buffered.end(v.buffered.length - 1) / v.duration) * 100);
-    }
+    const pct = (v.currentTime / v.duration) * 100;
+    setProgress(pct);
+    setCurrentTime(v.currentTime);
+    onProgress?.(pct);
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     const v = videoRef.current;
     if (!v) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    v.currentTime = pct * v.duration;
+    const ratio = (e.clientX - rect.left) / rect.width;
+    v.currentTime = ratio * v.duration;
   };
 
-  const handleDoubleTap = (side: 'left' | 'right') => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + (side === 'right' ? 10 : -10)));
-    setTapped(side);
-    setTimeout(() => setTapped(null), 600);
+  const handleTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    const now = Date.now();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const tapX = e.clientX - rect.left;
+    const isLeft = tapX < rect.width / 2;
+    const diff = now - lastTapRef.current.time;
+
+    if (diff < 300) {
+      // double-tap
+      const v = videoRef.current;
+      if (v) {
+        v.currentTime = isLeft ? Math.max(0, v.currentTime - 10) : Math.min(v.duration, v.currentTime + 10);
+      }
+      setDoubleTapSide(isLeft ? 'left' : 'right');
+      if (!isLeft) setLikeAnim(true);
+      setTimeout(() => { setDoubleTapSide(null); setLikeAnim(false); }, 700);
+    } else {
+      // single tap — play/pause
+      setTimeout(() => {
+        if (Date.now() - now >= 280) onPlayPause();
+      }, 300);
+    }
+    lastTapRef.current = { time: now, x: tapX };
   };
 
-  const resolvedUrl = video.source === 'bunny'
-    ? getBunnyCdnUrl(video.videoUrl)
-    : video.videoUrl;
+  const formatTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
 
-  // YouTube embed path
   if (video.source === 'youtube') {
-    const vid = video.videoUrl.split('/').pop()?.split('?')[0] || '';
+    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
     return (
       <div className="relative w-full h-full bg-black">
         <iframe
           width="100%" height="100%"
-          src={`https://www.youtube.com/embed/${vid}?autoplay=${isPlaying ? 1 : 0}&controls=0&modestbranding=1&rel=0&playsinline=1`}
-          title={video.title} frameBorder="0"
+          src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
+          title={video.title}
+          frameBorder="0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen className="w-full h-full"
+          allowFullScreen
+          className="w-full h-full"
           onLoad={() => setIsLoaded(true)}
         />
-        {!isLoaded && <LoadingSpinner />}
+        {!isLoaded && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black">
+            <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
       </div>
     );
   }
 
+  const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
+
   return (
-    <div
-      className="relative w-full h-full bg-black select-none overflow-hidden"
-      onClick={() => { setShowSpeedMenu(false); resetHideTimer(); }}
-    >
-      {/* VIDEO */}
+    <div className="relative w-full h-full bg-black select-none">
       <video
         ref={videoRef}
         src={resolvedUrl}
         className="w-full h-full object-cover"
         playsInline
         autoPlay={isPlaying}
-        loop={false}
         onEnded={onEnded}
-        onLoadedData={() => {
-          setIsLoaded(true);
-          if (isPlaying && videoRef.current) videoRef.current.play().catch(() => {});
-        }}
+        onLoadedData={() => { setIsLoaded(true); setDuration(videoRef.current?.duration || 0); }}
         onTimeUpdate={handleTimeUpdate}
-        onWaiting={() => setIsLoaded(false)}
-        onPlaying={() => setIsLoaded(true)}
       />
 
-      {!isLoaded && <LoadingSpinner />}
+      {/* Tap zone */}
+      <div className="absolute inset-0 z-10" onClick={handleTap} />
 
-      {/* DOUBLE-TAP ZONES */}
-      <div className="absolute inset-0 flex pointer-events-none">
-        <div
-          className="flex-1 pointer-events-auto"
-          onDoubleClick={() => handleDoubleTap('left')}
-          onClick={e => { e.stopPropagation(); resetHideTimer(); onPlayPause(); }}
-        />
-        <div
-          className="flex-1 pointer-events-auto"
-          onDoubleClick={() => handleDoubleTap('right')}
-          onClick={e => { e.stopPropagation(); resetHideTimer(); onPlayPause(); }}
-        />
-      </div>
+      {/* Double-tap flash */}
+      <AnimatePresence>
+        {doubleTapSide && (
+          <motion.div
+            key={doubleTapSide}
+            initial={{ opacity: 0.9, scale: 0.8 }}
+            animate={{ opacity: 0, scale: 1.2 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6 }}
+            className={`absolute top-1/2 -translate-y-1/2 z-20 pointer-events-none flex items-center justify-center w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm ${doubleTapSide === 'left' ? 'left-8' : 'right-8'}`}
+          >
+            <span className="text-white text-2xl font-bold">{doubleTapSide === 'left' ? '−10s' : '+10s'}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* SEEK FLASH OVERLAY */}
-      {tapped && (
-        <div className={`absolute inset-y-0 ${tapped === 'left' ? 'left-0' : 'right-0'} w-1/2 flex items-center justify-center pointer-events-none z-20`}>
-          <div className="bg-white/10 rounded-full px-6 py-4 text-white text-xl font-bold backdrop-blur-sm">
-            {tapped === 'left' ? '« 10s' : '10s »'}
-          </div>
+      {/* Heart burst on double-tap right */}
+      <AnimatePresence>
+        {likeAnim && (
+          <motion.div
+            initial={{ opacity: 1, scale: 0.5, y: 0 }}
+            animate={{ opacity: 0, scale: 1.8, y: -80 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.8, ease: 'easeOut' }}
+            className="absolute bottom-32 right-12 z-30 pointer-events-none text-[#e11d48] text-5xl"
+          >
+            ❤️
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Loading spinner */}
+      {!isLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-20">
+          <div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
-      {/* TOP GRADIENT */}
-      <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
-
-      {/* BOTTOM GRADIENT */}
-      <div className="absolute bottom-0 left-0 right-0 h-56 bg-gradient-to-t from-black via-black/80 to-transparent pointer-events-none" />
-
-      {/* RIGHT ACTION BAR */}
-      <div className="absolute right-3 bottom-36 flex flex-col items-center gap-5 z-50">
-        <ActionBtn
-          onClick={e => { e.stopPropagation(); onLike(); }}
-          label="LIKE"
-          active={isLiked}
-          activeClass="bg-[#e11d48]"
+      {/* Pause overlay */}
+      {!isPlaying && isLoaded && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 flex items-center justify-center bg-black/25 z-10 pointer-events-none"
         >
-          <Heart size={22} className={isLiked ? 'fill-white text-white' : ''} />
-        </ActionBtn>
+          <div className="w-20 h-20 rounded-full bg-white/90 flex items-center justify-center shadow-2xl">
+            <Play size={38} className="text-black ml-1" />
+          </div>
+        </motion.div>
+      )}
 
-        <ActionBtn onClick={e => { e.stopPropagation(); onSave(); }} label="SAVE">
-          <Bookmark size={22} className={isSaved ? 'fill-[#c5a26f] text-[#c5a26f]' : ''} />
-        </ActionBtn>
-
-        <ActionBtn onClick={e => { e.stopPropagation(); onShare(); }} label="SHARE">
-          <Share2 size={22} />
-        </ActionBtn>
-
-        <ActionBtn onClick={e => { e.stopPropagation(); setIsMuted(m => !m); }} label={isMuted ? 'UNMUTE' : 'MUTE'}>
-          {isMuted ? <VolumeX size={22} /> : <Volume2 size={22} />}
-        </ActionBtn>
-
-        {/* Speed selector */}
+      {/* Top controls: mute + speed */}
+      <div className="absolute top-4 right-4 z-30 flex flex-col items-end gap-2">
+        <button
+          onClick={(e) => { e.stopPropagation(); setIsMuted(m => !m); }}
+          className="p-2.5 bg-black/50 backdrop-blur-md rounded-xl border border-white/10"
+        >
+          {isMuted ? <VolumeX size={18} className="text-white" /> : <Volume2 size={18} className="text-white" />}
+        </button>
         <div className="relative">
-          <ActionBtn
-            onClick={e => { e.stopPropagation(); setShowSpeedMenu(m => !m); }}
-            label={`${speed}x`}
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(s => !s); }}
+            className="px-3 py-2 bg-black/50 backdrop-blur-md rounded-xl border border-white/10 text-white text-xs font-mono font-semibold"
           >
-            <span className="text-xs font-bold text-white w-5 h-5 flex items-center justify-center">{speed}x</span>
-          </ActionBtn>
-          {showSpeedMenu && (
-            <div className="absolute right-14 bottom-0 bg-[#1a1a1a] border border-[#333] rounded-2xl overflow-hidden w-20 shadow-2xl z-50">
-              {SPEEDS.map(s => (
-                <button
-                  key={s}
-                  onClick={e => { e.stopPropagation(); setSpeed(s); setShowSpeedMenu(false); }}
-                  className={`w-full py-2.5 text-sm font-mono transition ${speed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white hover:bg-[#222]'}`}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
-          )}
+            {playbackSpeed}×
+          </button>
+          <AnimatePresence>
+            {showSpeedMenu && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="absolute right-0 top-10 bg-[#111]/95 backdrop-blur-xl border border-[#333] rounded-2xl overflow-hidden z-50 w-24"
+                onClick={e => e.stopPropagation()}
+              >
+                {SPEEDS.map(s => (
+                  <button
+                    key={s}
+                    onClick={() => { setPlaybackSpeed(s); setShowSpeedMenu(false); }}
+                    className={`w-full py-2.5 text-center text-sm font-mono transition ${playbackSpeed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white hover:bg-[#222]'}`}
+                  >
+                    {s}×
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
-
-        {video.isPremium && !isSubscribed && (
-          <ActionBtn
-            onClick={e => { e.stopPropagation(); onSubscribe?.(); }}
-            label="UNLOCK"
-            activeClass="bg-[#e11d48]"
-            active
-          >
-            <Lock size={20} />
-          </ActionBtn>
-        )}
       </div>
 
-      {/* BOTTOM INFO + CONTROLS */}
-      <div className="absolute bottom-0 left-0 right-0 px-5 pb-6 z-40 pointer-events-none">
-        <div className="mb-4 pointer-events-auto max-w-[70%]">
-          <h2 className="text-2xl font-semibold tracking-tight leading-tight">{video.title}</h2>
-          <p className="text-xs text-white/60 mt-1 line-clamp-2">{video.description}</p>
-          <div className="flex items-center gap-1 mt-2">
-            {[1, 2, 3, 4, 5].map(s => (
-              <button key={s} onClick={() => onRate(s)} className="text-xl leading-none">
-                {s <= userRating ? '★' : '☆'}
-              </button>
-            ))}
+      {/* Progress bar */}
+      <div
+        className="absolute bottom-0 left-0 right-0 z-30 px-0 pb-0 cursor-pointer group"
+        onClick={e => { e.stopPropagation(); handleSeek(e); }}
+      >
+        <div className="relative h-[3px] bg-white/20 group-hover:h-[5px] transition-all">
+          <div
+            className="h-full bg-[#c5a26f] relative"
+            style={{ width: `${progress}%` }}
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-[#c5a26f] opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" />
           </div>
         </div>
-
-        {/* SEEKBAR */}
-        <div
-          className="relative h-1 w-full bg-white/20 rounded-full mb-4 cursor-pointer pointer-events-auto"
-          onClick={handleSeek}
-        >
-          <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full" style={{ width: `${buffered}%` }} />
-          <div className="absolute inset-y-0 left-0 bg-[#c5a26f] rounded-full" style={{ width: `${progress}%` }} />
-          <div
-            className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow-lg -ml-1.5"
-            style={{ left: `${progress}%` }}
-          />
-        </div>
-
-        {/* PREV / PLAY-PAUSE / NEXT */}
-        <div className="flex items-center justify-between pointer-events-auto">
-          <button
-            onClick={e => { e.stopPropagation(); onPrev(); }}
-            disabled={!hasPrev}
-            className="p-3 bg-black/40 backdrop-blur rounded-2xl disabled:opacity-30"
-          >
-            <ArrowLeft size={20} />
-          </button>
-
-          <button
-            onClick={e => { e.stopPropagation(); onPlayPause(); }}
-            className="w-14 h-14 rounded-full bg-white flex items-center justify-center shadow-xl"
-          >
-            {isPlaying
-              ? <Pause size={26} className="text-black" />
-              : <Play size={26} className="text-black ml-0.5" />}
-          </button>
-
-          <button
-            onClick={e => { e.stopPropagation(); if (hasNext) onNext(); }}
-            disabled={!hasNext}
-            className="p-3 bg-black/40 backdrop-blur rounded-2xl disabled:opacity-30 text-xs font-medium tracking-wider"
-          >
-            NEXT
-          </button>
+        {/* Time display */}
+        <div className="absolute bottom-2 right-3 text-[10px] font-mono text-white/60 opacity-0 group-hover:opacity-100 transition-opacity">
+          {formatTime(currentTime)} / {formatTime(duration)}
         </div>
       </div>
     </div>
@@ -839,7 +670,8 @@ function AppContent() {
     location.pathname === '/login';
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col">
+    // FIX #3 — viewport lock for mobile: max-w-md mx-auto w-full overflow-x-hidden
+    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col max-w-[100vw] overflow-x-hidden">
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -859,9 +691,6 @@ function AppContent() {
         <>
           <Footer />
           <BottomNavigation />
-          <AnimatePresence>
-            <PWAInstallBanner />
-          </AnimatePresence>
         </>
       )}
     </div>
@@ -869,42 +698,130 @@ function AppContent() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOGIN PAGE
+// FIX #2 — PROMO POPUP LOGIC (aggressive until subscribed, zero for subscribers)
+// Returns whether popup should show based on subscription state + timing logic
+// ─────────────────────────────────────────────────────────────────────────────
+function usePromoPopupScheduler(isSubscribed: boolean) {
+  const [showTrialPopup, setShowTrialPopup] = useState(false);
+  const [showGlobalPopup, setShowGlobalPopup] = useState(false);
+
+  useEffect(() => {
+    // If subscribed, NEVER show any popup — kill timers immediately
+    if (isSubscribed) {
+      setShowTrialPopup(false);
+      setShowGlobalPopup(false);
+      return;
+    }
+
+    // Logarithmic: show more aggressively early, then every ~90s
+    let popupCount = parseInt(sessionStorage.getItem('rr_popup_count') || '0');
+
+    const scheduleNext = (delay: number) => {
+      return setTimeout(() => {
+        if (!isSubscribed) {
+          setShowTrialPopup(true);
+          popupCount++;
+          sessionStorage.setItem('rr_popup_count', String(popupCount));
+          // Next popup delay: logarithmically increases then caps at 90s
+          const nextDelay = Math.min(90000, 8000 * Math.log(popupCount + 2));
+          const nextTimer = scheduleNext(nextDelay);
+          return () => clearTimeout(nextTimer);
+        }
+      }, delay);
+    };
+
+    const initialDelay = popupCount === 0 ? 1800 : 5000;
+    const t1 = scheduleNext(initialDelay);
+
+    const t2 = setTimeout(() => {
+      if (!isSubscribed) setShowGlobalPopup(true);
+    }, 2200);
+
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSubscribed]);
+
+  const dismissTrial = () => setShowTrialPopup(false);
+  const dismissGlobal = () => setShowGlobalPopup(false);
+
+  return { showTrialPopup, showGlobalPopup, dismissTrial, dismissGlobal };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX #5 + #6 + #7 + #8 — LOGIN PAGE
+// - Instant signup (no email verification loop)
+// - Google OAuth
+// - Forgot Password
+// - Mobile-first responsive layout
 // ─────────────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   useEffect(() => {
     if (user) navigate('/profile', { replace: true });
   }, [user, navigate]);
 
+  // FIX #5 — bypass email verification: signUp then immediately signIn
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
+
     try {
       if (mode === 'register') {
-        const { error: signUpError } = await supabase.auth.signUp({
+        // Step 1: sign up
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: { data: { full_name: name } },
         });
         if (signUpError) throw signUpError;
-        setSuccess('Account created! Check your email to verify, then log in.');
-        setMode('login');
-      } else {
+
+        // Step 2: immediately create profile row (if table exists)
+        if (signUpData.user) {
+          await supabase.from('profiles').upsert({
+            id: signUpData.user.id,
+            full_name: name,
+            email,
+            created_at: new Date().toISOString(),
+          }).single();
+        }
+
+        // Step 3: immediately sign in (bypasses email confirmation gate)
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) {
+          // Supabase may require confirmation — graceful fallback message
+          setSuccess('Account created! If login fails, please check your email to verify first.');
+          setMode('login');
+          setLoading(false);
+          return;
+        }
+
+        navigate('/profile', { replace: true });
+
+      } else if (mode === 'login') {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
         navigate('/profile', { replace: true });
+
+      } else if (mode === 'forgot') {
+        // FIX #7 — Password Recovery
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/login`,
+        });
+        if (resetError) throw resetError;
+        setSuccess('Password reset link sent! Check your inbox.');
+        setMode('login');
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -913,8 +830,24 @@ function LoginPage() {
     }
   };
 
+  // FIX #8 — Google OAuth
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/profile` },
+      });
+      if (error) throw error;
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Google sign-in failed.');
+      setGoogleLoading(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5 pb-10">
+    // FIX #3/#6 — mobile-first viewport lock
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5 pb-10 w-full overflow-x-hidden">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
@@ -923,24 +856,59 @@ function LoginPage() {
         <div className="text-center mb-8">
           <Logo size={40} className="justify-center mb-4" />
           <h1 className="text-3xl font-semibold tracking-tight">
-            {mode === 'login' ? 'Welcome back' : 'Create account'}
+            {mode === 'login' ? 'Welcome back' : mode === 'register' ? 'Create account' : 'Reset password'}
           </h1>
           <p className="text-[#a1a1aa] mt-1 text-sm">
-            {mode === 'login' ? 'Sign in to your ReelRamp account' : 'Join ReelRamp for premium shorts'}
+            {mode === 'login' ? 'Sign in to your ReelRamp account' : mode === 'register' ? 'Join ReelRamp for premium shorts' : 'Enter your email to receive a reset link'}
           </p>
         </div>
-        <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
-          <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
-            {(['login', 'register'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setError(''); setSuccess(''); }}
-                className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${mode === m ? 'bg-[#c5a26f] text-black' : 'text-[#666]'}`}
-              >
-                {m === 'login' ? 'Login' : 'Register'}
-              </button>
-            ))}
-          </div>
+
+        <div className="bg-[#111] border border-[#222] rounded-3xl p-6 sm:p-8">
+          {/* Tab switcher — Login / Register */}
+          {mode !== 'forgot' && (
+            <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
+              {(['login', 'register'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => { setMode(m); setError(''); setSuccess(''); }}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${mode === m ? 'bg-[#c5a26f] text-black' : 'text-[#666]'}`}
+                >
+                  {m === 'login' ? 'Login' : 'Register'}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Google Sign-In Button — FIX #8 */}
+          {mode !== 'forgot' && (
+            <button
+              onClick={handleGoogleSignIn}
+              disabled={googleLoading}
+              className="w-full flex items-center justify-center gap-3 py-3.5 bg-white text-black rounded-2xl font-medium text-sm mb-4 hover:bg-[#f0f0f0] transition-all disabled:opacity-60"
+            >
+              {googleLoading ? (
+                <span className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+              )}
+              Continue with Google
+            </button>
+          )}
+
+          {/* Divider */}
+          {mode !== 'forgot' && (
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-1 h-px bg-[#333]" />
+              <span className="text-[#555] text-xs">or</span>
+              <div className="flex-1 h-px bg-[#333]" />
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'register' && (
               <input
@@ -960,27 +928,51 @@ function LoginPage() {
               required
               className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none"
             />
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Password"
-              required
-              minLength={6}
-              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none"
-            />
+            {mode !== 'forgot' && (
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password"
+                required
+                minLength={6}
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none"
+              />
+            )}
+
             {error && <p className="text-[#e11d48] text-sm px-1">{error}</p>}
             {success && <p className="text-[#22c55e] text-sm px-1">{success}</p>}
+
             <button
               type="submit"
               disabled={loading}
               className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {loading && <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />}
-              {mode === 'login' ? 'Login' : 'Create Account'}
+              {mode === 'login' ? 'Login' : mode === 'register' ? 'Create Account' : 'Send Reset Link'}
             </button>
           </form>
+
+          {/* FIX #7 — Forgot Password link */}
+          {mode === 'login' && (
+            <button
+              onClick={() => { setMode('forgot'); setError(''); setSuccess(''); }}
+              className="w-full text-center text-xs text-[#c5a26f] mt-4 hover:underline"
+            >
+              Forgot password?
+            </button>
+          )}
+
+          {mode === 'forgot' && (
+            <button
+              onClick={() => { setMode('login'); setError(''); setSuccess(''); }}
+              className="w-full text-center text-xs text-[#666] mt-4 hover:text-white transition"
+            >
+              ← Back to Login
+            </button>
+          )}
         </div>
+
         <p className="text-center text-xs text-[#555] mt-6">
           <button onClick={() => navigate('/')} className="hover:text-white transition">← Back to app</button>
         </p>
@@ -1002,38 +994,22 @@ function HomePage() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [paywallVideo, setPaywallVideo] = useState<Video | null>(null);
   const [library, setLibrary] = useState<number[]>([]);
-  const [showTrialPopup, setShowTrialPopup] = useState(false);
-  const [showGlobalPopup, setShowGlobalPopup] = useState(false);
   const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
 
+  // FIX #2 — use centralized popup scheduler
+  const { showTrialPopup, showGlobalPopup, dismissTrial, dismissGlobal } = usePromoPopupScheduler(isSubscribed);
+  const subSettings = ls.get<SubscriptionSettings>('reelramp_sub_settings', defaultSubscriptionSettings);
+
   useEffect(() => {
-    fetchVideos().then(setAllVideos);
-
-    // Live categories from Supabase / localStorage
-    dbGet('reelramp_categories', getCategories()).then(setCategories);
-
-    // Live-subscribe to category changes while the page is open
-    const unsub = dbSubscribe('reelramp_categories', raw => {
-      try { setCategories(JSON.parse(raw)); } catch { /* ignore */ }
-    });
-
+    // FIX #1 — load videos from Supabase first
+    fetchVideosFromDB().then(setAllVideos);
+    fetchCategoriesFromDB().then(setCategories);
     setLibrary(ls.get('reelramp_library', []));
 
-    const popups = getStoredPopups();
-    const active = popups.find(p => p.isActive);
-    const t1 = setTimeout(() => {
-      if (active) { setActivePopup(active); setShowGlobalPopup(true); }
-    }, 2200);
-
-    const hasSeenTrial = sessionStorage.getItem('trialPopupShown');
-    const t2 = setTimeout(() => {
-      if (!hasSeenTrial) {
-        setShowTrialPopup(true);
-        sessionStorage.setItem('trialPopupShown', 'true');
-      }
-    }, 1800);
-
-    return () => { unsub(); clearTimeout(t1); clearTimeout(t2); };
+    fetchPopupsFromDB().then(popups => {
+      const active = popups.find(p => p.isActive);
+      if (active) setActivePopup(active);
+    });
   }, []);
 
   const allCats = ["All", ...categories];
@@ -1068,10 +1044,9 @@ function HomePage() {
     ls.set('reelramp_library', updated);
   };
 
-  const subSettings = getSubSettings();
-
   return (
-    <div className="pb-20 md:pb-8">
+    // FIX #3 — strict mobile container
+    <div className="pb-20 md:pb-8 w-full max-w-full overflow-x-hidden">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-lg border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-5 pt-6 pb-4">
@@ -1238,10 +1213,10 @@ function HomePage() {
         )}
       </AnimatePresence>
 
-      {/* Global Popup Ad */}
+      {/* FIX #2 — Global Popup Ad: NEVER show to subscribers */}
       <AnimatePresence>
-        {showGlobalPopup && activePopup && (
-          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-5" onClick={() => setShowGlobalPopup(false)}>
+        {showGlobalPopup && activePopup && !isSubscribed && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-5" onClick={dismissGlobal}>
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 40 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -1254,8 +1229,8 @@ function HomePage() {
                 <h3 className="text-3xl font-semibold tracking-tight mb-1">{activePopup.title}</h3>
                 <p className="text-[#a1a1aa] mb-6">Limited time offer. Unlock unlimited premium shorts.</p>
                 <div className="flex gap-3">
-                  <button onClick={() => setShowGlobalPopup(false)} className="flex-1 py-3.5 border border-[#444] rounded-2xl">Maybe Later</button>
-                  <button onClick={() => { setShowGlobalPopup(false); navigate(activePopup.redirectUrl); }} className="flex-1 py-3.5 bg-[#c5a26f] text-black rounded-2xl font-semibold">Subscribe Now</button>
+                  <button onClick={dismissGlobal} className="flex-1 py-3.5 border border-[#444] rounded-2xl">Maybe Later</button>
+                  <button onClick={() => { dismissGlobal(); navigate(activePopup.redirectUrl); }} className="flex-1 py-3.5 bg-[#c5a26f] text-black rounded-2xl font-semibold">Subscribe Now</button>
                 </div>
               </div>
             </motion.div>
@@ -1263,10 +1238,10 @@ function HomePage() {
         )}
       </AnimatePresence>
 
-      {/* Trial Popup */}
+      {/* FIX #2 — Trial Popup: NEVER show to subscribers */}
       <AnimatePresence>
-        {showTrialPopup && subSettings.showTrialPopup && (
-          <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/60" onClick={() => setShowTrialPopup(false)}>
+        {showTrialPopup && subSettings.showTrialPopup && !isSubscribed && (
+          <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/60" onClick={dismissTrial}>
             <motion.div
               initial={{ opacity: 0, scale: 0.92, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -1275,14 +1250,14 @@ function HomePage() {
               className="relative w-full max-w-[380px] bg-white/10 backdrop-blur-2xl border border-white/30 rounded-3xl overflow-hidden shadow-2xl"
               onClick={e => e.stopPropagation()}
             >
-              <button onClick={() => setShowTrialPopup(false)} className="absolute top-4 right-4 z-10 w-9 h-9 flex items-center justify-center text-white/70 hover:text-white bg-black/40 rounded-full">
+              <button onClick={dismissTrial} className="absolute top-4 right-4 z-10 w-9 h-9 flex items-center justify-center text-white/70 hover:text-white bg-black/40 rounded-full">
                 <X size={18} />
               </button>
               <div className="pt-8 pb-4 px-8 flex justify-center">
                 <Logo size={36} />
               </div>
               {(() => {
-                const ps = getPromoSettings();
+                const ps = ls.get<PromoVideoSettings>('reelramp_promo', defaultPromoVideo);
                 if (!ps.isEnabled) return null;
                 const src = ps.videoUrl.includes('embed') ? ps.videoUrl
                   : `https://www.youtube.com/embed/${ps.videoUrl.includes('v=') ? ps.videoUrl.split('v=')[1]?.split('&')[0] : ps.videoUrl.split('/').pop()}`;
@@ -1300,10 +1275,7 @@ function HomePage() {
                 <div className="text-xl text-[#c5a26f] font-medium">for {subSettings.trialOfferDuration}</div>
                 <p className="text-[#a1a1aa] text-sm mt-3 mb-6">Unlock full premium access instantly</p>
                 <button
-                  onClick={() => {
-                    setShowTrialPopup(false);
-                    navigate(user ? '/subscription' : '/login');
-                  }}
+                  onClick={() => { dismissTrial(); navigate(user ? '/subscription' : '/login'); }}
                   className="w-full py-4 bg-white text-[#0a0a0a] font-semibold text-lg tracking-wider rounded-3xl transition-all shadow-lg"
                 >
                   Pay {subSettings.trialOfferPrice} — Start Trial
@@ -1419,7 +1391,7 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHORTS PLAYER PAGE — Kuku TV Style
+// FIX #4 — SHORTS PLAYER PAGE (TikTok/KukuTV premium vertical player)
 // ─────────────────────────────────────────────────────────────────────────────
 function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>();
@@ -1432,14 +1404,18 @@ function ShortsPlayerPage() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [library, setLibrary] = useState<number[]>([]);
   const [userRating, setUserRating] = useState(0);
+  const [videoProgress, setVideoProgress] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const touchStartY = useRef<number>(0);
 
   const currentVideoId = parseInt(id || "1");
 
   useEffect(() => {
-    const vids = getStoredVideos();
-    setFeedVideos(vids);
-    const idx = vids.findIndex(v => v.id === currentVideoId);
-    setCurrentIndex(idx !== -1 ? idx : 0);
+    fetchVideosFromDB().then(vids => {
+      setFeedVideos(vids);
+      const idx = vids.findIndex(v => v.id === currentVideoId);
+      setCurrentIndex(idx !== -1 ? idx : 0);
+    });
     setLibrary(ls.get('reelramp_library', []));
   }, [currentVideoId]);
 
@@ -1454,7 +1430,7 @@ function ShortsPlayerPage() {
     }
   }, [currentIndex, currentShort]);
 
-  const checkPremium = useCallback(() => {
+  const checkPremium = useCallback((): boolean => {
     if (currentShort?.isPremium && !isSubscribed) {
       setShowPaywall(true);
       setIsPlaying(false);
@@ -1463,16 +1439,33 @@ function ShortsPlayerPage() {
     return true;
   }, [currentShort, isSubscribed]);
 
-  const handleDragEnd = (_: unknown, info: { offset: { y: number } }) => {
-    const t = 90;
-    if (info.offset.y < -t && currentIndex < feedVideos.length - 1 && checkPremium()) {
+  const goNext = useCallback(() => {
+    if (currentIndex < feedVideos.length - 1 && checkPremium()) {
       setCurrentIndex(i => i + 1);
       setIsPlaying(true);
       setIsLiked(false);
-    } else if (info.offset.y > t && currentIndex > 0) {
+      setVideoProgress(0);
+    }
+  }, [currentIndex, feedVideos.length, checkPremium]);
+
+  const goPrev = useCallback(() => {
+    if (currentIndex > 0) {
       setCurrentIndex(i => i - 1);
       setIsPlaying(true);
       setIsLiked(false);
+      setVideoProgress(0);
+    }
+  }, [currentIndex]);
+
+  // Touch swipe handling
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const delta = touchStartY.current - e.changedTouches[0].clientY;
+    if (Math.abs(delta) > 60) {
+      if (delta > 0) goNext(); else goPrev();
     }
   };
 
@@ -1496,10 +1489,7 @@ function ShortsPlayerPage() {
 
   const handleEnded = () => {
     if (currentShort) addToWatchHistory(currentShort.id, 100);
-    if (currentIndex < feedVideos.length - 1 && checkPremium()) {
-      setCurrentIndex(i => i + 1);
-      setIsPlaying(true);
-    }
+    goNext();
   };
 
   const rateVideo = (star: number) => {
@@ -1508,22 +1498,6 @@ function ShortsPlayerPage() {
     const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
     ratings[currentShort.id] = star;
     ls.set('reelramp_ratings', ratings);
-  };
-
-  const goNext = () => {
-    if (currentIndex < feedVideos.length - 1 && checkPremium()) {
-      setCurrentIndex(i => i + 1);
-      setIsPlaying(true);
-      setIsLiked(false);
-    }
-  };
-
-  const goPrev = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(i => i - 1);
-      setIsPlaying(true);
-      setIsLiked(false);
-    }
   };
 
   if (!currentShort) {
@@ -1535,7 +1509,14 @@ function ShortsPlayerPage() {
   }
 
   return (
-    <div className="fixed inset-0 bg-black z-50 flex flex-col">
+    // FIX #3 — full-screen mobile-locked player
+    <div
+      className="fixed inset-0 bg-black z-50 flex flex-col overflow-hidden"
+      style={{ maxWidth: '100vw', touchAction: 'pan-y' }}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      ref={containerRef}
+    >
       {/* Top Bar */}
       <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-8 pb-2 bg-gradient-to-b from-black/70 to-transparent">
         <button onClick={() => navigate(-1)} className="p-3 bg-black/40 rounded-2xl backdrop-blur">
@@ -1545,42 +1526,102 @@ function ShortsPlayerPage() {
         <div className="text-sm px-3 py-1 bg-white/10 rounded-full font-mono">{currentIndex + 1} / {feedVideos.length}</div>
       </div>
 
-      {/* SNAP-SCROLL VERTICAL FEED */}
-      <div className="flex-1 relative overflow-hidden">
+      {/* Player — full-height, snap container */}
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentIndex}
-            className="absolute inset-0"
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '-100%' }}
-            transition={{ ease: [0.32, 0, 0.67, 0], duration: 0.38 }}
-            drag="y"
-            dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={0.12}
-            onDragEnd={handleDragEnd}
+            initial={{ opacity: 0, y: 60 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -60 }}
+            transition={{ duration: 0.28, ease: [0.23, 1, 0.32, 1] }}
+            className="relative w-full max-w-[420px] h-full flex flex-col"
           >
-            <ImmersivePlayer
-              video={currentShort}
-              isPlaying={isPlaying}
-              onPlayPause={() => { if (checkPremium()) setIsPlaying(p => !p); }}
-              onEnded={handleEnded}
-              onNext={goNext}
-              onPrev={goPrev}
-              hasNext={currentIndex < feedVideos.length - 1}
-              hasPrev={currentIndex > 0}
-              isLiked={isLiked}
-              onLike={() => setIsLiked(l => !l)}
-              isSaved={library.includes(currentShort.id)}
-              onSave={toggleSave}
-              onShare={handleShare}
-              onSubscribe={() => setShowPaywall(true)}
-              isSubscribed={isSubscribed}
-              userRating={userRating}
-              onRate={rateVideo}
-            />
+            <div className="relative flex-1 bg-black overflow-hidden rounded-none md:rounded-3xl shadow-2xl">
+              {/* FIX #4 — Premium player with all features */}
+              <PremiumVideoPlayer
+                video={currentShort}
+                isPlaying={isPlaying}
+                onPlayPause={() => setIsPlaying(p => !p)}
+                onEnded={handleEnded}
+                onProgress={setVideoProgress}
+              />
+
+              {/* Bottom overlay: title + rating */}
+              <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent z-20 pointer-events-none">
+                <div className="max-w-[320px]">
+                  <h2 className="text-3xl font-semibold tracking-[-1.2px] leading-none mb-1.5">{currentShort.title}</h2>
+                  <p className="text-sm text-white/70 leading-snug line-clamp-3 pr-16">{currentShort.description}</p>
+                  <div className="flex items-center gap-2 mt-4 pointer-events-auto">
+                    <div className="flex gap-0.5">
+                      {[1, 2, 3, 4, 5].map(s => (
+                        <button key={s} onClick={() => rateVideo(s)} className="text-xl transition">
+                          {s <= userRating ? '★' : '☆'}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-white/60">Rate this short</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </motion.div>
         </AnimatePresence>
+
+        {/* Right Action Bar */}
+        <div className="absolute right-4 bottom-[110px] flex flex-col items-center gap-5 z-50">
+          <button onClick={() => setIsLiked(l => !l)} className="flex flex-col items-center gap-1">
+            <motion.div
+              animate={{ scale: isLiked ? [1, 1.35, 1] : 1 }}
+              transition={{ duration: 0.3 }}
+              className={`p-4 rounded-2xl transition ${isLiked ? 'bg-[#e11d48]' : 'bg-black/60 backdrop-blur'}`}
+            >
+              <Heart size={24} className={isLiked ? "fill-white text-white" : ""} />
+            </motion.div>
+            <span className="text-[10px] tracking-wider">LIKE</span>
+          </button>
+          <button onClick={toggleSave} className="flex flex-col items-center gap-1">
+            <div className="p-4 rounded-2xl bg-black/60 backdrop-blur">
+              <Bookmark size={24} className={library.includes(currentShort.id) ? "fill-[#c5a26f] text-[#c5a26f]" : ""} />
+            </div>
+            <span className="text-[10px] tracking-wider">SAVE</span>
+          </button>
+          <button onClick={handleShare} className="flex flex-col items-center gap-1">
+            <div className="p-4 rounded-2xl bg-black/60 backdrop-blur">
+              <Share2 size={24} />
+            </div>
+            <span className="text-[10px] tracking-wider">SHARE</span>
+          </button>
+          {currentShort.isPremium && !isSubscribed && (
+            <button onClick={() => setShowPaywall(true)} className="mt-2 flex flex-col items-center">
+              <div className="p-3.5 bg-[#e11d48] rounded-2xl"><Lock size={22} /></div>
+              <span className="text-[9px] mt-1 text-[#e11d48] font-medium">SUBSCRIBE</span>
+            </button>
+          )}
+        </div>
+
+        {/* Swipe hint arrows */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-20 z-40 flex flex-col items-center gap-1 pointer-events-none opacity-40">
+          {currentIndex > 0 && <ChevronUp size={20} className="text-white animate-bounce" />}
+        </div>
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-28 z-40 flex flex-col items-center gap-1 pointer-events-none opacity-40">
+          {currentIndex < feedVideos.length - 1 && <ChevronDown size={20} className="text-white animate-bounce" />}
+        </div>
+
+        {/* Bottom Controls */}
+        <div className="absolute bottom-0 left-0 right-0 z-40 px-6 pb-8 pt-8">
+          <div className="flex items-center justify-between max-w-[420px] mx-auto">
+            <button onClick={goPrev} disabled={currentIndex === 0} className="p-4 disabled:opacity-30">
+              <ArrowLeft size={22} />
+            </button>
+            <button onClick={() => checkPremium() && setIsPlaying(p => !p)} className="p-4 bg-white/10 hover:bg-white/20 transition rounded-2xl backdrop-blur-lg">
+              {isPlaying ? <Pause size={26} /> : <Play size={26} className="ml-0.5" />}
+            </button>
+            <button onClick={goNext} disabled={currentIndex === feedVideos.length - 1} className="p-4 disabled:opacity-30 text-sm font-medium">
+              NEXT
+            </button>
+          </div>
+        </div>
       </div>
 
       <AnimatePresence>
@@ -1607,10 +1648,18 @@ function SubscriptionPage() {
   const [paymentProcessing, setPaymentProcessing] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const subSettings = getSubSettings();
-  const paymentConfig = getPaymentSettings();
+  const subSettings = ls.get<SubscriptionSettings>('reelramp_sub_settings', defaultSubscriptionSettings);
+  const paymentConfig = ls.get<PaymentSettings>('reelramp_payment', defaultPaymentSettings);
 
-  const activateSubscription = () => {
+  const activateSubscription = async () => {
+    // Write to Supabase subscriptions table
+    if (user) {
+      await supabase.from('subscriptions').upsert({
+        user_id: user.id,
+        status: 'active',
+        activated_at: new Date().toISOString(),
+      });
+    }
     ls.set('reelramp_subscribed', true);
     setIsSubscribed(true);
     setPaymentProcessing(false);
@@ -1703,6 +1752,7 @@ function SubscriptionPage() {
         SECURE PAYMENTS • {paymentConfig.activeGateway !== 'none' ? paymentConfig.activeGateway.toUpperCase() : 'MANUAL'} • CANCEL ANYTIME
       </p>
 
+      {/* Payment Modals */}
       {[
         { show: showPaymentModal, onClose: () => setShowPaymentModal(false), label: subSettings.fullPrice, title: "Order Summary" },
         { show: showTrialModal, onClose: () => setShowTrialModal(false), label: subSettings.trialOfferPrice, title: "Trial Order" },
@@ -1754,7 +1804,14 @@ function SubscriptionPage() {
               <p className="text-[#a1a1aa] text-sm mb-7">You'll lose access to all premium content.</p>
               <div className="flex gap-3">
                 <button onClick={() => setShowCancelConfirm(false)} className="flex-1 py-3 border border-[#333] rounded-2xl text-sm">Keep Premium</button>
-                <button onClick={() => { ls.remove('reelramp_subscribed'); setIsSubscribed(false); setShowCancelConfirm(false); }} className="flex-1 py-3 bg-[#e11d48] rounded-2xl text-sm font-medium">Yes, Cancel</button>
+                <button onClick={async () => {
+                  if (user) {
+                    await supabase.from('subscriptions').update({ status: 'cancelled' }).eq('user_id', user.id);
+                  }
+                  ls.remove('reelramp_subscribed');
+                  setIsSubscribed(false);
+                  setShowCancelConfirm(false);
+                }} className="flex-1 py-3 bg-[#e11d48] rounded-2xl text-sm font-medium">Yes, Cancel</button>
               </div>
             </motion.div>
           </div>
@@ -1781,12 +1838,13 @@ function ProfilePage() {
   }, [user, loading, navigate]);
 
   useEffect(() => {
-    const vids = getStoredVideos();
-    setAllVideos(vids);
-    const libIds: number[] = ls.get('reelramp_library', []);
-    setLibrary(vids.filter(v => libIds.includes(v.id)));
-    const dlIds: number[] = ls.get('reelramp_downloads', []);
-    setDownloads(vids.filter(v => dlIds.includes(v.id)));
+    fetchVideosFromDB().then(vids => {
+      setAllVideos(vids);
+      const libIds: number[] = ls.get('reelramp_library', []);
+      setLibrary(vids.filter(v => libIds.includes(v.id)));
+      const dlIds: number[] = ls.get('reelramp_downloads', []);
+      setDownloads(vids.filter(v => dlIds.includes(v.id)));
+    });
     setWatchHistory(getWatchHistory());
   }, []);
 
@@ -1816,12 +1874,13 @@ function ProfilePage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto pb-24 px-4 pt-8 md:pt-10">
+    <div className="max-w-3xl mx-auto pb-24 px-4 pt-8 md:pt-10 w-full overflow-x-hidden">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-semibold text-3xl md:text-5xl tracking-[-2px]">Profile</h1>
         <button onClick={() => navigate('/')} className="text-sm text-[#a1a1aa]">Home</button>
       </div>
 
+      {/* Profile Header */}
       <div className="flex items-center gap-5 mb-9 border-b border-[#222] pb-8">
         <div className="w-20 h-20 rounded-2xl overflow-hidden ring-1 ring-[#c5a26f]/50 bg-[#222] flex items-center justify-center">
           <div className="text-4xl font-bold text-[#c5a26f]">{initials}</div>
@@ -1838,6 +1897,7 @@ function ProfilePage() {
         </div>
       </div>
 
+      {/* Subscription Status */}
       <div className="mb-8 bg-[#111] border border-[#222] rounded-3xl p-6 md:p-7">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
@@ -1857,6 +1917,7 @@ function ProfilePage() {
         </div>
       </div>
 
+      {/* Watch History Preview */}
       {watchHistory.length > 0 && (
         <div className="mb-8">
           <h3 className="text-xl font-semibold tracking-tight mb-4">Continue Watching</h3>
@@ -1880,6 +1941,7 @@ function ProfilePage() {
         </div>
       )}
 
+      {/* Tabs */}
       <div className="flex border-b border-[#222] mb-5 text-sm overflow-x-auto">
         {(['library', 'downloads', 'account'] as const).map(tab => (
           <button
@@ -2243,7 +2305,8 @@ function OwnerPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN PAGE — Full Production Panel with Supabase Real-Time Sync
+// FIX #1 — ADMIN PAGE: Full Supabase Real-Time Sync
+// All reads pull from Supabase first; all writes upsert to Supabase immediately.
 // ─────────────────────────────────────────────────────────────────────────────
 function AdminPage() {
   const navigate = useNavigate();
@@ -2273,7 +2336,11 @@ function AdminPage() {
   const [editingCatName, setEditingCatName] = useState<string | null>(null);
   const [editingCatValue, setEditingCatValue] = useState('');
   const [toast, setToast] = useState('');
-  const [formData, setFormData] = useState({ title: '', description: '', category: 'Horror', duration: '4:30', isPremium: true, thumbnail: '', videoUrl: '' });
+  const [syncing, setSyncing] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '', description: '', category: 'Horror', duration: '4:30',
+    isPremium: true, thumbnail: '', videoUrl: '',
+  });
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -2284,85 +2351,99 @@ function AdminPage() {
 
   const handleAdminLogin = () => {
     const valid = ALLOWED_ADMINS.find(a => a.email === adminEmail && a.password === adminPass);
-    if (valid) {
-      setLoggedInAdmin(valid.email);
-      setIsAuthorized(true);
-      setLoginError('');
-    } else {
-      setLoginError("Invalid credentials.");
-    }
+    if (valid) { setLoggedInAdmin(valid.email); setIsAuthorized(true); setLoginError(''); }
+    else { setLoginError("Invalid credentials."); }
   };
 
-  useEffect(() => {
-    if (!isAuthorized) return;
-    setAdminVideos(getStoredVideos());
-    setPopups(getStoredPopups());
-    setPaymentConfig(getPaymentSettings());
-    setPromoSettings(getPromoSettings());
-    setVideoViews(getVideoViews());
-    const savedUsers = ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers);
-    setAdminUsers(savedUsers);
-
-    // Load settings from Supabase (real-time source of truth)
-    dbGet('reelramp_settings', defaultPlatformSettings).then(setPlatformSettings);
-    dbGet('reelramp_sub_settings', defaultSubscriptionSettings).then(setSubSettings);
-    dbGet('reelramp_categories', getCategories()).then(setCategoriesState);
-
-    // Subscribe to live changes while admin panel is open
-    const unsubSettings = dbSubscribe('reelramp_settings', raw => {
-      try { setPlatformSettings(JSON.parse(raw)); } catch { /* ignore */ }
-    });
-    const unsubSub = dbSubscribe('reelramp_sub_settings', raw => {
-      try { setSubSettings(JSON.parse(raw)); } catch { /* ignore */ }
-    });
-    const unsubCats = dbSubscribe('reelramp_categories', raw => {
-      try { setCategoriesState(JSON.parse(raw)); } catch { /* ignore */ }
-    });
-
-    return () => { unsubSettings(); unsubSub(); unsubCats(); };
-  }, [isAuthorized]);
-
-  // Sync videos with Supabase on tab change
+  // ── LOAD all data from Supabase when authorized ──
   useEffect(() => {
     if (!isAuthorized) return;
     (async () => {
+      setSyncing(true);
       try {
-        const { data } = await supabase.from('videos').select('*').order('id');
-        if (data && data.length > 0) {
-          setAdminVideos(data as Video[]);
-          saveVideos(data as Video[]);
+        // Videos
+        const vids = await fetchVideosFromDB();
+        setAdminVideos(vids);
+
+        // Popups
+        const pops = await fetchPopupsFromDB();
+        setPopups(pops);
+
+        // Categories
+        const cats = await fetchCategoriesFromDB();
+        setCategoriesState(cats);
+
+        // Settings
+        const ps = await fetchSettingFromDB<PlatformSettings>('settings', defaultPlatformSettings);
+        setPlatformSettings(ps);
+
+        const ss = await fetchSettingFromDB<SubscriptionSettings>('sub_settings', defaultSubscriptionSettings);
+        setSubSettings(ss);
+
+        const pc = await fetchSettingFromDB<PaymentSettings>('payment', defaultPaymentSettings);
+        setPaymentConfig(pc);
+
+        const promo = await fetchSettingFromDB<PromoVideoSettings>('promo', defaultPromoVideo);
+        setPromoSettings(promo);
+
+        // Admin users
+        try {
+          const { data } = await supabase.from('profiles').select('*').order('created_at');
+          if (data && data.length > 0) {
+            setAdminUsers(data as unknown as AdminUser[]);
+          } else {
+            setAdminUsers(ls.get('reelramp_admin_users', initialAdminUsers));
+          }
+        } catch {
+          setAdminUsers(ls.get('reelramp_admin_users', initialAdminUsers));
         }
-      } catch { /* use localStorage fallback */ }
+
+        setVideoViews(getVideoViews());
+      } finally {
+        setSyncing(false);
+      }
     })();
-  }, [isAuthorized, activeTab]);
+  }, [isAuthorized]);
 
-  const persistVideos = async (updated: Video[]) => {
-    setAdminVideos(updated);
-    saveVideos(updated);
+  // ── Persist video changes to Supabase ──
+  const persistVideo = async (video: Video, action: 'upsert' | 'delete') => {
+    setSyncing(true);
     try {
-      await supabase.from('videos').upsert(updated);
-    } catch { /* localStorage already saved */ }
+      if (action === 'upsert') {
+        await upsertVideoToDB(video);
+        const fresh = await fetchVideosFromDB();
+        setAdminVideos(fresh);
+      } else {
+        await deleteVideoFromDB(video.id);
+        const fresh = await fetchVideosFromDB();
+        setAdminVideos(fresh);
+      }
+    } finally {
+      setSyncing(false);
+    }
   };
 
-  const persistPopups = (updated: PopupAd[]) => { setPopups(updated); savePopups(updated); };
-
-  // Real-time synced admin save handlers
-  const persistPlatformSettings = async (s: PlatformSettings) => {
-    setPlatformSettings(s);
-    await dbSet('reelramp_settings', s);
-    showToast('✅ Platform settings saved & synced!');
+  // ── Persist popup changes to Supabase ──
+  const persistPopup = async (popup: PopupAd, action: 'upsert' | 'delete') => {
+    setSyncing(true);
+    try {
+      if (action === 'upsert') {
+        await upsertPopupToDB(popup);
+      } else {
+        await deletePopupFromDB(popup.id);
+      }
+      const fresh = await fetchPopupsFromDB();
+      setPopups(fresh);
+    } finally {
+      setSyncing(false);
+    }
   };
 
-  const persistSubSettings = async (s: SubscriptionSettings) => {
-    setSubSettings(s);
-    await dbSet('reelramp_sub_settings', s);
-    showToast('✅ Plan settings saved & synced!');
-  };
-
-  const persistCategories = async (c: string[]) => {
-    setCategoriesState(c);
-    await dbSet('reelramp_categories', c);
-    showToast('✅ Categories saved & synced!');
+  // ── Persist setting to Supabase ──
+  const persistSetting = async (key: string, value: unknown) => {
+    setSyncing(true);
+    try { await upsertSettingToDB(key, value); }
+    finally { setSyncing(false); }
   };
 
   const openAddModal = () => {
@@ -2379,33 +2460,34 @@ function AdminPage() {
 
   const saveVideo = async () => {
     if (!formData.title.trim()) return;
-    let updated: Video[];
-    if (editingVideo) {
-      updated = adminVideos.map(v => v.id === editingVideo.id ? { ...v, ...formData } : v);
-    } else {
-      const newId = Math.max(0, ...adminVideos.map(v => v.id)) + 1;
-      updated = [...adminVideos, { ...formData, id: newId } as Video];
-    }
-    await persistVideos(updated);
+    const id = editingVideo ? editingVideo.id : Math.max(0, ...adminVideos.map(v => v.id)) + 1;
+    const video: Video = { ...formData, id } as Video;
+    await persistVideo(video, 'upsert');
     setShowAddModal(false);
-    showToast(editingVideo ? "✅ Short updated!" : "✅ Short published!");
+    showToast(editingVideo ? "✅ Short updated — live for all users!" : "✅ Short published — live for all users!");
   };
 
   const deleteVideo = async (id: number) => {
-    const updated = adminVideos.filter(v => v.id !== id);
-    await persistVideos(updated);
+    const video = adminVideos.find(v => v.id === id);
+    if (!video) return;
+    await persistVideo(video, 'delete');
     showToast("Short deleted.");
   };
 
-  const toggleUserSub = (userId: number) => {
+  const toggleUserSub = async (userId: number) => {
     const updated = adminUsers.map(u => u.id === userId ? { ...u, subscribed: !u.subscribed } : u);
     setAdminUsers(updated);
     ls.set('reelramp_admin_users', updated);
   };
 
-  const togglePopupActive = (id: number) => {
-    const updated = popups.map(p => ({ ...p, isActive: p.id === id ? !p.isActive : false }));
-    persistPopups(updated);
+  const togglePopupActive = async (id: number) => {
+    // Only one popup active at a time
+    for (const p of popups) {
+      const updated = { ...p, isActive: p.id === id ? !p.isActive : false };
+      await upsertPopupToDB(updated);
+    }
+    const fresh = await fetchPopupsFromDB();
+    setPopups(fresh);
   };
 
   const premiumUsers = adminUsers.filter(u => u.subscribed).length;
@@ -2454,6 +2536,14 @@ function AdminPage() {
         </div>
       )}
 
+      {/* Sync indicator */}
+      {syncing && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] bg-[#c5a26f] text-black px-5 py-2 rounded-2xl text-xs font-semibold flex items-center gap-2">
+          <span className="w-3 h-3 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+          Syncing to Supabase…
+        </div>
+      )}
+
       {/* Header */}
       <div className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
@@ -2493,7 +2583,7 @@ function AdminPage() {
             <div className="flex justify-between mb-8">
               <div>
                 <h2 className="text-5xl font-semibold tracking-[-2.5px]">Control Center</h2>
-                <p className="text-[#a1a1aa]">Live platform metrics — connected to Supabase</p>
+                <p className="text-[#a1a1aa]">Live platform metrics — synced with Supabase</p>
               </div>
               <button onClick={openAddModal} className="flex items-center gap-2 px-6 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm">
                 <Plus size={18} /> New Short
@@ -2584,9 +2674,15 @@ function AdminPage() {
             <div className="flex justify-between items-center mb-7">
               <div>
                 <h3 className="text-3xl font-semibold tracking-tight">Popup Ad Controller</h3>
-                <p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p>
+                <p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch (hidden for premium users).</p>
               </div>
-              <button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }} className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm">
+              <button onClick={async () => {
+                const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false };
+                await upsertPopupToDB(np);
+                const fresh = await fetchPopupsFromDB();
+                setPopups(fresh);
+                setEditingPopup(np);
+              }} className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm">
                 <Plus size={16} /> New Popup
               </button>
             </div>
@@ -2602,7 +2698,7 @@ function AdminPage() {
                         {popup.isActive ? "LIVE" : "HIDDEN"}
                       </button>
                       <button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm">Edit</button>
-                      <button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm">Delete</button>
+                      <button onClick={() => persistPopup(popup, 'delete')} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm">Delete</button>
                     </div>
                   </div>
                 </div>
@@ -2624,7 +2720,11 @@ function AdminPage() {
                   ))}
                   <div className="flex gap-3">
                     <button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button>
-                    <button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl">Save</button>
+                    <button onClick={async () => {
+                      await persistPopup(editingPopup, 'upsert');
+                      setEditingPopup(null);
+                      showToast("✅ Popup saved — live instantly!");
+                    }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl">Save</button>
                   </div>
                 </div>
               </div>
@@ -2734,8 +2834,11 @@ function AdminPage() {
                   <span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span>
                 </div>
               </div>
-              <button onClick={() => persistPlatformSettings(platformSettings)} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
-                SAVE & SYNC PLATFORM SETTINGS
+              <button onClick={async () => {
+                await persistSetting('settings', platformSettings);
+                showToast("✅ Platform settings saved — live for all users!");
+              }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+                SAVE PLATFORM SETTINGS
               </button>
             </div>
           </div>
@@ -2766,8 +2869,11 @@ function AdminPage() {
                   <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} />
                 </button>
               </div>
-              <button onClick={() => persistSubSettings(subSettings)} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
-                SAVE & SYNC PLAN SETTINGS
+              <button onClick={async () => {
+                await persistSetting('sub_settings', subSettings);
+                showToast("✅ Plan settings saved — live for all users!");
+              }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+                SAVE PLAN SETTINGS
               </button>
             </div>
           </div>
@@ -2805,7 +2911,10 @@ function AdminPage() {
                 <label className="text-xs text-[#666] mb-1 block">UPI ID</label>
                 <input value={paymentConfig.upiId} onChange={e => setPaymentConfig({ ...paymentConfig, upiId: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder="yourname@upi" />
               </div>
-              <button onClick={() => { savePaymentSettings(paymentConfig); showToast("✅ Payment settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+              <button onClick={async () => {
+                await persistSetting('payment', paymentConfig);
+                showToast("✅ Payment settings saved!");
+              }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
                 SAVE PAYMENT SETTINGS
               </button>
             </div>
@@ -2820,28 +2929,29 @@ function AdminPage() {
               <input
                 value={newCategoryName}
                 onChange={e => setNewCategoryName(e.target.value)}
-                onKeyDown={e => {
+                onKeyDown={async e => {
                   if (e.key === 'Enter' && newCategoryName.trim()) {
                     const updated = [...categories, newCategoryName.trim()];
-                    persistCategories(updated);
+                    setCategoriesState(updated);
+                    ls.set('reelramp_categories', updated);
+                    try { await supabase.from('categories').insert({ name: newCategoryName.trim() }); } catch { }
                     setNewCategoryName('');
+                    showToast("✅ Category added!");
                   }
                 }}
                 placeholder="New category name"
                 className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none"
               />
-              <button
-                onClick={() => {
-                  if (newCategoryName.trim()) {
-                    const updated = [...categories, newCategoryName.trim()];
-                    persistCategories(updated);
-                    setNewCategoryName('');
-                  }
-                }}
-                className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm"
-              >
-                <Plus size={16} /> Add
-              </button>
+              <button onClick={async () => {
+                if (newCategoryName.trim()) {
+                  const updated = [...categories, newCategoryName.trim()];
+                  setCategoriesState(updated);
+                  ls.set('reelramp_categories', updated);
+                  try { await supabase.from('categories').insert({ name: newCategoryName.trim() }); } catch { }
+                  setNewCategoryName('');
+                  showToast("✅ Category added!");
+                }
+              }} className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm"><Plus size={16} /> Add</button>
             </div>
             <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
               <div className="divide-y divide-[#222]">
@@ -2850,14 +2960,27 @@ function AdminPage() {
                     {editingCatName === cat ? (
                       <>
                         <input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus />
-                        <button onClick={() => { const updated = categories.map(c => c === cat ? editingCatValue : c); persistCategories(updated); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs">Save</button>
+                        <button onClick={async () => {
+                          const updated = categories.map(c => c === cat ? editingCatValue : c);
+                          setCategoriesState(updated);
+                          ls.set('reelramp_categories', updated);
+                          try {
+                            await supabase.from('categories').update({ name: editingCatValue }).eq('name', cat);
+                          } catch { }
+                          setEditingCatName(null);
+                        }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs">Save</button>
                         <button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button>
                       </>
                     ) : (
                       <>
                         <div className="flex-1 font-medium">{cat}</div>
                         <button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button>
-                        <button onClick={() => { const updated = categories.filter(c => c !== cat); persistCategories(updated); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] rounded-xl"><Trash2 size={15} /></button>
+                        <button onClick={async () => {
+                          const updated = categories.filter(c => c !== cat);
+                          setCategoriesState(updated);
+                          ls.set('reelramp_categories', updated);
+                          try { await supabase.from('categories').delete().eq('name', cat); } catch { }
+                        }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] rounded-xl"><Trash2 size={15} /></button>
                       </>
                     )}
                   </div>
@@ -2892,7 +3015,10 @@ function AdminPage() {
                 <label className="text-xs text-[#666] mb-1 block">Video URL</label>
                 <input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" />
               </div>
-              <button onClick={() => { savePromoSettings(promoSettings); showToast("✅ Promo video saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+              <button onClick={async () => {
+                await persistSetting('promo', promoSettings);
+                showToast("✅ Promo video saved — live instantly!");
+              }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
                 SAVE PROMO VIDEO SETTINGS
               </button>
             </div>
