@@ -2984,7 +2984,9 @@ console.log("USER:", user);
 console.log("CURRENT USER:", currentUser);
 console.log("LIBRARY:", library);
 console.log("DOWNLOADS:", downloads);
-
+  
+useEffect(() => {
+  
    // Load saved library safely without crashing
     let libIds: number[] = [];
     let dlIds: number[] = [];
