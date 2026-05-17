@@ -3004,7 +3004,7 @@ useEffect(() => {
     }
 
     // Load downloads
-    const dlIds: number[] = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
+    dlIds = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
     setDownloads(storedVids.filter(v => dlIds.includes(v.id)));
   }, []);
 
