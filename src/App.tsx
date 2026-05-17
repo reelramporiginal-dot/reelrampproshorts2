@@ -3575,7 +3575,7 @@ function AdminPage({ isOwnerRoute = false }: { isOwnerRoute?: boolean }) {
       setLoginError("");
       localStorage.setItem('admin_logged_in', validAdmin.email);
       
-      navigate("/admin");
+     navigate("/profile");
   
     } else {
       setLoginError("Invalid credentials. Please check your email and password.");
