@@ -177,8 +177,9 @@ const defaultPromoVideo: PromoVideoSettings = {
   isEnabled: true,
   videoType: 'youtube',
 };
+
 // ─────────────────────────────────────────────────────────────────────────────
-// LOCAL STORAGE HELPERS (production-safe, no sim UIDs)
+// LOCAL STORAGE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 const ls = {
   get: <T,>(key: string, fallback: T): T => {
@@ -256,6 +257,61 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SUPABASE REAL-TIME SYNC HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Push any key/value to the `app_config` table so all clients see it live. */
+const dbSet = async (key: string, value: unknown): Promise<void> => {
+  try {
+    await supabase
+      .from('app_config')
+      .upsert({ key, value: JSON.stringify(value) }, { onConflict: 'key' });
+  } catch { /* fall through to localStorage */ }
+  ls.set(key, value);
+};
+
+/** Read from Supabase first, fall back to localStorage. */
+const dbGet = async <T,>(key: string, fallback: T): Promise<T> => {
+  try {
+    const { data } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', key)
+      .single();
+    if (data?.value) return JSON.parse(data.value) as T;
+  } catch { /* offline or table missing */ }
+  return ls.get(key, fallback);
+};
+
+/**
+ * Subscribe to live changes on `app_config` for a given key.
+ * Returns an unsubscribe function.
+ */
+const dbSubscribe = (
+  key: string,
+  cb: (value: string) => void
+): (() => void) => {
+  const channel = supabase
+    .channel(`config:${key}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'app_config',
+        filter: `key=eq.${key}`,
+      },
+      payload => {
+        const newValue = (payload.new as { value?: string })?.value;
+        if (newValue !== undefined) cb(newValue);
+      }
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AUTH CONTEXT
 // ─────────────────────────────────────────────────────────────────────────────
 interface AuthContextValue {
@@ -282,17 +338,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isSubscribed, setIsSubscribed] = useState(false);
 
   useEffect(() => {
-    // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
-      if (session?.user) {
-        checkSubscription(session.user.id);
-      }
+      if (session?.user) checkSubscription(session.user.id);
     });
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -317,7 +369,6 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
       setIsSubscribed(!!data);
     } catch {
-      // fallback to localStorage flag for offline / table-not-yet-created cases
       setIsSubscribed(ls.get('reelramp_subscribed', false));
     }
   };
@@ -357,73 +408,410 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMART VIDEO PLAYER
+// PWA INSTALL PROMPT
 // ─────────────────────────────────────────────────────────────────────────────
-interface SmartVideoPlayerProps {
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
+function usePWAInstall() {
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(false);
+
+  useEffect(() => {
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstalled(true);
+      return;
+    }
+
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', () => {
+      setIsInstalled(true);
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+    });
+
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const triggerInstall = async () => {
+    if (!deferredPrompt) return;
+    await deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') setIsInstalled(true);
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+  };
+
+  return { isInstallable, isInstalled, triggerInstall };
+}
+
+function PWAInstallBanner() {
+  const { isInstallable, isInstalled, triggerInstall } = usePWAInstall();
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('pwa_dismissed') === '1');
+
+  if (isInstalled || dismissed || !isInstallable) return null;
+
+  return (
+    <motion.div
+      initial={{ y: 100, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      exit={{ y: 100, opacity: 0 }}
+      transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.4, delay: 3 }}
+      className="fixed bottom-[72px] md:bottom-6 left-3 right-3 md:left-auto md:right-6 md:w-[360px] z-[100] bg-[#111] border border-[#c5a26f]/40 rounded-3xl px-6 py-5 shadow-2xl flex items-center gap-4"
+    >
+      <div className="w-12 h-12 flex-shrink-0 bg-[#c5a26f] rounded-2xl flex items-center justify-center">
+        <InstallIcon size={22} className="text-black" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-sm tracking-tight text-white">Install ReelRamp Pro</div>
+        <div className="text-[11px] text-[#a1a1aa] mt-0.5 leading-snug">Add to home screen for the full cinematic experience</div>
+      </div>
+      <div className="flex flex-col gap-1.5 flex-shrink-0">
+        <button
+          onClick={triggerInstall}
+          className="px-4 py-2 bg-[#c5a26f] text-black text-xs font-semibold rounded-xl tracking-wider"
+        >
+          INSTALL
+        </button>
+        <button
+          onClick={() => { setDismissed(true); sessionStorage.setItem('pwa_dismissed', '1'); }}
+          className="px-4 py-1.5 text-[#666] text-[10px] rounded-xl hover:text-white transition"
+        >
+          Not now
+        </button>
+      </div>
+      <button
+        onClick={() => { setDismissed(true); sessionStorage.setItem('pwa_dismissed', '1'); }}
+        className="absolute top-3 right-3 text-[#666] hover:text-white"
+      >
+        <X size={14} />
+      </button>
+    </motion.div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOADING SPINNER (shared)
+// ─────────────────────────────────────────────────────────────────────────────
+function LoadingSpinner() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-30 pointer-events-none">
+      <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTION BUTTON (shared in immersive player)
+// ─────────────────────────────────────────────────────────────────────────────
+function ActionBtn({
+  children, onClick, label, active = false, activeClass = 'bg-black/60',
+}: {
+  children: React.ReactNode;
+  onClick: React.MouseEventHandler;
+  label: string;
+  active?: boolean;
+  activeClass?: string;
+}) {
+  return (
+    <button onClick={onClick} className="flex flex-col items-center gap-1">
+      <div className={`p-3.5 rounded-2xl backdrop-blur transition ${active ? activeClass : 'bg-black/60'}`}>
+        {children}
+      </div>
+      <span className="text-[9px] tracking-wider text-white/70">{label}</span>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KUKU TV STYLE IMMERSIVE VERTICAL PLAYER
+// ─────────────────────────────────────────────────────────────────────────────
+interface ImmersivePlayerProps {
   video: Video;
   isPlaying: boolean;
   onPlayPause: () => void;
   onEnded: () => void;
+  onNext: () => void;
+  onPrev: () => void;
+  hasNext: boolean;
+  hasPrev: boolean;
+  isLiked: boolean;
+  onLike: () => void;
+  isSaved: boolean;
+  onSave: () => void;
+  onShare: () => void;
+  onSubscribe?: () => void;
+  isSubscribed: boolean;
+  userRating: number;
+  onRate: (n: number) => void;
 }
 
-function SmartVideoPlayer({ video, isPlaying, onPlayPause, onEnded }: SmartVideoPlayerProps) {
-  const [isLoaded, setIsLoaded] = useState(false);
+function ImmersivePlayer({
+  video, isPlaying, onPlayPause, onEnded, onNext, onPrev,
+  hasNext, hasPrev, isLiked, onLike, isSaved, onSave, onShare,
+  onSubscribe, isSubscribed, userRating, onRate,
+}: ImmersivePlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [progress, setProgress] = useState(0);
+  const [buffered, setBuffered] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [tapped, setTapped] = useState<'left' | 'right' | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   useEffect(() => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.play().catch(() => {});
-      } else {
-        videoRef.current.pause();
-      }
-    }
+    const v = videoRef.current;
+    if (!v) return;
+    if (isPlaying) v.play().catch(() => {});
+    else v.pause();
   }, [isPlaying]);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  }, [speed]);
+
+  const resetHideTimer = useCallback(() => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {}, 3500);
+  }, []);
+
+  useEffect(() => {
+    resetHideTimer();
+    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
+  }, [resetHideTimer]);
+
+  const handleTimeUpdate = () => {
+    const v = videoRef.current;
+    if (!v || !v.duration) return;
+    setProgress((v.currentTime / v.duration) * 100);
+    if (v.buffered.length > 0) {
+      setBuffered((v.buffered.end(v.buffered.length - 1) / v.duration) * 100);
+    }
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    v.currentTime = pct * v.duration;
+  };
+
+  const handleDoubleTap = (side: 'left' | 'right') => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + (side === 'right' ? 10 : -10)));
+    setTapped(side);
+    setTimeout(() => setTapped(null), 600);
+  };
 
   const resolvedUrl = video.source === 'bunny'
     ? getBunnyCdnUrl(video.videoUrl)
     : video.videoUrl;
 
+  // YouTube embed path
   if (video.source === 'youtube') {
-    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
+    const vid = video.videoUrl.split('/').pop()?.split('?')[0] || '';
     return (
       <div className="relative w-full h-full bg-black">
         <iframe
           width="100%" height="100%"
-          src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
-          title={video.title}
-          frameBorder="0"
+          src={`https://www.youtube.com/embed/${vid}?autoplay=${isPlaying ? 1 : 0}&controls=0&modestbranding=1&rel=0&playsinline=1`}
+          title={video.title} frameBorder="0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          className="w-full h-full"
+          allowFullScreen className="w-full h-full"
           onLoad={() => setIsLoaded(true)}
         />
-        {!isLoaded && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black">
-            <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
+        {!isLoaded && <LoadingSpinner />}
       </div>
     );
   }
 
   return (
-    <div className="relative w-full h-full bg-black">
+    <div
+      className="relative w-full h-full bg-black select-none overflow-hidden"
+      onClick={() => { setShowSpeedMenu(false); resetHideTimer(); }}
+    >
+      {/* VIDEO */}
       <video
         ref={videoRef}
         src={resolvedUrl}
         className="w-full h-full object-cover"
-        autoPlay={isPlaying}
         playsInline
+        autoPlay={isPlaying}
+        loop={false}
         onEnded={onEnded}
-        onClick={onPlayPause}
-        onLoadedData={() => setIsLoaded(true)}
+        onLoadedData={() => {
+          setIsLoaded(true);
+          if (isPlaying && videoRef.current) videoRef.current.play().catch(() => {});
+        }}
+        onTimeUpdate={handleTimeUpdate}
+        onWaiting={() => setIsLoaded(false)}
+        onPlaying={() => setIsLoaded(true)}
       />
-      {!isLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-          <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+
+      {!isLoaded && <LoadingSpinner />}
+
+      {/* DOUBLE-TAP ZONES */}
+      <div className="absolute inset-0 flex pointer-events-none">
+        <div
+          className="flex-1 pointer-events-auto"
+          onDoubleClick={() => handleDoubleTap('left')}
+          onClick={e => { e.stopPropagation(); resetHideTimer(); onPlayPause(); }}
+        />
+        <div
+          className="flex-1 pointer-events-auto"
+          onDoubleClick={() => handleDoubleTap('right')}
+          onClick={e => { e.stopPropagation(); resetHideTimer(); onPlayPause(); }}
+        />
+      </div>
+
+      {/* SEEK FLASH OVERLAY */}
+      {tapped && (
+        <div className={`absolute inset-y-0 ${tapped === 'left' ? 'left-0' : 'right-0'} w-1/2 flex items-center justify-center pointer-events-none z-20`}>
+          <div className="bg-white/10 rounded-full px-6 py-4 text-white text-xl font-bold backdrop-blur-sm">
+            {tapped === 'left' ? '« 10s' : '10s »'}
+          </div>
         </div>
       )}
+
+      {/* TOP GRADIENT */}
+      <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
+
+      {/* BOTTOM GRADIENT */}
+      <div className="absolute bottom-0 left-0 right-0 h-56 bg-gradient-to-t from-black via-black/80 to-transparent pointer-events-none" />
+
+      {/* RIGHT ACTION BAR */}
+      <div className="absolute right-3 bottom-36 flex flex-col items-center gap-5 z-50">
+        <ActionBtn
+          onClick={e => { e.stopPropagation(); onLike(); }}
+          label="LIKE"
+          active={isLiked}
+          activeClass="bg-[#e11d48]"
+        >
+          <Heart size={22} className={isLiked ? 'fill-white text-white' : ''} />
+        </ActionBtn>
+
+        <ActionBtn onClick={e => { e.stopPropagation(); onSave(); }} label="SAVE">
+          <Bookmark size={22} className={isSaved ? 'fill-[#c5a26f] text-[#c5a26f]' : ''} />
+        </ActionBtn>
+
+        <ActionBtn onClick={e => { e.stopPropagation(); onShare(); }} label="SHARE">
+          <Share2 size={22} />
+        </ActionBtn>
+
+        <ActionBtn onClick={e => { e.stopPropagation(); setIsMuted(m => !m); }} label={isMuted ? 'UNMUTE' : 'MUTE'}>
+          {isMuted ? <VolumeX size={22} /> : <Volume2 size={22} />}
+        </ActionBtn>
+
+        {/* Speed selector */}
+        <div className="relative">
+          <ActionBtn
+            onClick={e => { e.stopPropagation(); setShowSpeedMenu(m => !m); }}
+            label={`${speed}x`}
+          >
+            <span className="text-xs font-bold text-white w-5 h-5 flex items-center justify-center">{speed}x</span>
+          </ActionBtn>
+          {showSpeedMenu && (
+            <div className="absolute right-14 bottom-0 bg-[#1a1a1a] border border-[#333] rounded-2xl overflow-hidden w-20 shadow-2xl z-50">
+              {SPEEDS.map(s => (
+                <button
+                  key={s}
+                  onClick={e => { e.stopPropagation(); setSpeed(s); setShowSpeedMenu(false); }}
+                  className={`w-full py-2.5 text-sm font-mono transition ${speed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white hover:bg-[#222]'}`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {video.isPremium && !isSubscribed && (
+          <ActionBtn
+            onClick={e => { e.stopPropagation(); onSubscribe?.(); }}
+            label="UNLOCK"
+            activeClass="bg-[#e11d48]"
+            active
+          >
+            <Lock size={20} />
+          </ActionBtn>
+        )}
+      </div>
+
+      {/* BOTTOM INFO + CONTROLS */}
+      <div className="absolute bottom-0 left-0 right-0 px-5 pb-6 z-40 pointer-events-none">
+        <div className="mb-4 pointer-events-auto max-w-[70%]">
+          <h2 className="text-2xl font-semibold tracking-tight leading-tight">{video.title}</h2>
+          <p className="text-xs text-white/60 mt-1 line-clamp-2">{video.description}</p>
+          <div className="flex items-center gap-1 mt-2">
+            {[1, 2, 3, 4, 5].map(s => (
+              <button key={s} onClick={() => onRate(s)} className="text-xl leading-none">
+                {s <= userRating ? '★' : '☆'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* SEEKBAR */}
+        <div
+          className="relative h-1 w-full bg-white/20 rounded-full mb-4 cursor-pointer pointer-events-auto"
+          onClick={handleSeek}
+        >
+          <div className="absolute inset-y-0 left-0 bg-white/30 rounded-full" style={{ width: `${buffered}%` }} />
+          <div className="absolute inset-y-0 left-0 bg-[#c5a26f] rounded-full" style={{ width: `${progress}%` }} />
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow-lg -ml-1.5"
+            style={{ left: `${progress}%` }}
+          />
+        </div>
+
+        {/* PREV / PLAY-PAUSE / NEXT */}
+        <div className="flex items-center justify-between pointer-events-auto">
+          <button
+            onClick={e => { e.stopPropagation(); onPrev(); }}
+            disabled={!hasPrev}
+            className="p-3 bg-black/40 backdrop-blur rounded-2xl disabled:opacity-30"
+          >
+            <ArrowLeft size={20} />
+          </button>
+
+          <button
+            onClick={e => { e.stopPropagation(); onPlayPause(); }}
+            className="w-14 h-14 rounded-full bg-white flex items-center justify-center shadow-xl"
+          >
+            {isPlaying
+              ? <Pause size={26} className="text-black" />
+              : <Play size={26} className="text-black ml-0.5" />}
+          </button>
+
+          <button
+            onClick={e => { e.stopPropagation(); if (hasNext) onNext(); }}
+            disabled={!hasNext}
+            className="p-3 bg-black/40 backdrop-blur rounded-2xl disabled:opacity-30 text-xs font-medium tracking-wider"
+          >
+            NEXT
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -471,6 +859,9 @@ function AppContent() {
         <>
           <Footer />
           <BottomNavigation />
+          <AnimatePresence>
+            <PWAInstallBanner />
+          </AnimatePresence>
         </>
       )}
     </div>
@@ -478,7 +869,7 @@ function AppContent() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOGIN PAGE — Supabase Auth, redirects to /profile on success
+// LOGIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const navigate = useNavigate();
@@ -491,7 +882,6 @@ function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
 
-  // Already logged in — go straight to profile
   useEffect(() => {
     if (user) navigate('/profile', { replace: true });
   }, [user, navigate]);
@@ -501,7 +891,6 @@ function LoginPage() {
     setError('');
     setSuccess('');
     setLoading(true);
-
     try {
       if (mode === 'register') {
         const { error: signUpError } = await supabase.auth.signUp({
@@ -540,7 +929,6 @@ function LoginPage() {
             {mode === 'login' ? 'Sign in to your ReelRamp account' : 'Join ReelRamp for premium shorts'}
           </p>
         </div>
-
         <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
           <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
             {(['login', 'register'] as const).map(m => (
@@ -553,7 +941,6 @@ function LoginPage() {
               </button>
             ))}
           </div>
-
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'register' && (
               <input
@@ -582,10 +969,8 @@ function LoginPage() {
               minLength={6}
               className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none"
             />
-
             {error && <p className="text-[#e11d48] text-sm px-1">{error}</p>}
             {success && <p className="text-[#22c55e] text-sm px-1">{success}</p>}
-
             <button
               type="submit"
               disabled={loading}
@@ -596,7 +981,6 @@ function LoginPage() {
             </button>
           </form>
         </div>
-
         <p className="text-center text-xs text-[#555] mt-6">
           <button onClick={() => navigate('/')} className="hover:text-white transition">← Back to app</button>
         </p>
@@ -624,7 +1008,15 @@ function HomePage() {
 
   useEffect(() => {
     fetchVideos().then(setAllVideos);
-    setCategories(getCategories());
+
+    // Live categories from Supabase / localStorage
+    dbGet('reelramp_categories', getCategories()).then(setCategories);
+
+    // Live-subscribe to category changes while the page is open
+    const unsub = dbSubscribe('reelramp_categories', raw => {
+      try { setCategories(JSON.parse(raw)); } catch { /* ignore */ }
+    });
+
     setLibrary(ls.get('reelramp_library', []));
 
     const popups = getStoredPopups();
@@ -641,7 +1033,7 @@ function HomePage() {
       }
     }, 1800);
 
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    return () => { unsub(); clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   const allCats = ["All", ...categories];
@@ -1027,7 +1419,7 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHORTS PLAYER PAGE
+// SHORTS PLAYER PAGE — Kuku TV Style
 // ─────────────────────────────────────────────────────────────────────────────
 function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>();
@@ -1040,7 +1432,6 @@ function ShortsPlayerPage() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [library, setLibrary] = useState<number[]>([]);
   const [userRating, setUserRating] = useState(0);
-  const [progress, setProgress] = useState(0);
 
   const currentVideoId = parseInt(id || "1");
 
@@ -1119,6 +1510,22 @@ function ShortsPlayerPage() {
     ls.set('reelramp_ratings', ratings);
   };
 
+  const goNext = () => {
+    if (currentIndex < feedVideos.length - 1 && checkPremium()) {
+      setCurrentIndex(i => i + 1);
+      setIsPlaying(true);
+      setIsLiked(false);
+    }
+  };
+
+  const goPrev = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex(i => i - 1);
+      setIsPlaying(true);
+      setIsLiked(false);
+    }
+  };
+
   if (!currentShort) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
@@ -1138,100 +1545,42 @@ function ShortsPlayerPage() {
         <div className="text-sm px-3 py-1 bg-white/10 rounded-full font-mono">{currentIndex + 1} / {feedVideos.length}</div>
       </div>
 
-      {/* Player */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+      {/* SNAP-SCROLL VERTICAL FEED */}
+      <div className="flex-1 relative overflow-hidden">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentIndex}
-            className="relative w-full max-w-[420px] h-full md:h-[92vh] flex flex-col"
+            className="absolute inset-0"
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '-100%' }}
+            transition={{ ease: [0.32, 0, 0.67, 0], duration: 0.38 }}
             drag="y"
-            dragConstraints={{ top: -120, bottom: 120 }}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={0.12}
             onDragEnd={handleDragEnd}
-            dragElastic={0.2}
           >
-            <div className="relative flex-1 bg-black overflow-hidden rounded-none md:rounded-3xl shadow-2xl">
-              <SmartVideoPlayer
-                video={currentShort}
-                isPlaying={isPlaying}
-                onPlayPause={() => setIsPlaying(p => !p)}
-                onEnded={handleEnded}
-              />
-              <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50">
-                <div className="h-full bg-[#c5a26f]" style={{ width: `${progress}%` }} />
-              </div>
-              {!isPlaying && (
-                <div onClick={() => checkPremium() && setIsPlaying(true)} className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer z-10">
-                  <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center">
-                    <Play size={38} className="text-black ml-1" />
-                  </div>
-                </div>
-              )}
-              <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent z-20">
-                <div className="max-w-[380px]">
-                  <h2 className="text-3xl font-semibold tracking-[-1.2px] leading-none mb-1.5">{currentShort.title}</h2>
-                  <p className="text-sm text-white/70 leading-snug line-clamp-3 pr-16">{currentShort.description}</p>
-                  <div className="flex items-center gap-2 mt-4">
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map(s => (
-                        <button key={s} onClick={() => rateVideo(s)} className="text-2xl transition">
-                          {s <= userRating ? '★' : '☆'}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="text-xs text-white/60">Rate this short</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <ImmersivePlayer
+              video={currentShort}
+              isPlaying={isPlaying}
+              onPlayPause={() => { if (checkPremium()) setIsPlaying(p => !p); }}
+              onEnded={handleEnded}
+              onNext={goNext}
+              onPrev={goPrev}
+              hasNext={currentIndex < feedVideos.length - 1}
+              hasPrev={currentIndex > 0}
+              isLiked={isLiked}
+              onLike={() => setIsLiked(l => !l)}
+              isSaved={library.includes(currentShort.id)}
+              onSave={toggleSave}
+              onShare={handleShare}
+              onSubscribe={() => setShowPaywall(true)}
+              isSubscribed={isSubscribed}
+              userRating={userRating}
+              onRate={rateVideo}
+            />
           </motion.div>
         </AnimatePresence>
-
-        {/* Right Action Bar */}
-        <div className="absolute right-4 bottom-[110px] flex flex-col items-center gap-5 z-50">
-          <button onClick={() => setIsLiked(l => !l)} className="flex flex-col items-center gap-1">
-            <div className={`p-4 rounded-2xl transition ${isLiked ? 'bg-[#e11d48]' : 'bg-black/60 backdrop-blur'}`}>
-              <Heart size={24} className={isLiked ? "fill-white text-white" : ""} />
-            </div>
-            <span className="text-[10px] tracking-wider">LIKE</span>
-          </button>
-          <button onClick={toggleSave} className="flex flex-col items-center gap-1">
-            <div className="p-4 rounded-2xl bg-black/60 backdrop-blur">
-              <Bookmark size={24} className={library.includes(currentShort.id) ? "fill-[#c5a26f] text-[#c5a26f]" : ""} />
-            </div>
-            <span className="text-[10px] tracking-wider">SAVE</span>
-          </button>
-          <button onClick={handleShare} className="flex flex-col items-center gap-1">
-            <div className="p-4 rounded-2xl bg-black/60 backdrop-blur">
-              <Share2 size={24} />
-            </div>
-            <span className="text-[10px] tracking-wider">SHARE</span>
-          </button>
-          {currentShort.isPremium && !isSubscribed && (
-            <button onClick={() => setShowPaywall(true)} className="mt-2 flex flex-col items-center">
-              <div className="p-3.5 bg-[#e11d48] rounded-2xl"><Lock size={22} /></div>
-              <span className="text-[9px] mt-1 text-[#e11d48] font-medium">SUBSCRIBE</span>
-            </button>
-          )}
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="absolute bottom-0 left-0 right-0 z-40 px-6 pb-8 pt-8">
-          <div className="flex items-center justify-between max-w-[420px] mx-auto">
-            <button onClick={() => { if (currentIndex > 0) { setCurrentIndex(i => i - 1); setIsPlaying(true); } }} disabled={currentIndex === 0} className="p-4 disabled:opacity-30">
-              <ArrowLeft size={22} />
-            </button>
-            <button onClick={() => checkPremium() && setIsPlaying(p => !p)} className="p-4 bg-white/10 hover:bg-white/20 transition rounded-2xl backdrop-blur-lg">
-              {isPlaying ? <Pause size={26} /> : <Play size={26} className="ml-0.5" />}
-            </button>
-            <button
-              onClick={() => { if (currentIndex < feedVideos.length - 1 && checkPremium()) { setCurrentIndex(i => i + 1); setIsPlaying(true); } }}
-              disabled={currentIndex === feedVideos.length - 1}
-              className="p-4 disabled:opacity-30 text-sm font-medium"
-            >
-              NEXT
-            </button>
-          </div>
-        </div>
       </div>
 
       <AnimatePresence>
@@ -1354,7 +1703,6 @@ function SubscriptionPage() {
         SECURE PAYMENTS • {paymentConfig.activeGateway !== 'none' ? paymentConfig.activeGateway.toUpperCase() : 'MANUAL'} • CANCEL ANYTIME
       </p>
 
-      {/* Payment Modals */}
       {[
         { show: showPaymentModal, onClose: () => setShowPaymentModal(false), label: subSettings.fullPrice, title: "Order Summary" },
         { show: showTrialModal, onClose: () => setShowTrialModal(false), label: subSettings.trialOfferPrice, title: "Trial Order" },
@@ -1428,11 +1776,8 @@ function ProfilePage() {
   const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
   const [allVideos, setAllVideos] = useState<Video[]>([]);
 
-  // Redirect to login if not authenticated
   useEffect(() => {
-    if (!loading && !user) {
-      navigate('/login', { replace: true });
-    }
+    if (!loading && !user) navigate('/login', { replace: true });
   }, [user, loading, navigate]);
 
   useEffect(() => {
@@ -1477,7 +1822,6 @@ function ProfilePage() {
         <button onClick={() => navigate('/')} className="text-sm text-[#a1a1aa]">Home</button>
       </div>
 
-      {/* Profile Header */}
       <div className="flex items-center gap-5 mb-9 border-b border-[#222] pb-8">
         <div className="w-20 h-20 rounded-2xl overflow-hidden ring-1 ring-[#c5a26f]/50 bg-[#222] flex items-center justify-center">
           <div className="text-4xl font-bold text-[#c5a26f]">{initials}</div>
@@ -1494,7 +1838,6 @@ function ProfilePage() {
         </div>
       </div>
 
-      {/* Subscription Status */}
       <div className="mb-8 bg-[#111] border border-[#222] rounded-3xl p-6 md:p-7">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
@@ -1514,7 +1857,6 @@ function ProfilePage() {
         </div>
       </div>
 
-      {/* Watch History Preview */}
       {watchHistory.length > 0 && (
         <div className="mb-8">
           <h3 className="text-xl font-semibold tracking-tight mb-4">Continue Watching</h3>
@@ -1538,7 +1880,6 @@ function ProfilePage() {
         </div>
       )}
 
-      {/* Tabs */}
       <div className="flex border-b border-[#222] mb-5 text-sm overflow-x-auto">
         {(['library', 'downloads', 'account'] as const).map(tab => (
           <button
@@ -1708,7 +2049,7 @@ function Footer() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BOTTOM NAVIGATION (deduped nav items — no duplicate keys)
+// BOTTOM NAVIGATION
 // ─────────────────────────────────────────────────────────────────────────────
 function BottomNavigation() {
   const navigate = useNavigate();
@@ -1902,7 +2243,7 @@ function OwnerPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN PAGE — Full Production Panel
+// ADMIN PAGE — Full Production Panel with Supabase Real-Time Sync
 // ─────────────────────────────────────────────────────────────────────────────
 function AdminPage() {
   const navigate = useNavigate();
@@ -1956,17 +2297,32 @@ function AdminPage() {
     if (!isAuthorized) return;
     setAdminVideos(getStoredVideos());
     setPopups(getStoredPopups());
-    setPlatformSettings(getSettings());
-    setSubSettings(getSubSettings());
     setPaymentConfig(getPaymentSettings());
-    setCategoriesState(getCategories());
     setPromoSettings(getPromoSettings());
     setVideoViews(getVideoViews());
     const savedUsers = ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers);
     setAdminUsers(savedUsers);
+
+    // Load settings from Supabase (real-time source of truth)
+    dbGet('reelramp_settings', defaultPlatformSettings).then(setPlatformSettings);
+    dbGet('reelramp_sub_settings', defaultSubscriptionSettings).then(setSubSettings);
+    dbGet('reelramp_categories', getCategories()).then(setCategoriesState);
+
+    // Subscribe to live changes while admin panel is open
+    const unsubSettings = dbSubscribe('reelramp_settings', raw => {
+      try { setPlatformSettings(JSON.parse(raw)); } catch { /* ignore */ }
+    });
+    const unsubSub = dbSubscribe('reelramp_sub_settings', raw => {
+      try { setSubSettings(JSON.parse(raw)); } catch { /* ignore */ }
+    });
+    const unsubCats = dbSubscribe('reelramp_categories', raw => {
+      try { setCategoriesState(JSON.parse(raw)); } catch { /* ignore */ }
+    });
+
+    return () => { unsubSettings(); unsubSub(); unsubCats(); };
   }, [isAuthorized]);
 
-  // Sync with Supabase on each tab if authorized
+  // Sync videos with Supabase on tab change
   useEffect(() => {
     if (!isAuthorized) return;
     (async () => {
@@ -1984,12 +2340,30 @@ function AdminPage() {
     setAdminVideos(updated);
     saveVideos(updated);
     try {
-      // Upsert to Supabase
       await supabase.from('videos').upsert(updated);
     } catch { /* localStorage already saved */ }
   };
 
   const persistPopups = (updated: PopupAd[]) => { setPopups(updated); savePopups(updated); };
+
+  // Real-time synced admin save handlers
+  const persistPlatformSettings = async (s: PlatformSettings) => {
+    setPlatformSettings(s);
+    await dbSet('reelramp_settings', s);
+    showToast('✅ Platform settings saved & synced!');
+  };
+
+  const persistSubSettings = async (s: SubscriptionSettings) => {
+    setSubSettings(s);
+    await dbSet('reelramp_sub_settings', s);
+    showToast('✅ Plan settings saved & synced!');
+  };
+
+  const persistCategories = async (c: string[]) => {
+    setCategoriesState(c);
+    await dbSet('reelramp_categories', c);
+    showToast('✅ Categories saved & synced!');
+  };
 
   const openAddModal = () => {
     setFormData({ title: '', description: '', category: 'Horror', duration: '4:30', isPremium: true, thumbnail: '/images/horror1.jpg', videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4' });
@@ -2360,8 +2734,8 @@ function AdminPage() {
                   <span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span>
                 </div>
               </div>
-              <button onClick={() => { saveSettings(platformSettings); showToast("✅ Platform settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
-                SAVE PLATFORM SETTINGS
+              <button onClick={() => persistPlatformSettings(platformSettings)} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+                SAVE & SYNC PLATFORM SETTINGS
               </button>
             </div>
           </div>
@@ -2392,8 +2766,8 @@ function AdminPage() {
                   <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} />
                 </button>
               </div>
-              <button onClick={() => { saveSubSettings(subSettings); showToast("✅ Plan settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
-                SAVE PLAN SETTINGS
+              <button onClick={() => persistSubSettings(subSettings)} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
+                SAVE & SYNC PLAN SETTINGS
               </button>
             </div>
           </div>
@@ -2443,8 +2817,31 @@ function AdminPage() {
           <div className="max-w-2xl">
             <h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3>
             <div className="flex gap-3 mb-6">
-              <input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { const updated = [...categories, newCategoryName.trim()]; setCategoriesState(updated); saveCategories(updated); setNewCategoryName(''); showToast("✅ Category added!"); } }} placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
-              <button onClick={() => { if (newCategoryName.trim()) { const updated = [...categories, newCategoryName.trim()]; setCategoriesState(updated); saveCategories(updated); setNewCategoryName(''); showToast("✅ Category added!"); } }} className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm"><Plus size={16} /> Add</button>
+              <input
+                value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newCategoryName.trim()) {
+                    const updated = [...categories, newCategoryName.trim()];
+                    persistCategories(updated);
+                    setNewCategoryName('');
+                  }
+                }}
+                placeholder="New category name"
+                className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none"
+              />
+              <button
+                onClick={() => {
+                  if (newCategoryName.trim()) {
+                    const updated = [...categories, newCategoryName.trim()];
+                    persistCategories(updated);
+                    setNewCategoryName('');
+                  }
+                }}
+                className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm"
+              >
+                <Plus size={16} /> Add
+              </button>
             </div>
             <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
               <div className="divide-y divide-[#222]">
@@ -2453,14 +2850,14 @@ function AdminPage() {
                     {editingCatName === cat ? (
                       <>
                         <input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus />
-                        <button onClick={() => { const updated = categories.map(c => c === cat ? editingCatValue : c); setCategoriesState(updated); saveCategories(updated); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs">Save</button>
+                        <button onClick={() => { const updated = categories.map(c => c === cat ? editingCatValue : c); persistCategories(updated); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs">Save</button>
                         <button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button>
                       </>
                     ) : (
                       <>
                         <div className="flex-1 font-medium">{cat}</div>
                         <button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button>
-                        <button onClick={() => { const updated = categories.filter(c => c !== cat); setCategoriesState(updated); saveCategories(updated); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] rounded-xl"><Trash2 size={15} /></button>
+                        <button onClick={() => { const updated = categories.filter(c => c !== cat); persistCategories(updated); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] rounded-xl"><Trash2 size={15} /></button>
                       </>
                     )}
                   </div>
@@ -2523,7 +2920,7 @@ function AdminPage() {
                 <textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
                 <div className="grid grid-cols-2 gap-4">
                   <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">
-                    {getCategories().map(c => <option key={c} value={c}>{c}</option>)}
+                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                   <input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
                 </div>
