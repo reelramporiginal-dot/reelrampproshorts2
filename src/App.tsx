@@ -76,6 +76,7 @@ interface UserProfile {
   avatar: string;
   email: string;
   phone: string;
+password?: string;
 }
 
 interface AuthUser {
