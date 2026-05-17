@@ -1224,15 +1224,16 @@ function HomePage() {
     };
   }, []);
 
- // Load subscription settings Safely (Bypass Missing File Crash)
+  // Load subscription settings from Firebase
   useEffect(() => {
     const loadSubscriptionSettings = async () => {
       try {
-        const defaultSettings = { status: "active", plan: "pro" };
-        window.localStorage.setItem('reelramp_subscription_settings', JSON.stringify(defaultSettings));
-        console.log("Using safe local settings");
+        const { getSubscriptionSettings } = await import('./services/subscriptionService');
+        const settings = await getSubscriptionSettings();
+        // Store in state if needed
+        window.localStorage.setItem('reelramp_subscription_settings', JSON.stringify(settings));
       } catch (error) {
-        console.log("Subscription settings bypass active");
+        console.log("Using local settings");
       }
     };
     loadSubscriptionSettings();
@@ -2970,38 +2971,28 @@ function ProfilePage() {
   const [library, setLibrary] = useState<Video[]>([]);
   const [downloads, setDownloads] = useState<Video[]>([]);
   const [activeTab, setActiveTab] = useState<'library' | 'downloads' | 'account'>('library');
-  
+
+  // Simulate current user (Firebase Auth simulation)
+  const currentUser = {
+    uid: localStorage.getItem('current_user_uid') || "user-001",
+    email: "alex.rivera@reelramp.app"
+  };
+
   // Security: Only show Admin buttons if UID matches Admin UID
-const currentUser = {
-  uid: localStorage.getItem('current_user_uid') || "user-001",
-  email: "alex.rivera@reelramp.app"
-};
+  const isAdmin = currentUser.uid === "admin-uid-001";
 
-const isAdmin = currentUser.uid === "admin-uid-001";
+  useEffect(() => {
+    const sub = localStorage.getItem('reelramp_subscribed') === 'true';
+    setIsSubscribed(sub);
 
-console.log("USER:", user);
-console.log("CURRENT USER:", currentUser);
-console.log("LIBRARY:", library);
-console.log("DOWNLOADS:", downloads);
-  
-useEffect(() => {
-  
-   // Load saved library safely without crashing
-    let libIds: number[] = [];
-    let dlIds: number[] = [];
-    try {
-      libIds = JSON.parse(localStorage.getItem('reelramp_library') || '[]');
-      dlIds = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
-    } catch (e) {
-      libIds = [];
-      dlIds = [];
-    }
-    const storedVids = typeof getStoredVideos === 'function' ? getStoredVideos() : [];
-    if (Array.isArray(storedVids)) {
-      setLibrary(storedVids.filter(v => Array.isArray(libIds) && libIds.includes(v.id)));
-      setDownloads(storedVids.filter(v => Array.isArray(dlIds) && dlIds.includes(v.id)));
-    }
+    // Load saved library
+    const libIds: number[] = JSON.parse(localStorage.getItem('reelramp_library') || '[]');
+    const storedVids = getStoredVideos();
+    setLibrary(storedVids.filter(v => libIds.includes(v.id)));
 
+    // Load downloads
+    const dlIds: number[] = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
+    setDownloads(storedVids.filter(v => dlIds.includes(v.id)));
   }, []);
 
   const updateName = (newName: string) => {
@@ -4720,91 +4711,5 @@ function AdminPage({ isOwnerRoute = false }: { isOwnerRoute?: boolean }) {
     </div>
   );
 }
-import { createClient } from '@supabase/supabase-js';
-
-// Supabase Connection Layer (File ke end me dalne se design 100% safe hai)
-const supabaseUrl = 'https://rwtndqorpizoozbpcmca.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q';
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// --- ORIGINAL PREMIUM PROFILE PAGE COMPONENT (RESTORATION) ---
-export function ProfilePage() {
-  const navigate = useNavigate();
-  const [isSubscribed, setIsSubscribed] = useState(true);
-  const [library, setLibrary] = useState([]);
-  const [downloads, setDownloads] = useState([]);
-
-  // Safe user formatting to prevent Error #31
-  const currentUser = {
-    name: "Premium Member",
-    phone: "+91 XXXXX XXXXX",
-    status: "Active",
-    plan: "Pro Pass"
-  };
-
-  return (
-    <div className="min-h-screen bg-black text-white pb-24">
-      {/* Premium Profile Header Banner */}
-      <div className="relative h-48 bg-gradient-to-r from-[#c5a26f]/20 via-[#0a0a0a] to-[#c5a26f]/10 border-b border-[#161616] flex items-end p-6">
-        <div className="flex items-center gap-4 z-10 translate-y-6">
-          <div className="w-20 h-20 bg-[#111] border-2 border-[#c5a26f] rounded-full flex items-center justify-center text-[#c5a26f] shadow-xl">
-            <span className="text-2xl font-black uppercase">{currentUser.name.charAt(0)}</span>
-          </div>
-          <div className="mb-2">
-            <h2 className="text-xl font-black tracking-wide text-white flex items-center gap-2">
-              {currentUser.name}
-              <span className="px-2 py-0.5 bg-[#c5a26f] text-black text-[9px] font-black uppercase rounded-md tracking-widest">PRO</span>
-            </h2>
-            <p className="text-xs text-[#666] font-medium">{currentUser.phone}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Account Stats & Membership Status */}
-      <div className="max-w-4xl mx-auto px-4 mt-16 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-[#0a0a0a] border border-[#161616] rounded-2xl p-5 flex items-center gap-4">
-          <div className="p-3 bg-[#c5a26f]/10 border border-[#c5a26f]/20 rounded-xl text-[#c5a26f]">
-            <CreditCard size={20} />
-          </div>
-          <div>
-            <p className="text-[10px] text-[#555] uppercase font-bold tracking-widest">Membership</p>
-            <p className="text-xs font-black text-white uppercase tracking-wider">{currentUser.plan}</p>
-          </div>
-        </div>
-        
-        <div className="bg-[#0a0a0a] border border-[#161616] rounded-2xl p-5 flex items-center gap-4">
-          <div className="p-3 bg-[#c5a26f]/10 border border-[#c5a26f]/20 rounded-xl text-[#c5a26f]">
-            <CheckCircle size={20} />
-          </div>
-          <div>
-            <p className="text-[10px] text-[#555] uppercase font-bold tracking-widest">Account Status</p>
-            <p className="text-xs font-black text-green-500 uppercase tracking-wider">{currentUser.status}</p>
-          </div>
-        </div>
-
-        <div className="bg-[#0a0a0a] border border-[#161616] rounded-2xl p-5 flex items-center gap-4">
-          <div className="p-3 bg-[#c5a26f]/10 border border-[#c5a26f]/20 rounded-xl text-[#c5a26f]">
-            <Lock size={20} />
-          </div>
-          <div>
-            <p className="text-[10px] text-[#555] uppercase font-bold tracking-widest">Security Encryption</p>
-            <p className="text-xs font-black text-[#c5a26f] uppercase tracking-wider">SSL Secure</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Premium Content Slots */}
-      <div className="max-w-4xl mx-auto px-4 mt-8">
-        <div className="bg-[#0a0a0a] border border-[#161616] rounded-2xl p-6">
-          <h3 className="text-xs font-black uppercase tracking-widest text-white mb-4 border-b border-[#161616] pb-3 flex items-center gap-2">
-            <span className="w-1.5 h-3 bg-[#c5a26f] rounded-full"></span> My Premium Library
-          </h3>
-          <p className="text-xs text-[#444] py-6 text-center italic">Aapki saved shorts videos yahan dikhein gi.</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 export default App;
