@@ -2985,10 +2985,21 @@ function ProfilePage() {
     const sub = localStorage.getItem('reelramp_subscribed') === 'true';
     setIsSubscribed(sub);
 
-    // Load saved library
-    const libIds: number[] = JSON.parse(localStorage.getItem('reelramp_library') || '[]');
-    const storedVids = getStoredVideos();
-    setLibrary(storedVids.filter(v => libIds.includes(v.id)));
+   // Load saved library safely without crashing
+    let libIds: number[] = [];
+    let dlIds: number[] = [];
+    try {
+      libIds = JSON.parse(localStorage.getItem('reelramp_library') || '[]');
+      dlIds = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
+    } catch (e) {
+      libIds = [];
+      dlIds = [];
+    }
+    const storedVids = typeof getStoredVideos === 'function' ? getStoredVideos() : [];
+    if (Array.isArray(storedVids)) {
+      setLibrary(storedVids.filter(v => Array.isArray(libIds) && libIds.includes(v.id)));
+      setDownloads(storedVids.filter(v => Array.isArray(dlIds) && dlIds.includes(v.id)));
+    }
 
     // Load downloads
     const dlIds: number[] = JSON.parse(localStorage.getItem('reelramp_downloads') || '[]');
