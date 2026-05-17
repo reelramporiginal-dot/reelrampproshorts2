@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
+import { motion, AnimatePresence } from 'framer-motion'; 
 import { createClient } from '@supabase/supabase-js';
 
 // ReelRamp Real-Time Database Connection
@@ -9,6 +8,7 @@ const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import {
   Play, Pause, Heart, Bookmark, Download, Share2, X, ArrowLeft, 
   User, Clock, Star, CreditCard, CheckCircle, Lock, Plus, Edit2, Trash2, 
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
