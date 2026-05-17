@@ -908,6 +908,7 @@ function AppContent() {
         <Route path="/player/:id" element={<ShortsPlayerPage />} />
         <Route path="/subscription" element={<SubscriptionPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/login" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/admin-secure-7842" element={<EditorPanel />} />
         <Route path="/rrmp-control-9x7k" element={<OwnerPanel />} />
