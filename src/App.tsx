@@ -4721,5 +4721,12 @@ function AdminPage({ isOwnerRoute = false }: { isOwnerRoute?: boolean }) {
     </div>
   );
 }
+import { createClient } from '@supabase/supabase-js';
+
+// Supabase Connection Layer (File ke end me dalne se design 100% safe hai)
+const supabaseUrl = 'https://rwtndqorpizoozbpcmca.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q';
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
 
 export default App;
