@@ -7,8 +7,16 @@ import {
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
   Facebook, Instagram, Youtube, MessageCircle, Download as InstallIcon 
 } from 'lucide-react';
+// === SUPABASE CONNECTION CODE YAHAN DALO ===
+import { createClient } from '@supabase/supabase-js';
 
-// Premium Cinematic Logo Component (Film Reel + 'R')
+const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q";
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// ============================================
+
+// // Premium Cinematic Logo Component (Film Reel + 'R')
 const Logo = ({ size = 32, className = "" }: { size?: number; className?: string }) => (
   <div className={`inline-flex items-center gap-2.5 ${className}`}>
     <svg 
