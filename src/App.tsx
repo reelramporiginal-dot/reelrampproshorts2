@@ -3615,17 +3615,10 @@ function AdminPage({ isOwnerRoute = false }: { isOwnerRoute?: boolean }) {
     showAdminToast("✅ Platform settings saved!");
   };
 
-  const saveSubscriptionPlanSettings = async (newSettings: SubscriptionSettings) => {
-    setSubscriptionSettings(newSettings);
-    try {
-      const { saveSubscriptionSettings } = await import('./services/subscriptionService');
-      await saveSubscriptionSettings(newSettings);
-      showAdminToast("✅ Plan Settings saved!");
-    } catch {
-      showAdminToast("✅ Plan Settings saved locally!");
-    }
-  };
-
+ const saveSubscriptionPlanSettings = async (newSettings: SubscriptionSettings) => {
+  setSubscriptionSettings(newSettings);
+  showAdminToast("✅ Plan Settings saved locally!");
+};
   // Categories CRUD
   const addCategory = (name: string) => {
     if (!name.trim() || adminCategories.includes(name.trim())) return;
