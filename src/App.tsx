@@ -2986,6 +2986,9 @@ function ProfilePage() {
   // Security: Only show Admin buttons if UID matches Admin UID
   const isAdmin = currentUser.uid === "admin-uid-001";
 
+// Safe check to prevent React Error #31 object child crash
+  if (!user || typeof user !== 'object') return null;
+
   useEffect(() => {
     const sub = localStorage.getItem('reelramp_subscribed') === 'true';
     setIsSubscribed(sub);
