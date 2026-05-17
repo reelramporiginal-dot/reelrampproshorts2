@@ -1,18 +1,14 @@
-<script>
-  // Yeh script bina design chhede browser memory mein temporary admin aur trial active kar dega
-  if (!localStorage.getItem('reelramp_user')) {
-    localStorage.setItem('reelramp_user', JSON.stringify({
-      id: 999,
-      name: "Premium Member",
-      phone: "9999999999",
-      email: "premium@reelramp.pro",
-      status: "Active"
-    }));
-  }
-  if (!localStorage.getItem('reelramp_watch_history')) {
-    localStorage.setItem('reelramp_watch_history', JSON.stringify([]));
-  }
-  if (!localStorage.getItem('reelramp_categories')) {
-    localStorage.setItem('reelramp_categories', JSON.stringify(["Horror", "Mystery", "Life Lessons", "Investigative", "True Crime"]));
-  }
-</script>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReelRamp Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-black text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
