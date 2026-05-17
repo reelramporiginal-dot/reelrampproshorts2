@@ -2971,19 +2971,19 @@ function ProfilePage() {
   const [library, setLibrary] = useState<Video[]>([]);
   const [downloads, setDownloads] = useState<Video[]>([]);
   const [activeTab, setActiveTab] = useState<'library' | 'downloads' | 'account'>('library');
-
-  // Simulate current user (Firebase Auth simulation)
-  const currentUser = {
-    uid: localStorage.getItem('current_user_uid') || "user-001",
-    email: "alex.rivera@reelramp.app"
-  };
-
+  
   // Security: Only show Admin buttons if UID matches Admin UID
-  const isAdmin = currentUser.uid === "admin-uid-001";
+const currentUser = {
+  uid: localStorage.getItem('current_user_uid') || "user-001",
+  email: "alex.rivera@reelramp.app"
+};
 
-  useEffect(() => {
-    const sub = localStorage.getItem('reelramp_subscribed') === 'true';
-    setIsSubscribed(sub);
+const isAdmin = currentUser.uid === "admin-uid-001";
+
+console.log("USER:", user);
+console.log("CURRENT USER:", currentUser);
+console.log("LIBRARY:", library);
+console.log("DOWNLOADS:", downloads);
 
    // Load saved library safely without crashing
     let libIds: number[] = [];
