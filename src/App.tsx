@@ -1076,11 +1076,17 @@ function HomePage() {
   const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
-  useEffect(() => {
-    // Background Supabase sync — non-blocking
-    supabase.from('videos').select('*').order('id').then(({ data }) => {
-      if (data && data.length > 0) { setAllVideos(data as Video[]); saveVideos(data as Video[]); }
-    }).catch(() => {});
+ supabase.from('videos').select('*').order('id').then(({ data }) => {
+  if (data && data.length > 0) {
+    const normalized = data.map((v: any) => ({
+      ...v,
+      isPremium: v.is_premium ?? v.isPremium ?? false,
+      videoUrl: v.video_url ?? v.videoUrl ?? '',
+    }));
+    setAllVideos(normalized as Video[]);
+    saveVideos(normalized as Video[]);
+  }
+}).catch(() => {});
 
     const popups = getStoredPopups();
     const active = popups.find(p => p.isActive);
