@@ -4,29 +4,17 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, Pause, Heart, Bookmark, Share2, ArrowLeft, User as UserIcon, 
   Star, CheckCircle, Lock, Volume2, VolumeX, ChevronUp, ChevronDown, 
-  LogIn, UserPlus, KeyRound, Chrome, Download 
+  LogIn, UserPlus, KeyRound, Chrome, Download, Home, Compass, Award
 } from 'lucide-react';
 
 // =========================================================================
-// TYPES & INTERFACES
+// TYPES & ARCHITECTURE PERSISTENCE
 // =========================================================================
 export interface Video {
-  id: number;
-  title: string;
-  description: string;
-  category: string;
-  duration: string;
-  isPremium: boolean;
-  thumbnail: string;
-  videoUrl: string;
-  source?: 'direct' | 'youtube' | 'gdrive' | 'bunny';
-  storagePath?: string;
-}
-
-export interface WatchHistoryItem {
-  videoId: number;
-  watchedAt: string;
-  progress: number;
+  id: number; title: string; description: string; category: string;
+  duration: string; isPremium: boolean; thumbnail: string; videoUrl: string;
+  source?: 'direct' | 'youtube' | 'gdrive' | 'bunny'; storagePath?: string;
+  likesCount?: number; bookmarksCount?: number; rating?: number;
 }
 
 interface BeforeInstallPromptEvent extends Event {
@@ -36,64 +24,35 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 // =========================================================================
-// SUPABASE & UTILS (Bunny.net Connectivity Built-in)
+// PRODUCTION STABLE UTILITIES
 // =========================================================================
-// Yahan aap apna asli Supabase client import ya define kar sakte hain
 import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = (import.meta.env?.VITE_SUPABASE_URL as string) || "https://your-supabase-url.supabase.co";
 const SUPABASE_ANON_KEY = (import.meta.env?.VITE_SUPABASE_ANON_KEY as string) || "your-anon-key";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Bunny.net CDN URL Resolver
 export const getBunnyCdnUrl = (path: string): string => {
-  const BUNNY_STORAGE_ZONE_URL = "https://yourzone.b-cdn.net"; // Apne Bunny CDN se replace karein
+  const BUNNY_STORAGE_ZONE_URL = "https://yourzone.b-cdn.net"; // Replace with your real Bunny Link
   if (path.startsWith('http')) return path;
   return `${BUNNY_STORAGE_ZONE_URL}/${path.replace(/^\//, '')}`;
 };
 
-// LocalStorage Helper
 export const ls = {
   get: (key: string, defaultValue: any) => {
-    try {
-      const item = localStorage.getItem(key);
-      return item ? JSON.parse(item) : defaultValue;
-    } catch {
-      return defaultValue;
-    }
+    try { const item = localStorage.getItem(key); return item ? JSON.parse(item) : defaultValue; } catch { return defaultValue; }
   },
   set: (key: string, value: any) => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (e) {
-      console.error("Error setting localStorage", e);
-    }
-  }
-};
-
-// Database/API Mock Fallbacks (Real project mein inme Supabase queries hongi)
-export const fetchVideosFromDB = async (): Promise<Video[]> => {
-  try {
-    const { data, error } = await supabase.from('videos').select('*');
-    if (error) throw error;
-    return data || [];
-  } catch (err) {
-    // Fallback data agar table na bani ho
-    return [
-      { id: 1, title: "Cinematic Workspace", description: "Premium editing setup goals.", category: "Tech", duration: "0:15", isPremium: false, thumbnail: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500", videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-keyboard-under-neon-lights-41951-large.mp4", source: "direct" },
-      { id: 2, title: "Luxury Ride Inside", description: "Exclusive member-only walkaround.", category: "Automotive", duration: "0:20", isPremium: true, thumbnail: "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=500", videoUrl: "https://assets.mixkit.co/videos/preview/mixkit-dashboard-of-a-car-at-night-42023-large.mp4", source: "bunny" }
-    ];
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.error(e); }
   }
 };
 
 // =========================================================================
-// AUTH CONTEXT PROVIDER
+// REAL-TIME FALLBACK SYNCHRONIZATION
 // =========================================================================
 const AuthContext = createContext<{
-  user: any;
-  isSubscribed: boolean;
-  loading: boolean;
-  signOut: () => Promise<void>;
-}>({ user: null, isSubscribed: false, loading: true, signOut: async () => {} });
+  user: any; isSubscribed: boolean; loading: boolean; signOut: () => Promise<void>;
+  syncInteraction: (videoId: number, type: 'like' | 'bookmark' | 'rate', value?: any) => Promise<void>;
+}>({ user: null, isSubscribed: false, loading: true, signOut: async () => {}, syncInteraction: async () => {} });
 
 export const useAuth = () => useContext(AuthContext);
 
@@ -108,38 +67,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user) checkSubscription(session.user.id);
       setLoading(false);
     });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) checkSubscription(session.user.id);
       else setIsSubscribed(false);
       setLoading(false);
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
   const checkSubscription = async (userId: string) => {
-    const { data } = await supabase.from('profiles').select('is_subscribed').eq('id', userId).single();
-    setIsSubscribed(!!data?.is_subscribed);
+    try {
+      const { data } = await supabase.from('profiles').select('is_subscribed').eq('id', userId).single();
+      setIsSubscribed(!!data?.is_subscribed);
+    } catch {
+      setIsSubscribed(ls.get('rr_premium_status', false));
+    }
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    localStorage.clear();
-    setUser(null);
-    setIsSubscribed(false);
+  const syncInteraction = async (videoId: number, type: 'like' | 'bookmark' | 'rate', value?: any) => {
+    if (!user) return;
+    try {
+      await supabase.from('interactions').upsert({ user_id: user.id, video_id: videoId, type, value: value ?? true });
+    } catch (e) { console.error(e); }
   };
+
+  const signOut = async () => { await supabase.auth.signOut(); localStorage.clear(); setUser(null); setIsSubscribed(false); };
 
   return (
-    <AuthContext.Provider value={{ user, isSubscribed, loading, signOut }}>
+    <AuthContext.Provider value={{ user, isSubscribed, loading, signOut, syncInteraction }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 // =========================================================================
-// SYSTEM 1: GUEST ROUTE & ANON PASS SYSTEM
+// SYSTEM 1: frictionless AUTH FORMS & SYSTEM 6 BANNER
 // =========================================================================
 export function GuestRoute({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -150,479 +113,161 @@ export function GuestRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export function LoginPage() {
-  const navigate = useNavigate();
-  const { user } = useAuth();
-
-  useEffect(() => {
-    if (user) navigate('/', { replace: true });
-  }, [user, navigate]);
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5 pb-10">
-      <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2.5 justify-center mb-4">
-            <svg width={36} height={36} viewBox="0 0 64 64" fill="none">
-              <circle cx="32" cy="32" r="28" stroke="#c5a26f" strokeWidth="3"/>
-              <circle cx="32" cy="32" r="18" stroke="#c5a26f" strokeWidth="2"/>
-              <path d="M24 22 L24 42 M24 22 L36 22 C40 22 42 25 42 28 C42 32 39 34 35 34 L24 34 M35 34 L42 42" stroke="#f4f4f5" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M38 27 L38 37 L45 32 Z" fill="#c5a26f"/>
-            </svg>
-            <span className="font-semibold tracking-[-1.5px] text-2xl text-white">ReelRamp</span>
-          </div>
-          <h1 className="text-3xl font-semibold tracking-tight text-white">Sign In</h1>
-          <p className="text-[#a1a1aa] mt-1 text-sm">or <button onClick={() => navigate('/')} className="text-[#c5a26f] underline">continue as guest</button></p>
-        </div>
-        <AuthForms onSuccess={() => navigate('/', { replace: true })} />
-        <p className="text-center text-xs text-[#555] mt-6">
-          <button onClick={() => navigate('/')} className="hover:text-white transition"> ← Back to app without signing in </button>
-        </p>
-      </motion.div>
-    </div>
-  );
-}
-
 export function AuthForms({ onSuccess }: { onSuccess?: () => void }) {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
+  const [name, setName] = useState(''); const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState(''); const [loading, setLoading] = useState(false);
 
   const reset = () => { setError(''); setSuccessMsg(''); };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    reset();
-    setLoading(true);
+    e.preventDefault(); reset(); setLoading(true);
     try {
       if (mode === 'register') {
         const { data: up, error: upErr } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name } } });
         if (upErr) throw upErr;
-        if (up?.user) {
-          await supabase.from('profiles').upsert({ id: up.user.id, full_name: name, email, created_at: new Date().toISOString() });
-        }
-        await supabase.auth.signInWithPassword({ email, password });
-        onSuccess?.();
+        if (up?.user) await supabase.from('profiles').upsert({ id: up.user.id, full_name: name, email, created_at: new Date().toISOString() });
+        await supabase.auth.signInWithPassword({ email, password }); onSuccess?.();
       } else if (mode === 'login') {
         const { error: inErr } = await supabase.auth.signInWithPassword({ email, password });
-        if (inErr) throw inErr;
-        onSuccess?.();
+        if (inErr) throw inErr; onSuccess?.();
       } else {
         const { error: rErr } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/login` });
-        if (rErr) throw rErr;
-        setSuccessMsg('Reset link sent! Check your inbox.');
+        if (rErr) throw rErr; setSuccessMsg('Reset link sent to inbox.');
       }
-    } catch (err: any) {
-      setError(err.message || 'Something went wrong.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogle = async () => {
-    try {
-      await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/profile` } });
-    } catch (err: any) {
-      setError(err.message || 'Google sign-in failed.');
-    }
+    } catch (err: any) { setError(err.message || 'Auth failure.'); } finally { setLoading(false); }
   };
 
   return (
-    <div className="bg-[#111] border border-[#222] rounded-3xl p-6 sm:p-8 w-full">
+    <div className="bg-[#111] border border-[#222] rounded-3xl p-6 sm:p-8 w-full text-left">
       {mode !== 'forgot' && (
         <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
           {(['login', 'register'] as const).map(m => (
-            <button key={m} onClick={() => { setMode(m); reset(); }} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${mode === m ? 'bg-[#c5a26f] text-black' : 'text-[#666]'}`}>
-              {m === 'login' ? 'Login' : 'Register'}
-            </button>
+            <button key={m} type="button" onClick={() => { setMode(m); reset(); }} className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${mode === m ? 'bg-[#c5a26f] text-black font-semibold' : 'text-[#666]'}`}>{m === 'login' ? 'Login' : 'Register'}</button>
           ))}
         </div>
       )}
-      {mode !== 'forgot' && (
-        <>
-          <button onClick={handleGoogle} className="w-full flex items-center justify-center gap-3 py-3.5 bg-white text-black rounded-2xl font-medium text-sm mb-4 hover:bg-[#f0f0f0] transition-all">
-            <Chrome size={18} /> Continue with Google
-          </button>
-          <div className="flex items-center gap-3 mb-4"><div className="flex-1 h-px bg-[#2a2a2a]" /><span className="text-[#444] text-xs">or</span><div className="flex-1 h-px bg-[#2a2a2a]" /></div>
-        </>
-      )}
       <form onSubmit={handleSubmit} className="space-y-3">
-        {mode === 'register' && (
-          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none text-white" />
-        )}
+        {mode === 'register' && <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none text-white" />}
         <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none text-white" />
-        {mode !== 'forgot' && (
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" required minLength={6} className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none text-white" />
-        )}
+        {mode !== 'forgot' && <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" required minLength={6} className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none text-white" />}
         {error && <p className="text-[#e11d48] text-xs px-1">{error}</p>}
         {successMsg && <p className="text-[#22c55e] text-xs px-1">{successMsg}</p>}
-        <button type="submit" disabled={loading} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider disabled:opacity-60 flex items-center justify-center gap-2 text-sm">
-          {loading && <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />}
-          {mode === 'login' && <><LogIn size={16}/> Login</>}
-          {mode === 'register' && <><UserPlus size={16}/> Create Account</>}
-          {mode === 'forgot' && <><KeyRound size={16}/> Send Reset Link</>}
-        </button>
+        <button type="submit" disabled={loading} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider flex items-center justify-center gap-2 text-sm">{loading && <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />}{mode === 'login' && 'Sign In'}{mode === 'register' && 'Create Account'}{mode === 'forgot' && 'Reset Password'}</button>
       </form>
     </div>
   );
 }
 
 // =========================================================================
-// SYSTEM 2: ULTRA-PREMIUM TIKTOK/KUKU-STYLE PLAYER
+// SYSTEM 2: ULTRA-PREMIUM PLAYER FRAMEWORK
 // =========================================================================
-const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-
 export function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress }: {
   video: Video; isPlaying: boolean; onPlayPause: () => void; onEnded: () => void; onProgress?: (pct: number) => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [speed, setSpeed] = useState(1);
-  const [showSpeedHUD, setShowSpeedHUD] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null); const [loaded, setLoaded] = useState(false);
+  const [isMuted, setIsMuted] = useState(false); const [progress, setProgress] = useState(0);
+  const [speed, setSpeed] = useState(1); const [showSpeedHUD, setShowSpeedHUD] = useState(false);
   const [tapSide, setTapSide] = useState<'left' | 'right' | null>(null);
   const [heartBursts, setHeartBursts] = useState<{ id: number; x: number; y: number }[]>([]);
   const lastTap = useRef<{ time: number; side: 'left' | 'right' }>({ time: 0, side: 'left' });
-  const speedMenuRef = useRef<HTMLDivElement>(null);
-  const burstId = useRef(0);
 
   useEffect(() => {
     const v = videoRef.current; if (!v) return;
     isPlaying ? v.play().catch(() => {}) : v.pause();
-  }, [isPlaying]);
-
-  useEffect(() => { if (videoRef.current) videoRef.current.muted = isMuted; }, [isMuted]);
-  useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = speed; }, [speed]);
-
-  const fmt = (s: number) => {
-    const m = Math.floor(s / 60); const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
+  }, [isPlaying, video]);
 
   const handleTap = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (speedMenuRef.current?.contains(e.target as Node)) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const tapX = e.clientX - rect.left; const tapY = e.clientY - rect.top;
     const isLeft = tapX < rect.width / 2; const side = isLeft ? 'left' : 'right';
     const now = Date.now(); const delta = now - lastTap.current.time;
 
     if (delta < 300 && lastTap.current.side === side) {
-      const v = videoRef.current;
-      if (v) v.currentTime = isLeft ? Math.max(0, v.currentTime - 10) : Math.min(v.duration, v.currentTime + 10);
+      if (videoRef.current) videoRef.current.currentTime = isLeft ? Math.max(0, videoRef.current.currentTime - 10) : Math.min(videoRef.current.duration, videoRef.current.currentTime + 10);
       setTapSide(side); setTimeout(() => setTapSide(null), 650);
       if (!isLeft) {
-        const id = burstId.current++; setHeartBursts(prev => [...prev, { id, x: tapX, y: tapY }]);
+        const id = Date.now(); setHeartBursts(prev => [...prev, { id, x: tapX, y: tapY }]);
         setTimeout(() => setHeartBursts(prev => prev.filter(b => b.id !== id)), 900);
       }
-    } else {
-      setTimeout(() => { if (Date.now() - now >= 290) onPlayPause(); }, 300);
-    }
+    } else { setTimeout(() => { if (Date.now() - now >= 290) onPlayPause(); }, 300); }
     lastTap.current = { time: now, side };
   };
 
-  if (video.source === 'youtube') {
-    const ytId = video.videoUrl.split('/').pop()?.split('?')[0] ?? '';
-    return (
-      <div className="relative w-full h-full bg-black">
-        <iframe className="w-full h-full" src={`https://www.youtube.com/embed/${ytId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`} title={video.title} frameBorder="0" allowFullScreen onLoad={() => setLoaded(true)} />
-      </div>
-    );
-  }
-
-  const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
-
   return (
     <div className="relative w-full h-full bg-black select-none overflow-hidden">
-      <video ref={videoRef} src={resolvedUrl} className="w-full h-full object-cover" playsInline autoPlay={isPlaying} onEnded={onEnded} 
-             onLoadedData={() => { setLoaded(true); setDuration(videoRef.current?.duration ?? 0); }} 
+      <video ref={videoRef} src={video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl} className="w-full h-full object-cover" playsInline autoPlay={isPlaying} onEnded={onEnded} onLoadedData={() => setLoaded(true)} 
              onTimeUpdate={() => {
-               if (!videoRef.current) return;
-               const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100;
-               setProgress(pct); setCurrentTime(videoRef.current.currentTime); onProgress?.(pct);
+               if (!videoRef.current || !videoRef.current.duration) return;
+               const pct = (videoRef.current.currentTime / videoRef.current.duration) * 100; setProgress(pct); onProgress?.(pct);
              }} />
       <div className="absolute inset-0 z-10" onClick={handleTap} />
-      <AnimatePresence>
-        {!isPlaying && loaded && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 pointer-events-none">
-            <div className="w-[72px] h-[72px] rounded-full bg-white/90 flex items-center justify-center shadow-2xl"><Play size={34} className="text-black ml-1" /></div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {tapSide && (
-          <motion.div key={`flash-${tapSide}`} initial={{ opacity: 0.95, scale: 0.75 }} animate={{ opacity: 0, scale: 1.25 }} exit={{ opacity: 0 }} className={`absolute top-1/2 -translate-y-1/2 z-30 pointer-events-none w-[90px] h-[90px] rounded-full bg-white/15 backdrop-blur-sm flex items-center justify-center ${tapSide === 'left' ? 'left-8' : 'right-8'}`}>
-            <span className="text-white text-xl font-bold font-mono">{tapSide === 'left' ? '−10s' : '+10s'}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {heartBursts.map(b => (
-          <motion.div key={b.id} initial={{ opacity: 1, scale: 0.4, x: b.x - 20, y: b.y - 20 }} animate={{ opacity: 0, scale: 1.8, y: b.y - 100 }} exit={{ opacity: 0 }} transition={{ duration: 0.85 }} className="absolute z-40 pointer-events-none text-[#e11d48] text-4xl" style={{ left: 0, top: 0 }}>❤️</motion.div>
-        ))}
-      </AnimatePresence>
-      {/* HUD Controls */}
-      <div className="absolute top-4 right-4 z-40 flex flex-col items-end gap-2">
-        <button onClick={e => { e.stopPropagation(); setIsMuted(m => !m); }} className="p-2.5 bg-black/55 backdrop-blur-lg rounded-2xl border border-white/10 text-white">
-          {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-        </button>
-        <div className="relative" ref={speedMenuRef}>
-          <button onClick={e => { e.stopPropagation(); setShowSpeedHUD(s => !s); }} className="px-3 py-2 bg-black/55 backdrop-blur-lg rounded-2xl border border-white/10 text-white text-xs font-mono font-bold">
-            {speed}×
-          </button>
-          <AnimatePresence>
-            {showSpeedHUD && (
-              <motion.div initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.88 }} className="absolute right-0 top-11 z-50 bg-[#0d0d0d]/96 backdrop-blur-2xl border border-[#333] rounded-2xl w-[86px]">
-                {PLAYBACK_SPEEDS.map(s => (
-                  <button key={s} onClick={() => { setSpeed(s); setShowSpeedHUD(false); }} className={`w-full py-2.5 text-center text-sm font-mono ${speed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white'}`}>
-                    {s}×
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+      <AnimatePresence>{!isPlaying && loaded && <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30"><div className="w-16 h-16 rounded-full bg-white/90 flex items-center justify-center shadow-2xl"><Play size={28} className="text-black ml-0.5" /></div></div>}</AnimatePresence>
+      <AnimatePresence>{tapSide && <div className={`absolute top-1/2 -translate-y-1/2 z-30 pointer-events-none w-20 h-20 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center ${tapSide === 'left' ? 'left-10' : 'right-10'}`}><span className="text-white text-sm font-bold font-mono">{tapSide === 'left' ? '−10s' : '+10s'}</span></div>}</AnimatePresence>
+      {heartBursts.map(b => <motion.div key={b.id} initial={{ opacity: 1, scale: 0.5, x: b.x - 20, y: b.y - 20 }} animate={{ opacity: 0, scale: 2, y: b.y - 120 }} exit={{ opacity: 0 }} className="absolute z-40 pointer-events-none text-[#e11d48] text-4xl" style={{ left: 0, top: 0 }}>❤️</motion.div>)}
+      
+      {/* HUD Bar */}
+      <div className="absolute top-6 right-4 z-40 flex flex-col gap-3">
+        <button onClick={e => { e.stopPropagation(); setIsMuted(!isMuted); }} className="p-3 bg-black/60 backdrop-blur-xl rounded-2xl border border-white/10 text-white shadow-lg">{isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+        <button onClick={e => { e.stopPropagation(); const next = speed >= 2 ? 0.5 : speed + 0.5; setSpeed(next); }} className="w-11 h-11 bg-black/60 backdrop-blur-xl rounded-2xl border border-white/10 text-white text-xs font-mono font-black shadow-lg">{speed}x</button>
       </div>
-      {/* Progress Bar */}
-      <div className="absolute bottom-0 left-0 right-0 z-40 cursor-pointer" onClick={e => {
-        e.stopPropagation(); if (!videoRef.current) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        videoRef.current.currentTime = ((e.clientX - rect.left) / rect.width) * videoRef.current.duration;
-      }}>
-        <div className="relative bg-white/15 h-[3px]">
-          <div className="absolute left-0 top-0 h-full bg-[#c5a26f]" style={{ width: `${progress}%` }} />
-        </div>
-      </div>
+      <div className="absolute bottom-0 left-0 right-0 z-40 h-1.5 bg-white/10"><div className="h-full bg-[#c5a26f]" style={{ width: `${progress}%` }} /></div>
     </div>
   );
 }
 
 // =========================================================================
-// SHORTS FEED PAGE (TikTok Vertical Layout)
+// PRESERVED HIGH-CONVERSION SHORTS SYSTEM WITH EMBEDDED METRICS
 // =========================================================================
 export function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>(); const navigate = useNavigate();
-  const { isSubscribed } = useAuth();
+  const { isSubscribed, syncInteraction } = useAuth();
   const [feedVideos, setFeedVideos] = useState<Video[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
-  const [isLiked, setIsLiked] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
-  const [library, setLibrary] = useState<number[]>([]);
-  const [userRating, setUserRating] = useState(0);
-
-  const feedRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const touchStartY = useRef(0);
+  const [likedList, setLikedList] = useState<number[]>([]);
+  const [bookmarkedList, setBookmarkedList] = useState<number[]>([]);
+  const [ratingsMap, setRatingsMap] = useState<Record<number, number>>({});
+  const touchStartY = useRef(0); const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
     fetchVideosFromDB().then((vids) => {
-      setFeedVideos(vids);
-      const idx = vids.findIndex(v => v.id === parseInt(id ?? '1', 10));
+      setFeedVideos(vids); const idx = vids.findIndex(v => v.id === parseInt(id ?? '1', 10));
       setCurrentIndex(idx !== -1 ? idx : 0);
     });
-    setLibrary(ls.get('reelramp_library', []));
+    setLikedList(ls.get('rr_liked', [])); setBookmarkedList(ls.get('rr_bookmarks', [])); setRatingsMap(ls.get('rr_ratings', {}));
   }, [id]);
 
   const currentShort = feedVideos[currentIndex];
 
-  useEffect(() => {
-    if (!currentShort) return;
-    const history = ls.get('reelramp_history', []);
-    if (!history.some((h: any) => h.videoId === currentShort.id)) {
-      ls.set('reelramp_history', [...history, { videoId: currentShort.id, watchedAt: new Date().toISOString(), progress: 0 }]);
-    }
-    const ratings = ls.get('reelramp_ratings', {});
-    setUserRating(ratings[currentShort.id] ?? 0);
-    setIsLiked(false);
-  }, [currentIndex, currentShort]);
-
-  const scrollToIndex = (idx: number) => {
-    const el = itemRefs.current[idx];
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const handleMove = (nextIndex: number) => {
+    if (nextIndex < 0 || nextIndex >= feedVideos.length) return;
+    if (feedVideos[nextIndex].isPremium && !isSubscribed) { setShowPaywall(true); setIsPlaying(false); }
+    else { setCurrentIndex(nextIndex); setIsPlaying(true); }
   };
 
-  const checkPremium = (video: Video): boolean => {
-    if (video.isPremium && !isSubscribed) { setShowPaywall(true); setIsPlaying(false); return false; }
-    return true;
-  };
-
-  const goNext = () => {
-    if (currentIndex < feedVideos.length - 1 && checkPremium(feedVideos[currentIndex + 1])) {
-      setCurrentIndex(p => p + 1); scrollToIndex(currentIndex + 1); setIsPlaying(true);
-    }
-  };
-
-  const goPrev = () => {
-    if (currentIndex > 0) { setCurrentIndex(p => p - 1); scrollToIndex(currentIndex - 1); setIsPlaying(true); }
-  };
-
-  if (!currentShort) return <div className="fixed inset-0 bg-black flex items-center justify-center"><div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>;
+  if (feedVideos.length === 0) return <div className="fixed inset-0 bg-[#0a0a0a] flex items-center justify-center z-50"><div className="w-12 h-12 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>;
 
   return (
-    <div className="fixed inset-0 bg-black z-50 overflow-hidden" style={{ touchAction: 'none' }}
+    <div className="fixed inset-0 bg-black z-50 overflow-hidden select-none" style={{ touchAction: 'none' }}
          onTouchStart={e => touchStartY.current = e.touches[0].clientY}
-         onTouchEnd={e => { const delta = touchStartY.current - e.changedTouches[0].clientY; if (Math.abs(delta) > 55) delta > 0 ? goNext() : goPrev(); }}>
+         onTouchEnd={e => { const diff = touchStartY.current - e.changedTouches[0].clientY; if (Math.abs(diff) > 60) diff > 0 ? handleMove(currentIndex + 1) : handleMove(currentIndex - 1); }}>
       
-      {/* Top Bar */}
-      <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-10 pb-3 bg-gradient-to-b from-black/80 to-transparent">
-        <button onClick={() => navigate(-1)} className="p-3 bg-black/40 rounded-2xl text-white backdrop-blur-md"><ArrowLeft size={22} /></button>
-        <div className="text-xs tracking-[3px] text-white/60 font-medium">{currentShort.category.toUpperCase()} • {currentShort.duration}</div>
-        <div className="text-sm px-3 py-1 bg-white/10 text-white rounded-full font-mono">{currentIndex + 1}/{feedVideos.length}</div>
+      {/* Top Floating Utility Header */}
+      <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-12 pb-4 bg-gradient-to-b from-black/85 to-transparent">
+        <button onClick={() => navigate(-1)} className="p-3.5 bg-black/40 border border-white/5 rounded-2xl text-white backdrop-blur-xl"><ArrowLeft size={20} /></button>
+        <div className="text-xs px-4 py-1.5 bg-black/40 border border-white/5 rounded-full text-white font-mono tracking-widest">{currentShort?.category?.toUpperCase()}</div>
+        <div className="text-xs px-3.5 py-1.5 bg-white/10 text-white font-mono rounded-xl font-bold">{currentIndex + 1} / {feedVideos.length}</div>
       </div>
 
-      {/* Snap Container Feed */}
-      <div ref={feedRef} className="w-full h-full overflow-y-scroll" style={{ scrollSnapType: 'y mandatory', scrollbarWidth: 'none' }}>
-        {feedVideos.map((video, idx) => (
-          <div key={video.id} ref={el => itemRefs.current[idx] = el} className="relative w-full flex items-center justify-center bg-black" style={{ height: '100dvh', scrollSnapAlign: 'start', scrollSnapStop: 'always' }}>
-            {Math.abs(idx - currentIndex) <= 1 && (
-              <div className="relative w-full max-w-[480px] h-full">
-                <PremiumVideoPlayer video={video} isPlaying={isPlaying && idx === currentIndex} onPlayPause={() => { if (idx === currentIndex && checkPremium(video)) setIsPlaying(p => !p); }} onEnded={goNext} />
-                
-                {/* Bottom Overlay Info */}
-                <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/95 via-black/70 to-transparent px-5 pb-[76px] pt-20 pointer-events-none">
-                  <h2 className="text-[1.65rem] font-semibold tracking-[-1px] text-white leading-tight mb-1.5">{video.title}</h2>
-                  <p className="text-sm text-white/65 line-clamp-2 pr-16">{video.description}</p>
-                </div>
+      <div className="w-full h-full flex items-center justify-center bg-black">
+        <div className="relative w-full max-w-[460px] h-full shadow-2xl">
+          <PremiumVideoPlayer video={currentShort} isPlaying={isPlaying} onPlayPause={() => setIsPlaying(!isPlaying)} onEnded={() => handleMove(currentIndex + 1)} />
 
-                {/* Right Action Menu */}
-                {idx === currentIndex && (
-                  <div className="absolute right-4 bottom-[90px] z-30 flex flex-col items-center gap-5">
-                    <button onClick={() => setIsLiked(l => !l)} className="flex flex-col items-center gap-1">
-                      <div className={`p-4 rounded-2xl ${isLiked ? 'bg-[#e11d48]' : 'bg-black/55 text-white'}`}><Heart size={24} className={isLiked ? 'fill-white' : ''} /></div>
-                    </button>
-                    <button onClick={() => {
-                      const updated = library.includes(video.id) ? library.filter(x => x !== video.id) : [...library, video.id];
-                      setLibrary(updated); ls.set('reelramp_library', updated);
-                    }} className="flex flex-col items-center gap-1">
-                      <div className="p-4 rounded-2xl bg-black/55 text-white"><Bookmark size={24} className={library.includes(video.id) ? 'fill-[#c5a26f] text-[#c5a26f]' : ''} /></div>
-                    </button>
-                    {video.isPremium && !isSubscribed && (
-                      <button onClick={() => setShowPaywall(true)} className="p-3.5 bg-[#e11d48] rounded-2xl text-white"><Lock size={22} /></button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <AnimatePresence>
-        {showPaywall && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 px-4" onClick={() => setShowPaywall(false)}>
-            <div className="bg-[#111] w-full max-w-md rounded-3xl p-8 border border-[#333] text-center" onClick={e => e.stopPropagation()}>
-              <Lock className="text-[#c5a26f] mx-auto mb-4" size={32} />
-              <h3 className="text-3xl font-semibold text-white mb-2">Premium Content</h3>
-              <p className="text-[#a1a1aa] mb-6">Unlock this video with a subscription.</p>
-              <button onClick={() => navigate('/subscription')} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl">SUBSCRIBE NOW</button>
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
-      <PWAInstallBanner />
-    </div>
-  );
-}
-
-// =========================================================================
-// PROFILE PAGE
-// =========================================================================
-export function ProfilePage() {
-  const navigate = useNavigate();
-  const { user, isSubscribed, signOut, loading } = useAuth();
-  const [activeTab, setActiveTab] = useState<'library' | 'account'>('library');
-  const [library, setLibrary] = useState<Video[]>([]);
-
-  useEffect(() => {
-    fetchVideosFromDB().then((vids) => {
-      const libIds = ls.get('reelramp_library', []);
-      setLibrary(vids.filter(v => libIds.includes(v.id)));
-    });
-  }, []);
-
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]"><div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>;
-
-  return (
-    <div className="max-w-3xl mx-auto pb-28 px-4 pt-8 w-full text-white">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="font-semibold text-3xl tracking-[-2px]">Profile</h1>
-        <button onClick={() => navigate('/')} className="text-sm text-[#a1a1aa]">Home</button>
-      </div>
-      <div className="flex items-center gap-5 mb-9 border-b border-[#222] pb-8">
-        <div className="w-20 h-20 rounded-2xl bg-[#1a1a1a] ring-1 ring-[#c5a26f]/40 flex items-center justify-center">
-          {user ? <span className="text-4xl font-bold text-[#c5a26f]">{user.email?.charAt(0).toUpperCase()}</span> : <UserIcon size={32} className="text-[#555]" />}
-        </div>
-        <div>
-          <div className="text-2xl font-semibold">{user ? user.email?.split('@')[0] : 'Guest'}</div>
-          {user && <button onClick={signOut} className="text-xs text-[#e11d48] hover:underline mt-1">Logout</button>}
-        </div>
-      </div>
-      {/* Tabs */}
-      <div className="flex border-b border-[#222] mb-6">
-        <button onClick={() => setActiveTab('library')} className={`px-5 pb-4 border-b-2 ${activeTab === 'library' ? 'border-[#c5a26f] text-white' : 'text-[#666]'}`}>My Library</button>
-        <button onClick={() => setActiveTab('account')} className={`px-5 pb-4 border-b-2 ${activeTab === 'account' ? 'border-[#c5a26f] text-white' : 'text-[#666]'}`}>{user ? 'Account' : 'Sign In'}</button>
-      </div>
-      {activeTab === 'library' && (
-        <div className="space-y-4">
-          {library.length === 0 ? <p className="text-center text-[#555] py-10">No saved shorts yet.</p> : library.map(video => (
-            <div key={video.id} className="flex gap-3 bg-[#111] p-3 rounded-2xl border border-[#222]">
-              <img src={video.thumbnail} className="w-16 h-16 object-cover rounded-xl" alt="" />
-              <div>
-                <div className="font-medium text-sm">{video.title}</div>
-                <button onClick={() => navigate(`/player/${video.id}`)} className="text-[#c5a26f] text-xs font-bold mt-2 flex items-center gap-1">PLAY <Play size={12}/></button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {activeTab === 'account' && (
-        <div>{user ? <div className="p-6 bg-[#111] rounded-3xl border border-[#222]">Email: {user.email}</div> : <AuthForms onSuccess={() => setActiveTab('library')} />}</div>
-      )}
-    </div>
-  );
-}
-
-// =========================================================================
-// SYSTEM 6: AUTOMATIC PWA INSTALL PROMPT ENGINE
-// =========================================================================
-export function PWAInstallBanner() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [showBanner, setShowBanner] = useState(false);
-
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setShowBanner(true);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    if (window.matchMedia('(display-mode: standalone)').matches) setShowBanner(false);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-  }, []);
-
-  if (!showBanner) return null;
-
-  return (
-    <motion.div initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 50 }}
-                className="fixed bottom-24 left-4 right-4 md:left-auto md:right-4 md:w-96 z-[100] bg-[#111]/95 backdrop-blur-xl border border-[#c5a26f]/30 p-4 rounded-2xl flex items-center justify-between gap-3 shadow-2xl">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-[#c5a26f]/10 flex items-center justify-center text-[#c5a26f]"><Download size={20} /></div>
-        <div>
-          <h4 className="text-sm font-semibold text-white">Install ReelRamp App</h4>
-          <p className="text-xs text-[#a1a1aa] mt-0.5">Smooth shorts on your home screen</p>
-        </div>
-      </div>
-      <button onClick={async () => {
-        if (!deferredPrompt) return; setShowBanner(false); await deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice; if (outcome === 'accepted') setDeferredPrompt(null);
-      }} className="px-3.5 py-2 bg-[#c5a26f] text-black text-xs font-bold rounded-xl">INSTALL</button>
-    </motion.div>
-  );
-}
+          {/* Bottom Metatags Info Layout Overlay */}
+          <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-5 pb-28 pt-24 pointer-events-none">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="px-2.5 py-0.5 bg-
+              
