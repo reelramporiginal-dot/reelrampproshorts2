@@ -2458,7 +2458,19 @@ function AdminPage() {
 
     // FIX 1: Background Supabase sync — NEVER blocks UI, guaranteed finally
     setSyncing(true);
-  supabase.from('videos').select('*').order('id')
+ supabase.from('videos').upsert(
+  updated.map(v => ({
+    id: v.id,
+    title: v.title,
+    description: v.description,
+    category: v.category,
+    duration: v.duration,
+    is_premium: v.isPremium,
+    thumbnail: v.thumbnail,
+    video_url: v.videoUrl,
+    source: v.source || 'direct',
+  }))
+)
   .then(({ data }) => {
     if (data && data.length > 0) {
       const normalized = data.map((v: any) => ({
