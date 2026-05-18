@@ -2458,10 +2458,18 @@ function AdminPage() {
 
     // FIX 1: Background Supabase sync — NEVER blocks UI, guaranteed finally
     setSyncing(true);
-    supabase.from('videos').select('*').order('id')
-      .then(({ data }) => {
-        if (data && data.length > 0) { setAdminVideos(data as Video[]); saveVideos(data as Video[]); }
-      })
+  supabase.from('videos').select('*').order('id')
+  .then(({ data }) => {
+    if (data && data.length > 0) {
+      const normalized = data.map((v: any) => ({
+        ...v,
+        isPremium: v.is_premium ?? v.isPremium ?? false,
+        videoUrl: v.video_url ?? v.videoUrl ?? '',
+      }));
+      setAdminVideos(normalized as Video[]);
+      saveVideos(normalized as Video[]);
+    }
+  })
       .catch(() => {})
       .finally(() => setSyncing(false)); // GUARANTEED — never stays true
   }, [isAuthorized]);
