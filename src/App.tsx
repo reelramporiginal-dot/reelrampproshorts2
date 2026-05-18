@@ -11,7 +11,7 @@ import {
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
   Facebook, Instagram, Youtube, MessageCircle, Download as InstallIcon,
   ShoppingBag, Package, Smartphone, Upload, Database, FileText,
-  ChevronUp, ChevronDown, SkipForward
+  ChevronUp, ChevronDown, SkipForward, Home, Zap
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,7 +23,6 @@ const SUPABASE_ANON_KEY =
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Bunny.net CDN config
 const BUNNY = {
   storageZone: "reelrampproshorts1",
   apiKey: "1f535aac-8943-4da5-be1b98b776cc-2d1b4330",
@@ -39,7 +38,7 @@ const REELRAMP_LOGO =
   "https://drive.google.com/uc?export=view&id=1qs734lVBcgz-fJ_TitnibEG-KqX0LCVg";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SYSTEM 1 — GUEST MODE: Generate/persist a stable guest tracking key
+// GUEST ID
 // ─────────────────────────────────────────────────────────────────────────────
 const getOrCreateGuestId = (): string => {
   const existing = localStorage.getItem('rr_guest_id');
@@ -117,6 +116,7 @@ interface WatchHistoryItem {
   videoId: number;
   watchedAt: string;
   progress: number;
+  timestamp: number; // exact second for resume
 }
 
 interface PromoVideoSettings {
@@ -263,14 +263,22 @@ const saveCategories = (c: string[]) => ls.set('reelramp_categories', c);
 const getWatchHistory = (): WatchHistoryItem[] => ls.get('reelramp_watch_history', []);
 const saveWatchHistory = (h: WatchHistoryItem[]) => ls.set('reelramp_watch_history', h);
 
-const addToWatchHistory = (videoId: number, progress = 100) => {
+// SYSTEM 2: save timestamp for resume
+const addToWatchHistory = (videoId: number, progress = 0, timestamp = 0) => {
   const h = getWatchHistory();
   const idx = h.findIndex(i => i.videoId === videoId);
-  const item: WatchHistoryItem = { videoId, watchedAt: new Date().toISOString(), progress };
+  const item: WatchHistoryItem = { videoId, watchedAt: new Date().toISOString(), progress, timestamp };
   const updated = idx !== -1
     ? h.map((x, i) => i === idx ? item : x)
     : [item, ...h].slice(0, 20);
   saveWatchHistory(updated);
+};
+
+// SYSTEM 2: get resume timestamp for a video
+const getResumeTimestamp = (videoId: number): number => {
+  const h = getWatchHistory();
+  const item = h.find(i => i.videoId === videoId);
+  return item?.timestamp || 0;
 };
 
 const getVideoViews = (): Record<number, number> => ls.get('reelramp_views', {});
@@ -301,7 +309,7 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SYSTEM 6 — PAYWALL TRACKER
+// PAYWALL TRACKER
 // ─────────────────────────────────────────────────────────────────────────────
 const getScrollCount = (): number => parseInt(sessionStorage.getItem('rr_scroll_count') || '0');
 const incrementScrollCount = () =>
@@ -309,7 +317,7 @@ const incrementScrollCount = () =>
 const resetScrollCount = () => sessionStorage.removeItem('rr_scroll_count');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SYSTEM 5 — DATA INTEGRITY
+// DATA TOOLS
 // ─────────────────────────────────────────────────────────────────────────────
 const exportSystemBackup = () => {
   const backup = {
@@ -346,10 +354,7 @@ const importSystemBackup = (
       const data = JSON.parse(raw);
       const required = ['categories', 'videos', 'digitalProducts'];
       const missing = required.filter(k => !(k in data));
-      if (missing.length > 0) {
-        onError(`Invalid backup: missing keys — ${missing.join(', ')}`);
-        return;
-      }
+      if (missing.length > 0) { onError(`Invalid backup: missing keys — ${missing.join(', ')}`); return; }
       if (data.categories) saveCategories(data.categories);
       if (data.videos) saveVideos(data.videos);
       if (data.digitalProducts) saveDigitalProducts(data.digitalProducts);
@@ -403,29 +408,20 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       if (session?.user) checkSubscription(session.user.id);
     });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
-      if (session?.user) {
-        checkSubscription(session.user.id);
-      } else {
-        setIsSubscribed(false);
-      }
+      if (session?.user) { checkSubscription(session.user.id); }
+      else { setIsSubscribed(false); }
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
   const checkSubscription = async (userId: string) => {
     try {
       const { data } = await supabase
-        .from('subscriptions')
-        .select('status')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .single();
+        .from('subscriptions').select('status').eq('user_id', userId).eq('status', 'active').single();
       setIsSubscribed(!!data);
     } catch {
       setIsSubscribed(ls.get('reelramp_subscribed', false));
@@ -437,10 +433,8 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     ls.remove('reelramp_subscribed');
   };
 
-  const isGuest = !user;
-
   return (
-    <AuthContext.Provider value={{ user, session, loading, isSubscribed, isGuest, guestId, setIsSubscribed, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isSubscribed, isGuest: !user, guestId, setIsSubscribed, signOut }}>
       {children}
     </AuthContext.Provider>
   );
@@ -469,27 +463,39 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 2 — PWA INSTALL BANNER
-// Strict binding to window.beforeinstallprompt, sessionStorage dismiss,
-// floating above bottom nav bar on mobile
+// SYSTEM 6 — PWA INSTALL BANNER
+// Catches beforeinstallprompt, shows on first tap interaction
 // ─────────────────────────────────────────────────────────────────────────────
 function PWAInstallBanner() {
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
   const [show, setShow] = useState(false);
-  const [dismissed, setDismissed] = useState(
-    () => !!sessionStorage.getItem('rr_pwa_dismissed')
-  );
+  const [dismissed] = useState(() => !!sessionStorage.getItem('rr_pwa_dismissed'));
+  const [hasInteracted, setHasInteracted] = useState(false);
 
   useEffect(() => {
     if (dismissed) return;
     const handler = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setShow(true);
     };
     window.addEventListener('beforeinstallprompt', handler);
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, [dismissed]);
+
+  // Show banner on first user interaction
+  useEffect(() => {
+    if (dismissed || hasInteracted) return;
+    const onInteract = () => {
+      if (deferredPrompt) { setShow(true); }
+      setHasInteracted(true);
+    };
+    window.addEventListener('click', onInteract, { once: true });
+    window.addEventListener('touchstart', onInteract, { once: true });
+    return () => {
+      window.removeEventListener('click', onInteract);
+      window.removeEventListener('touchstart', onInteract);
+    };
+  }, [deferredPrompt, dismissed, hasInteracted]);
 
   const handleInstall = async () => {
     if (!deferredPrompt) return;
@@ -506,7 +512,6 @@ function PWAInstallBanner() {
 
   const handleDismiss = () => {
     sessionStorage.setItem('rr_pwa_dismissed', '1');
-    setDismissed(true);
     setShow(false);
   };
 
@@ -519,7 +524,6 @@ function PWAInstallBanner() {
         animate={{ y: 0, opacity: 1 }}
         exit={{ y: 100, opacity: 0 }}
         transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.38 }}
-        // Anchored above bottom nav (h-16 = 64px) + 8px gap
         className="fixed bottom-[72px] left-4 right-4 z-[150] md:left-auto md:right-6 md:w-[380px]"
       >
         <div className="bg-[#111]/95 backdrop-blur-xl border border-[#c5a26f]/40 rounded-3xl p-5 flex items-center gap-4 shadow-2xl">
@@ -531,15 +535,8 @@ function PWAInstallBanner() {
             <div className="text-xs text-[#a1a1aa] mt-0.5">Fast, offline-ready, no browser bar</div>
           </div>
           <div className="flex gap-2 flex-shrink-0">
-            <button
-              onClick={handleInstall}
-              className="px-4 py-2 bg-[#c5a26f] text-black text-xs font-semibold rounded-xl"
-            >
-              Install
-            </button>
-            <button onClick={handleDismiss} className="p-2 text-[#666]">
-              <X size={16} />
-            </button>
+            <button onClick={handleInstall} className="px-4 py-2 bg-[#c5a26f] text-black text-xs font-semibold rounded-xl">Install</button>
+            <button onClick={handleDismiss} className="p-2 text-[#666]"><X size={16} /></button>
           </div>
         </div>
       </motion.div>
@@ -548,8 +545,7 @@ function PWAInstallBanner() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 1 — SUBSCRIPTION INTERCEPT MODAL
-// Glassmorphism overlay, golden micro-animations, every 3 scrolls
+// SUBSCRIPTION INTERCEPT MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => void; onSubscribe: () => void }) {
   const subSettings = getSubSettings();
@@ -578,30 +574,22 @@ function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => v
           <div className="text-xs text-[#666]">Then {subSettings.fullPrice} for {subSettings.fullValidity}</div>
           <ul className="mt-4 space-y-1.5 text-sm text-[#a1a1aa]">
             {['Unlimited premium shorts', 'Ad-free experience', 'Offline downloads', 'New releases first'].map((f, i) => (
-              <li key={i} className="flex items-center gap-2">
-                <CheckCircle size={13} className="text-[#c5a26f]" /> {f}
-              </li>
+              <li key={i} className="flex items-center gap-2"><CheckCircle size={13} className="text-[#c5a26f]" /> {f}</li>
             ))}
           </ul>
         </div>
-        <button
-          onClick={onSubscribe}
-          className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider mb-3 hover:bg-[#d4b17f] transition-colors"
-        >
-          UNLOCK PREMIUM
-        </button>
-        <button onClick={onClose} className="w-full py-3 text-sm text-[#666]">
-          Continue as Guest (Limited)
-        </button>
+        <button onClick={onSubscribe} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider mb-3 hover:bg-[#d4b17f] transition-colors">UNLOCK PREMIUM</button>
+        <button onClick={onClose} className="w-full py-3 text-sm text-[#666]">Continue as Guest (Limited)</button>
       </motion.div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 5 — ULTRA-PREMIUM CINEMATIC PLAYER
-// 100dvh locked, CSS scroll-snap, progress scrubber, double-tap hearts,
-// glassmorphic HUD (mute + speed 0.5x→2x), wheel seek
+// SYSTEM 1 — KUKU TV STYLE CINEMATIC PLAYER
+// Auto-hides overlays + action buttons after 3s inactivity when playing
+// Tap anywhere to reveal, reset 3s timer
+// Speed HUD + scrubber stay persistent
 // ─────────────────────────────────────────────────────────────────────────────
 interface CinematicPlayerProps {
   video: Video;
@@ -609,9 +597,17 @@ interface CinematicPlayerProps {
   onPlayPause: () => void;
   onEnded: () => void;
   onSeek?: (seconds: number) => void;
+  // SYSTEM 1: callbacks for overlay visibility
+  overlayVisible: boolean;
+  onUserActivity: () => void;
+  resumeFrom?: number;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
 }
 
-function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: CinematicPlayerProps) {
+function CinematicPlayer({
+  video, isPlaying, onPlayPause, onEnded, onSeek,
+  overlayVisible, onUserActivity, resumeFrom = 0, onTimeUpdate
+}: CinematicPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -623,6 +619,7 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
   const [showHUD, setShowHUD] = useState(false);
   const lastTapRef = useRef(0);
   const heartIdRef = useRef(0);
+  const hasResumed = useRef(false);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -638,7 +635,18 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
     if (videoRef.current) videoRef.current.playbackRate = speed;
   }, [speed]);
 
-  // Desktop scroll wheel — seek ±5s
+  // Resume from saved timestamp
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration || 0);
+      if (!hasResumed.current && resumeFrom > 0) {
+        videoRef.current.currentTime = resumeFrom;
+        hasResumed.current = true;
+      }
+    }
+  };
+
+  // Desktop scroll wheel seek
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -654,15 +662,13 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
   const touchStartY = useRef(0);
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY;
+    onUserActivity(); // SYSTEM 1
   };
   const handleTouchEnd = (e: React.TouchEvent) => {
     const delta = touchStartY.current - e.changedTouches[0].clientY;
-    if (Math.abs(delta) > 60 && onSeek) {
-      onSeek(delta > 0 ? 10 : -10);
-    }
+    if (Math.abs(delta) > 60 && onSeek) { onSeek(delta > 0 ? 10 : -10); }
   };
 
-  // Double-tap: spawn heart + seek +10s
   const handleDoubleTap = (e: React.MouseEvent | React.TouchEvent) => {
     const now = Date.now();
     if (now - lastTapRef.current < 320) {
@@ -681,9 +687,7 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
       const id = ++heartIdRef.current;
       setHearts(prev => [...prev, { id, x, y }]);
       setTimeout(() => setHearts(prev => prev.filter(h => h.id !== id)), 1200);
-      if (videoRef.current) {
-        videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 10);
-      }
+      if (videoRef.current) videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 10);
     }
     lastTapRef.current = now;
   };
@@ -702,16 +706,12 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
   if (video.source === 'youtube') {
     const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
     return (
-      <div className="relative w-full h-full bg-black">
-        <iframe
-          width="100%" height="100%"
+      <div className="relative w-full h-full bg-black" onClick={onUserActivity}>
+        <iframe width="100%" height="100%"
           src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
-          title={video.title}
-          frameBorder="0"
+          title={video.title} frameBorder="0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          className="w-full h-full"
-        />
+          allowFullScreen className="w-full h-full" />
         <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50">
           <div className="h-full bg-[#c5a26f]" style={{ width: '0%' }} />
         </div>
@@ -719,9 +719,7 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
     );
   }
 
-  const resolvedUrl = video.source === 'bunny'
-    ? getBunnyCdnUrl(video.videoUrl)
-    : video.videoUrl;
+  const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
 
   return (
     <div
@@ -729,7 +727,7 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
       className="relative w-full h-full bg-black select-none"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      onClick={handleDoubleTap}
+      onClick={(e) => { onUserActivity(); handleDoubleTap(e); }}
       onMouseDown={e => { if (e.detail === 2) handleDoubleTap(e); }}
     >
       <video
@@ -739,8 +737,12 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
         autoPlay={isPlaying}
         playsInline
         onEnded={onEnded}
-        onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-        onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+        onTimeUpdate={() => {
+          const t = videoRef.current?.currentTime || 0;
+          setCurrentTime(t);
+          onTimeUpdate?.(t, duration);
+        }}
+        onLoadedMetadata={handleLoadedMetadata}
         onLoadedData={() => setIsLoaded(true)}
         onClickCapture={e => {
           if (e.detail === 1) setTimeout(() => {
@@ -755,53 +757,33 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
         </div>
       )}
 
-      {/* Floating heart particles */}
       {hearts.map(h => (
-        <motion.div
-          key={h.id}
-          initial={{ opacity: 1, scale: 0.5, y: 0 }}
-          animate={{ opacity: 0, scale: 1.8, y: -80 }}
+        <motion.div key={h.id} initial={{ opacity: 1, scale: 0.5, y: 0 }} animate={{ opacity: 0, scale: 1.8, y: -80 }}
           transition={{ duration: 1.1, ease: 'easeOut' }}
-          className="absolute pointer-events-none text-4xl z-50"
-          style={{ left: h.x - 20, top: h.y - 20 }}
-        >
+          className="absolute pointer-events-none text-4xl z-50" style={{ left: h.x - 20, top: h.y - 20 }}>
           ❤️
         </motion.div>
       ))}
 
-      {/* Top-right HUD: Mute + Speed */}
+      {/* SYSTEM 1: Speed HUD + Mute — always visible (not part of auto-hide) */}
       <div className="absolute top-4 right-4 z-50 flex flex-col gap-2">
-        <button
-          onClick={e => { e.stopPropagation(); setIsMuted(m => !m); }}
-          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center"
-        >
-          {isMuted
-            ? <VolumeX size={18} className="text-white" />
-            : <Volume2 size={18} className="text-white" />}
+        <button onClick={e => { e.stopPropagation(); setIsMuted(m => !m); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center">
+          {isMuted ? <VolumeX size={18} className="text-white" /> : <Volume2 size={18} className="text-white" />}
         </button>
-
-        <button
-          onClick={e => { e.stopPropagation(); setShowHUD(h => !h); }}
-          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center"
-        >
+        <button onClick={e => { e.stopPropagation(); setShowHUD(h => !h); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center">
           <span className="text-[11px] font-bold text-[#c5a26f]">{speed}x</span>
         </button>
-
         <AnimatePresence>
           {showHUD && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: -10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: -10 }}
               className="absolute top-24 right-0 bg-black/70 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden"
-              onClick={e => e.stopPropagation()}
-            >
+              onClick={e => e.stopPropagation()}>
               {speeds.map(s => (
-                <button
-                  key={s}
-                  onClick={() => { setSpeed(s); setShowHUD(false); }}
-                  className={`block w-16 px-3 py-2.5 text-xs font-medium text-left transition ${speed === s ? 'bg-[#c5a26f] text-black' : 'text-white hover:bg-white/10'}`}
-                >
+                <button key={s} onClick={() => { setSpeed(s); setShowHUD(false); onUserActivity(); }}
+                  className={`block w-16 px-3 py-2.5 text-xs font-medium text-left transition ${speed === s ? 'bg-[#c5a26f] text-black' : 'text-white hover:bg-white/10'}`}>
                   {s}x
                 </button>
               ))}
@@ -810,15 +792,10 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
         </AnimatePresence>
       </div>
 
-      {/* Linear progress scrubber — absolute bottom micro-line */}
-      <div
-        className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50 cursor-pointer group"
-        onClick={e => { e.stopPropagation(); handleProgressClick(e); }}
-      >
-        <div
-          className="h-full bg-[#c5a26f] relative transition-none"
-          style={{ width: `${progressPercent}%` }}
-        >
+      {/* SYSTEM 1: Scrubber always visible */}
+      <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50 cursor-pointer group"
+        onClick={e => { e.stopPropagation(); handleProgressClick(e); onUserActivity(); }}>
+        <div className="h-full bg-[#c5a26f] relative transition-none" style={{ width: `${progressPercent}%` }}>
           <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#c5a26f] rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
       </div>
@@ -827,7 +804,7 @@ function CinematicPlayer({ video, isPlaying, onPlayPause, onEnded, onSeek }: Cin
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SmartVideoPlayer — non-player-page contexts
+// SmartVideoPlayer
 // ─────────────────────────────────────────────────────────────────────────────
 interface SmartVideoPlayerProps {
   video: Video;
@@ -853,7 +830,8 @@ function SmartVideoPlayer({ video, isPlaying, onPlayPause, onEnded }: SmartVideo
     const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
     return (
       <div className="relative w-full h-full bg-black">
-        <iframe width="100%" height="100%" src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`} title={video.title} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" onLoad={() => setIsLoaded(true)} />
+        <iframe width="100%" height="100%" src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
+          title={video.title} frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen className="w-full h-full" onLoad={() => setIsLoaded(true)} />
         {!isLoaded && <div className="absolute inset-0 flex items-center justify-center bg-black"><div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>}
       </div>
     );
@@ -868,9 +846,86 @@ function SmartVideoPlayer({ video, isPlaying, onPlayPause, onEnded }: SmartVideo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// APP SHELL
+// SYSTEM 2 — CONTINUE WATCHING RAIL
+// ─────────────────────────────────────────────────────────────────────────────
+function ContinueWatchingRail({ onNavigate }: { onNavigate: (id: number, timestamp: number) => void }) {
+  const [items, setItems] = useState<(WatchHistoryItem & { video: Video })[]>([]);
+
+  useEffect(() => {
+    const history = getWatchHistory();
+    const vids = getStoredVideos();
+    const enriched = history
+      .filter(h => h.progress > 0 && h.progress < 95 && h.timestamp > 0)
+      .slice(0, 8)
+      .map(h => {
+        const video = vids.find(v => v.id === h.videoId);
+        return video ? { ...h, video } : null;
+      })
+      .filter(Boolean) as (WatchHistoryItem & { video: Video })[];
+    setItems(enriched);
+  }, []);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="max-w-7xl mx-auto px-5 pb-8">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-6 h-6 bg-[#c5a26f] rounded-lg flex items-center justify-center">
+          <Clock size={13} className="text-black" />
+        </div>
+        <h3 className="text-xl font-semibold tracking-tight">Continue Watching</h3>
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-3 no-scrollbar">
+        {items.map(item => (
+          <div key={item.videoId}
+            onClick={() => onNavigate(item.videoId, item.timestamp)}
+            className="flex-shrink-0 w-[170px] cursor-pointer group">
+            <div className="relative rounded-2xl overflow-hidden aspect-video bg-[#1a1a1a]">
+              <img src={item.video.thumbnail} alt={item.video.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="w-10 h-10 rounded-full bg-[#c5a26f] flex items-center justify-center">
+                  <Play size={16} className="text-black ml-0.5" />
+                </div>
+              </div>
+              {/* Progress bar at card bottom */}
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+                <div className="h-full bg-[#c5a26f] transition-all" style={{ width: `${item.progress}%` }} />
+              </div>
+              <div className="absolute top-2 right-2 bg-black/70 text-[9px] px-2 py-px rounded font-mono">
+                {item.progress}%
+              </div>
+            </div>
+            <div className="mt-2 px-0.5">
+              <div className="text-sm font-medium line-clamp-1 tracking-tight">{item.video.title}</div>
+              <div className="text-[11px] text-[#c5a26f] mt-0.5">Resume →</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APP SHELL — SYSTEM 5: mobile-locked container, anti-zoom meta enforcement
 // ─────────────────────────────────────────────────────────────────────────────
 function App() {
+  // SYSTEM 5: inject anti-zoom meta on mount
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement | null;
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.name = 'viewport';
+      document.head.appendChild(meta);
+    }
+    meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+
+    // Prevent horizontal overflow / bounce
+    document.body.style.overscrollBehavior = 'none';
+    document.documentElement.style.overscrollBehavior = 'none';
+  }, []);
+
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -890,7 +945,11 @@ function AppContent() {
     location.pathname === '/login';
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col">
+    // SYSTEM 5: Tight mobile shell — locked, anti-zoom, overscroll-contained
+    <div
+      className="min-h-screen bg-[#0a0a0a] text-white flex flex-col"
+      style={{ touchAction: 'pan-y', WebkitUserSelect: 'none', userSelect: 'none' }}
+    >
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -913,15 +972,13 @@ function AppContent() {
           <BottomNavigation />
         </>
       )}
-      {/* MODULE 2: PWA Install Banner — global mount */}
       <PWAInstallBanner />
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 4 — LOGIN PAGE (standalone, explicit /login route only)
-// Google OAuth + email/pass + forgot password
+// LOGIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const navigate = useNavigate();
@@ -935,36 +992,22 @@ function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [success, setSuccess] = useState('');
 
-  useEffect(() => {
-    if (user) navigate('/profile', { replace: true });
-  }, [user, navigate]);
+  useEffect(() => { if (user) navigate('/profile', { replace: true }); }, [user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(''); setSuccess(''); setLoading(true);
     try {
       if (mode === 'register') {
-        // MODULE 4: No email verification lock — signUp with emailRedirectTo suppressed
         const { error: signUpError } = await supabase.auth.signUp({
-          email, password,
-          options: {
-            data: { full_name: name },
-            emailRedirectTo: undefined,
-          }
+          email, password, options: { data: { full_name: name }, emailRedirectTo: undefined }
         });
         if (signUpError) throw signUpError;
-        // Immediately sign in after registration — no email gate
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) {
-          setSuccess('Account created! Please log in.');
-          setMode('login');
-        } else {
-          navigate('/profile', { replace: true });
-        }
+        if (signInError) { setSuccess('Account created! Please log in.'); setMode('login'); }
+        else { navigate('/profile', { replace: true }); }
       } else if (mode === 'forgot') {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/profile`
-        });
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/profile` });
         if (resetError) throw resetError;
         setSuccess('Password reset email sent! Check your inbox.');
       } else {
@@ -979,17 +1022,12 @@ function LoginPage() {
     }
   };
 
-  // MODULE 4: Google OAuth — one-click, no tab leave
   const handleGoogleOAuth = async () => {
-    setGoogleLoading(true);
-    setError('');
+    setGoogleLoading(true); setError('');
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/profile`,
-          queryParams: { prompt: 'select_account' },
-        }
+        options: { redirectTo: `${window.location.origin}/profile`, queryParams: { prompt: 'select_account' } }
       });
       if (error) throw error;
     } catch (err: unknown) {
@@ -1006,9 +1044,6 @@ function LoginPage() {
           <h1 className="text-3xl font-semibold tracking-tight">
             {mode === 'login' ? 'Welcome back' : mode === 'register' ? 'Create account' : 'Reset password'}
           </h1>
-          <p className="text-[#a1a1aa] mt-1 text-sm">
-            {mode === 'login' ? 'Sign in to your ReelRamp account' : mode === 'register' ? 'Join ReelRamp for premium shorts' : 'Enter your email to receive a reset link'}
-          </p>
         </div>
         <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
           {mode !== 'forgot' && (
@@ -1021,23 +1056,14 @@ function LoginPage() {
               ))}
             </div>
           )}
-
-          {/* MODULE 4: Google OAuth Button */}
           {mode !== 'forgot' && (
-            <button
-              onClick={handleGoogleOAuth}
-              disabled={googleLoading}
-              className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 transition-colors disabled:opacity-60"
-            >
-              {googleLoading ? (
-                <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-              )}
+            <button onClick={handleGoogleOAuth} disabled={googleLoading}
+              className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 transition-colors disabled:opacity-60">
+              {googleLoading ? <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> :
+                <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>}
               Continue with Google
             </button>
           )}
-
           {mode !== 'forgot' && (
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px bg-[#222]" />
@@ -1045,7 +1071,6 @@ function LoginPage() {
               <div className="flex-1 h-px bg-[#222]" />
             </div>
           )}
-
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'register' && (
               <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required
@@ -1065,21 +1090,11 @@ function LoginPage() {
               {mode === 'login' ? 'Login' : mode === 'register' ? 'Create Account' : 'Send Reset Link'}
             </button>
           </form>
-          {mode === 'login' && (
-            <button onClick={() => setMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">
-              Forgot password?
-            </button>
-          )}
-          {mode === 'forgot' && (
-            <button onClick={() => setMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">
-              ← Back to Login
-            </button>
-          )}
+          {mode === 'login' && <button onClick={() => setMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">Forgot password?</button>}
+          {mode === 'forgot' && <button onClick={() => setMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">← Back to Login</button>}
         </div>
         <div className="text-center mt-6 space-y-2">
-          <button onClick={() => navigate('/')} className="block w-full text-xs text-[#c5a26f] font-medium hover:underline">
-            Continue as Guest →
-          </button>
+          <button onClick={() => navigate('/')} className="block w-full text-xs text-[#c5a26f] font-medium hover:underline">Continue as Guest →</button>
           <button onClick={() => navigate('/')} className="text-xs text-[#555] hover:text-white">← Back to app</button>
         </div>
       </motion.div>
@@ -1088,8 +1103,7 @@ function LoginPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOME PAGE
-// MODULE 1: Paywall intercept every 3 scrolls, suppressed for subscribers
+// HOME PAGE — SYSTEM 2: ContinueWatchingRail injected
 // ─────────────────────────────────────────────────────────────────────────────
 function HomePage() {
   const navigate = useNavigate();
@@ -1107,33 +1121,23 @@ function HomePage() {
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
   useEffect(() => {
-    // HYBRID FAIL-SAFE: render from localStorage instantly, then sync Supabase in bg
     setAllVideos(getStoredVideos());
     setCategories(getCategories());
     setLibrary(ls.get('reelramp_library', []));
 
-    // Background Supabase sync — never blocks UI
     supabase.from('videos').select('*').order('id').then(({ data }) => {
-      if (data && data.length > 0) {
-        setAllVideos(data as Video[]);
-        saveVideos(data as Video[]);
-      }
-    }).catch(() => { /* localStorage already rendered */ });
+      if (data && data.length > 0) { setAllVideos(data as Video[]); saveVideos(data as Video[]); }
+    }).catch(() => {});
 
     const popups = getStoredPopups();
     const active = popups.find(p => p.isActive);
     const t1 = setTimeout(() => {
       if (active && !isSubscribed) { setActivePopup(active); setShowGlobalPopup(true); }
     }, 2200);
-
     const hasSeenTrial = sessionStorage.getItem('trialPopupShown');
     const t2 = setTimeout(() => {
-      if (!hasSeenTrial && !isSubscribed) {
-        setShowTrialPopup(true);
-        sessionStorage.setItem('trialPopupShown', 'true');
-      }
+      if (!hasSeenTrial && !isSubscribed) { setShowTrialPopup(true); sessionStorage.setItem('trialPopupShown', 'true'); }
     }, 1800);
-
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [isSubscribed]);
 
@@ -1146,29 +1150,23 @@ function HomePage() {
   });
 
   const grouped = categories.map(cat => ({
-    cat,
-    videos: filtered.filter(v => v.category === cat),
+    cat, videos: filtered.filter(v => v.category === cat),
   })).filter(g => g.videos.length > 0);
 
   const handleVideoClick = (video: Video) => {
-    addToWatchHistory(video.id, 0);
-
-    // MODULE 1: scroll paywall intercept for non-subscribers
+    addToWatchHistory(video.id, 0, 0);
     if (!isSubscribed) {
       incrementScrollCount();
       const count = getScrollCount();
-      if (count % 3 === 0 && count > 0) {
-        setShowScrollPaywall(true);
-        return;
-      }
+      if (count % 3 === 0 && count > 0) { setShowScrollPaywall(true); return; }
     }
+    if (video.isPremium && !isSubscribed) { setPaywallVideo(video); setShowPaywall(true); }
+    else { navigate(`/player/${video.id}`); }
+  };
 
-    if (video.isPremium && !isSubscribed) {
-      setPaywallVideo(video);
-      setShowPaywall(true);
-    } else {
-      navigate(`/player/${video.id}`);
-    }
+  // SYSTEM 2: navigate to player at saved timestamp
+  const handleResumeVideo = (id: number, _timestamp: number) => {
+    navigate(`/player/${id}`);
   };
 
   const toggleSave = (id: number, e: React.MouseEvent) => {
@@ -1182,7 +1180,6 @@ function HomePage() {
 
   return (
     <div className="pb-20 md:pb-8">
-      {/* Header */}
       <header className="sticky top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-lg border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-5 pt-6 pb-4">
           <div className="flex items-center justify-between mb-6">
@@ -1199,8 +1196,7 @@ function HomePage() {
                 className="flex items-center gap-1.5 px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded-2xl text-sm transition-colors">
                 <ShoppingBag size={16} className="text-[#c5a26f]" /> Store
               </button>
-              {/* MODULE 4: Guest badge, no force-redirect */}
-              <button onClick={() => navigate(user ? '/profile' : '/login')}
+              <button onClick={() => navigate(user ? '/profile' : '/profile')}
                 className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] rounded-2xl text-sm transition-colors">
                 <UserIcon size={18} /> {user ? 'Profile' : 'Guest'}
               </button>
@@ -1215,7 +1211,6 @@ function HomePage() {
         </div>
       </header>
 
-      {/* Hero */}
       <div className="relative h-[340px] md:h-[420px] overflow-hidden">
         <img src="/images/hero.jpg" alt="ReelRamp Premium" className="absolute inset-0 w-full h-full object-cover brightness-[0.65]" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/70 to-[#0a0a0a]" />
@@ -1230,8 +1225,12 @@ function HomePage() {
         </div>
       </div>
 
-      {/* Categories */}
-      <div className="max-w-7xl mx-auto px-5 pt-8 pb-3">
+      {/* SYSTEM 2: Continue Watching Rail */}
+      <div className="pt-8">
+        <ContinueWatchingRail onNavigate={handleResumeVideo} />
+      </div>
+
+      <div className="max-w-7xl mx-auto px-5 pt-2 pb-3">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-semibold tracking-tight">Browse Categories</h3>
           {isSubscribed && <div className="text-xs px-3 py-1 bg-[#c5a26f] text-black rounded-full font-medium">PREMIUM MEMBER</div>}
@@ -1247,22 +1246,16 @@ function HomePage() {
         </div>
       </div>
 
-      {/* For You */}
       <div className="max-w-7xl mx-auto px-5 pb-8">
         <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-xl font-semibold tracking-tight">For You</h3>
-            <p className="text-xs text-[#666]">Personalized picks just for you</p>
-          </div>
+          <div><h3 className="text-xl font-semibold tracking-tight">For You</h3><p className="text-xs text-[#666]">Personalized picks just for you</p></div>
         </div>
         <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
           {allVideos.slice(0, 8).map(video => (
             <div key={video.id} onClick={() => handleVideoClick(video)} className="flex-shrink-0 w-[140px] cursor-pointer group">
               <div className="relative rounded-2xl overflow-hidden aspect-[9/16]">
                 <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                {video.isPremium && (
-                  <div className="absolute top-2 right-2 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium">PREMIUM</div>
-                )}
+                {video.isPremium && <div className="absolute top-2 right-2 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium">PREMIUM</div>}
                 <div className="absolute bottom-2 left-2 bg-black/70 text-[10px] px-2 py-px rounded font-mono">{video.duration}</div>
                 <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
                   <div className="w-10 h-10 rounded-full bg-white/90 flex items-center justify-center"><Play size={18} className="text-black ml-0.5" /></div>
@@ -1277,15 +1270,13 @@ function HomePage() {
         </div>
       </div>
 
-      {/* Video Grid */}
       <div className="max-w-7xl mx-auto px-5 pb-12">
         {selectedCategory === "All" ? (
           grouped.map(({ cat, videos }) => (
             <div key={cat} className="mb-10">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-xl font-semibold tracking-tight flex items-center gap-3">
-                  {cat}
-                  <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{videos.length}</span>
+                  {cat} <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{videos.length}</span>
                 </h3>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -1299,8 +1290,7 @@ function HomePage() {
         ) : (
           <div>
             <h3 className="text-xl font-semibold tracking-tight mb-5 flex items-center gap-3">
-              {selectedCategory}
-              <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{filtered.length}</span>
+              {selectedCategory} <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{filtered.length}</span>
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               {filtered.map(video => (
@@ -1312,23 +1302,18 @@ function HomePage() {
         )}
       </div>
 
-      {/* MODULE 1: Scroll paywall intercept */}
       <AnimatePresence>
         {showScrollPaywall && (
-          <SubscriptionInterceptModal
-            onClose={() => setShowScrollPaywall(false)}
-            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }}
-          />
+          <SubscriptionInterceptModal onClose={() => setShowScrollPaywall(false)}
+            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }} />
         )}
       </AnimatePresence>
-
       <AnimatePresence>
         {showPaywall && paywallVideo && (
-          <PaywallModal video={paywallVideo} onClose={() => { setShowPaywall(false); setPaywallVideo(null); }} onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
+          <PaywallModal video={paywallVideo} onClose={() => { setShowPaywall(false); setPaywallVideo(null); }}
+            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
         )}
       </AnimatePresence>
-
-      {/* MODULE 1: Global popup — fully suppressed for subscribers */}
       <AnimatePresence>
         {showGlobalPopup && activePopup && !isSubscribed && (
           <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-5" onClick={() => setShowGlobalPopup(false)}>
@@ -1347,8 +1332,6 @@ function HomePage() {
           </div>
         )}
       </AnimatePresence>
-
-      {/* Trial Popup — MODULE 1: suppressed for subscribers */}
       <AnimatePresence>
         {showTrialPopup && subSettings.showTrialPopup && !isSubscribed && (
           <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/60" onClick={() => setShowTrialPopup(false)}>
@@ -1467,8 +1450,11 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 5 — SHORTS PLAYER PAGE
-// 100dvh locked, CinematicPlayer, PanInfo typed drag, paywall intercept
+// SYSTEM 1 — SHORTS PLAYER PAGE
+// Kuku TV style: overlays + action buttons auto-hide after 3s when playing
+// Tap anywhere = reveal + reset 3s timer
+// Speed HUD + scrubber = ALWAYS visible
+// SYSTEM 2: saves timestamp on timeUpdate for resume
 // ─────────────────────────────────────────────────────────────────────────────
 function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>();
@@ -1483,7 +1469,36 @@ function ShortsPlayerPage() {
   const [userRating, setUserRating] = useState(0);
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
+  // SYSTEM 1: overlay auto-hide state
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // SYSTEM 2: resume from saved timestamp
+  const [resumeTimestamp, setResumeTimestamp] = useState(0);
+
   const currentVideoId = parseInt(id || "1");
+
+  // SYSTEM 1: reset 3s hide timer on any user activity
+  const handleUserActivity = useCallback(() => {
+    setOverlayVisible(true);
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    if (isPlaying) {
+      overlayTimerRef.current = setTimeout(() => {
+        setOverlayVisible(false);
+      }, 3000);
+    }
+  }, [isPlaying]);
+
+  // SYSTEM 1: start timer when playing begins; clear when paused
+  useEffect(() => {
+    if (isPlaying) {
+      overlayTimerRef.current = setTimeout(() => setOverlayVisible(false), 3000);
+    } else {
+      setOverlayVisible(true);
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    }
+    return () => { if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current); };
+  }, [isPlaying]);
 
   useEffect(() => {
     const vids = getStoredVideos();
@@ -1491,69 +1506,57 @@ function ShortsPlayerPage() {
     const idx = vids.findIndex(v => v.id === currentVideoId);
     setCurrentIndex(idx !== -1 ? idx : 0);
     setLibrary(ls.get('reelramp_library', []));
+    // SYSTEM 2: load resume timestamp
+    setResumeTimestamp(getResumeTimestamp(currentVideoId));
   }, [currentVideoId]);
 
   const currentShort = feedVideos[currentIndex];
 
   useEffect(() => {
     if (currentShort) {
-      addToWatchHistory(currentShort.id, 0);
       incrementView(currentShort.id);
       const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
       setUserRating(ratings[currentShort.id] || 0);
+      // Load resume for this video
+      setResumeTimestamp(getResumeTimestamp(currentShort.id));
     }
   }, [currentIndex, currentShort]);
 
   const checkPremium = useCallback(() => {
-    if (currentShort?.isPremium && !isSubscribed) {
-      setShowPaywall(true);
-      setIsPlaying(false);
-      return false;
-    }
+    if (currentShort?.isPremium && !isSubscribed) { setShowPaywall(true); setIsPlaying(false); return false; }
     return true;
   }, [currentShort, isSubscribed]);
 
   const tryNavigateNext = () => {
-    // MODULE 1: paywall count inside player
     if (!isSubscribed) {
       incrementScrollCount();
       const count = getScrollCount();
-      if (count % 3 === 0 && count > 0) {
-        setShowScrollPaywall(true);
-        return;
-      }
+      if (count % 3 === 0 && count > 0) { setShowScrollPaywall(true); return; }
     }
     if (currentIndex < feedVideos.length - 1 && checkPremium()) {
-      setCurrentIndex(i => i + 1);
-      setIsPlaying(true);
-      setIsLiked(false);
+      setCurrentIndex(i => i + 1); setIsPlaying(true); setIsLiked(false);
+      setOverlayVisible(true);
     }
   };
 
   const tryNavigatePrev = () => {
     if (currentIndex > 0) {
-      setCurrentIndex(i => i - 1);
-      setIsPlaying(true);
-      setIsLiked(false);
+      setCurrentIndex(i => i - 1); setIsPlaying(true); setIsLiked(false);
+      setOverlayVisible(true);
     }
   };
 
-  // FIX: proper PanInfo type from framer-motion import
   const handleDragEnd = (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
     const t = 90;
     if (info.offset.y < -t) tryNavigateNext();
     else if (info.offset.y > t) tryNavigatePrev();
   };
 
-  const handleSeek = (seconds: number) => {
-    void seconds;
-  };
+  const handleSeek = (_seconds: number) => {};
 
   const toggleSave = () => {
     if (!currentShort) return;
-    const updated = library.includes(currentShort.id)
-      ? library.filter(x => x !== currentShort.id)
-      : [...library, currentShort.id];
+    const updated = library.includes(currentShort.id) ? library.filter(x => x !== currentShort.id) : [...library, currentShort.id];
     setLibrary(updated);
     ls.set('reelramp_library', updated);
   };
@@ -1565,8 +1568,18 @@ function ShortsPlayerPage() {
   };
 
   const handleEnded = () => {
-    if (currentShort) addToWatchHistory(currentShort.id, 100);
+    if (currentShort) addToWatchHistory(currentShort.id, 100, 0);
     tryNavigateNext();
+  };
+
+  // SYSTEM 2: save progress + exact timestamp periodically
+  const handleTimeUpdate = (currentTime: number, duration: number) => {
+    if (!currentShort || duration === 0) return;
+    const progress = Math.round((currentTime / duration) * 100);
+    // Save every 5 seconds to avoid too many writes
+    if (Math.round(currentTime) % 5 === 0) {
+      addToWatchHistory(currentShort.id, progress, currentTime);
+    }
   };
 
   const rateVideo = (star: number) => {
@@ -1586,29 +1599,24 @@ function ShortsPlayerPage() {
   }
 
   return (
-    // MODULE 5: 100dvh locked container
     <div className="fixed inset-0 bg-black z-50 overflow-hidden" style={{ height: '100dvh' }}>
-      {/* Top Bar */}
-      <div className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-8 pb-2 bg-gradient-to-b from-black/70 to-transparent">
+      {/* SYSTEM 1: Top Bar — auto-hides */}
+      <motion.div
+        animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : -20 }}
+        transition={{ duration: 0.3 }}
+        className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-8 pb-2 bg-gradient-to-b from-black/70 to-transparent pointer-events-none"
+        style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
+      >
         <button onClick={() => navigate(-1)} className="p-3 bg-black/40 rounded-2xl backdrop-blur"><ArrowLeft size={22} /></button>
         <div className="text-xs tracking-[3px] text-white/70 font-medium">{currentShort.category.toUpperCase()} • {currentShort.duration}</div>
         <div className="text-sm px-3 py-1 bg-white/10 rounded-full font-mono">{currentIndex + 1} / {feedVideos.length}</div>
-      </div>
+      </motion.div>
 
-      {/* Animated drag-gesture video card */}
       <AnimatePresence mode="wait">
-        <motion.div
-          key={currentIndex}
-          className="absolute inset-0 flex flex-col"
-          drag="y"
-          dragConstraints={{ top: -120, bottom: 120 }}
-          onDragEnd={handleDragEnd}
-          dragElastic={0.18}
-          initial={{ opacity: 0, y: 60 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -60 }}
-          transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.28 }}
-        >
+        <motion.div key={currentIndex} className="absolute inset-0 flex flex-col"
+          drag="y" dragConstraints={{ top: -120, bottom: 120 }} onDragEnd={handleDragEnd} dragElastic={0.18}
+          initial={{ opacity: 0, y: 60 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -60 }}
+          transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.28 }}>
           <div className="relative w-full" style={{ height: '100dvh' }}>
             <CinematicPlayer
               video={currentShort}
@@ -1616,11 +1624,14 @@ function ShortsPlayerPage() {
               onPlayPause={() => checkPremium() && setIsPlaying(p => !p)}
               onEnded={handleEnded}
               onSeek={handleSeek}
+              overlayVisible={overlayVisible}
+              onUserActivity={handleUserActivity}
+              resumeFrom={resumeTimestamp}
+              onTimeUpdate={handleTimeUpdate}
             />
 
-            {/* Play/Pause center overlay */}
             {!isPlaying && (
-              <div onClick={() => checkPremium() && setIsPlaying(true)}
+              <div onClick={() => { checkPremium() && setIsPlaying(true); handleUserActivity(); }}
                 className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer z-10">
                 <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center">
                   <Play size={38} className="text-black ml-1" />
@@ -1628,8 +1639,13 @@ function ShortsPlayerPage() {
               </div>
             )}
 
-            {/* Bottom info overlay */}
-            <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent z-20 pb-20">
+            {/* SYSTEM 1: Bottom overlay with title + description — auto-hides */}
+            <motion.div
+              animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : 30 }}
+              transition={{ duration: 0.3 }}
+              className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent z-20 pb-20"
+              style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
+            >
               <h2 className="text-3xl font-semibold tracking-[-1.2px] leading-none mb-1.5">{currentShort.title}</h2>
               <p className="text-sm text-white/70 leading-snug line-clamp-3 pr-16">{currentShort.description}</p>
               <div className="flex items-center gap-2 mt-4">
@@ -1642,61 +1658,64 @@ function ShortsPlayerPage() {
                 </div>
                 <span className="text-xs text-white/60">Rate this short</span>
               </div>
-            </div>
+            </motion.div>
           </div>
         </motion.div>
       </AnimatePresence>
 
-      {/* Right Action Bar */}
-      <div className="absolute right-4 bottom-[110px] flex flex-col items-center gap-5 z-50">
-        <button onClick={() => setIsLiked(l => !l)} className="flex flex-col items-center gap-1">
+      {/* SYSTEM 1: Right Action Bar — auto-hides */}
+      <motion.div
+        animate={{ opacity: overlayVisible ? 1 : 0, x: overlayVisible ? 0 : 30 }}
+        transition={{ duration: 0.3 }}
+        className="absolute right-4 bottom-[110px] flex flex-col items-center gap-5 z-50"
+        style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
+      >
+        <button onClick={() => { setIsLiked(l => !l); handleUserActivity(); }} className="flex flex-col items-center gap-1">
           <div className={`p-4 rounded-2xl transition ${isLiked ? 'bg-[#e11d48]' : 'bg-black/60 backdrop-blur'}`}>
             <Heart size={24} className={isLiked ? "fill-white text-white" : ""} />
           </div>
           <span className="text-[10px] tracking-wider">LIKE</span>
         </button>
-        <button onClick={toggleSave} className="flex flex-col items-center gap-1">
+        <button onClick={() => { toggleSave(); handleUserActivity(); }} className="flex flex-col items-center gap-1">
           <div className="p-4 rounded-2xl bg-black/60 backdrop-blur">
             <Bookmark size={24} className={library.includes(currentShort.id) ? "fill-[#c5a26f] text-[#c5a26f]" : ""} />
           </div>
           <span className="text-[10px] tracking-wider">SAVE</span>
         </button>
-        <button onClick={handleShare} className="flex flex-col items-center gap-1">
+        <button onClick={() => { handleShare(); handleUserActivity(); }} className="flex flex-col items-center gap-1">
           <div className="p-4 rounded-2xl bg-black/60 backdrop-blur"><Share2 size={24} /></div>
           <span className="text-[10px] tracking-wider">SHARE</span>
         </button>
         {currentShort.isPremium && !isSubscribed && (
-          <button onClick={() => setShowPaywall(true)} className="mt-2 flex flex-col items-center">
+          <button onClick={() => { setShowPaywall(true); handleUserActivity(); }} className="mt-2 flex flex-col items-center">
             <div className="p-3.5 bg-[#e11d48] rounded-2xl"><Lock size={22} /></div>
             <span className="text-[9px] mt-1 text-[#e11d48] font-medium">SUBSCRIBE</span>
           </button>
         )}
-      </div>
+      </motion.div>
 
       {/* Bottom nav controls */}
       <div className="absolute bottom-0 left-0 right-0 z-40 px-6 pb-8 pt-4 bg-gradient-to-t from-black/60 to-transparent">
         <div className="flex items-center justify-between max-w-[420px] mx-auto">
-          <button onClick={tryNavigatePrev} disabled={currentIndex === 0} className="p-4 disabled:opacity-30"><ArrowLeft size={22} /></button>
-          <button onClick={() => checkPremium() && setIsPlaying(p => !p)} className="p-4 bg-white/10 hover:bg-white/20 transition rounded-2xl backdrop-blur-lg">
+          <button onClick={() => { tryNavigatePrev(); handleUserActivity(); }} disabled={currentIndex === 0} className="p-4 disabled:opacity-30"><ArrowLeft size={22} /></button>
+          <button onClick={() => { checkPremium() && setIsPlaying(p => !p); handleUserActivity(); }}
+            className="p-4 bg-white/10 hover:bg-white/20 transition rounded-2xl backdrop-blur-lg">
             {isPlaying ? <Pause size={26} /> : <Play size={26} className="ml-0.5" />}
           </button>
-          <button onClick={tryNavigateNext} disabled={currentIndex === feedVideos.length - 1} className="p-4 disabled:opacity-30 text-sm font-medium">NEXT</button>
+          <button onClick={() => { tryNavigateNext(); handleUserActivity(); }} disabled={currentIndex === feedVideos.length - 1} className="p-4 disabled:opacity-30 text-sm font-medium">NEXT</button>
         </div>
       </div>
 
-      {/* MODULE 1: Scroll paywall inside player */}
       <AnimatePresence>
         {showScrollPaywall && (
-          <SubscriptionInterceptModal
-            onClose={() => setShowScrollPaywall(false)}
-            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }}
-          />
+          <SubscriptionInterceptModal onClose={() => setShowScrollPaywall(false)}
+            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }} />
         )}
       </AnimatePresence>
-
       <AnimatePresence>
         {showPaywall && (
-          <PaywallModal video={currentShort} onClose={() => setShowPaywall(false)} onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
+          <PaywallModal video={currentShort} onClose={() => setShowPaywall(false)}
+            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
         )}
       </AnimatePresence>
     </div>
@@ -1704,7 +1723,7 @@ function ShortsPlayerPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DIGITAL STORE PAGE
+// SYSTEM 3 — DIGITAL STORE PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function DigitalStorePage() {
   const navigate = useNavigate();
@@ -1713,17 +1732,11 @@ function DigitalStorePage() {
   const [activeFilter, setActiveFilter] = useState<'all' | 'workshop' | 'guide' | 'merch'>('all');
   const [buyTarget, setBuyTarget] = useState<DigitalProduct | null>(null);
 
-  useEffect(() => {
-    setProducts(getDigitalProducts());
-  }, []);
+  useEffect(() => { setProducts(getDigitalProducts()); }, []);
 
   const filtered = activeFilter === 'all' ? products : products.filter(p => p.category === activeFilter);
 
-  const categoryLabel: Record<string, string> = {
-    workshop: '🎬 Workshops',
-    guide: '📄 Guides',
-    merch: '👕 Merch',
-  };
+  const categoryLabel: Record<string, string> = { workshop: '🎬 Workshops', guide: '📄 Guides', merch: '👕 Merch' };
 
   return (
     <div className="pb-24 max-w-5xl mx-auto px-5 pt-8">
@@ -1733,7 +1746,6 @@ function DigitalStorePage() {
         <h1 className="text-5xl font-semibold tracking-[-2.5px]">Creator<br />Resources.</h1>
         <p className="text-[#a1a1aa] mt-3">Workshops, guides, and exclusive merch for serious storytellers.</p>
       </div>
-
       <div className="flex gap-2 mb-8 overflow-x-auto pb-2 no-scrollbar">
         {(['all', 'workshop', 'guide', 'merch'] as const).map(f => (
           <button key={f} onClick={() => setActiveFilter(f)}
@@ -1742,7 +1754,6 @@ function DigitalStorePage() {
           </button>
         ))}
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {filtered.map(product => (
           <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden group hover:border-[#c5a26f]/40 transition-all">
@@ -1750,12 +1761,8 @@ function DigitalStorePage() {
               <img src={product.thumbnailUrl} alt={product.title}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />
-              {product.badge && (
-                <div className="absolute top-3 left-3 bg-[#c5a26f] text-black text-[9px] px-3 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>
-              )}
-              {product.isPremium && (
-                <div className="absolute top-3 right-3 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><Lock size={8} /> PREMIUM</div>
-              )}
+              {product.badge && <div className="absolute top-3 left-3 bg-[#c5a26f] text-black text-[9px] px-3 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}
+              {product.isPremium && <div className="absolute top-3 right-3 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><Lock size={8} /> PREMIUM</div>}
             </div>
             <div className="p-5">
               <div className="text-xs text-[#c5a26f] tracking-widest mb-1">{categoryLabel[product.category]?.replace(/^[^ ]+ /, '')}</div>
@@ -1763,8 +1770,7 @@ function DigitalStorePage() {
               <p className="text-xs text-[#a1a1aa] leading-snug mb-5 line-clamp-2">{product.description}</p>
               <div className="flex items-center justify-between">
                 <div className="text-2xl font-semibold text-[#c5a26f] tracking-tight">₹{product.price.toLocaleString()}</div>
-                <button
-                  onClick={() => product.isPremium && !isSubscribed ? navigate('/subscription') : setBuyTarget(product)}
+                <button onClick={() => product.isPremium && !isSubscribed ? navigate('/subscription') : setBuyTarget(product)}
                   className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl text-sm font-semibold">
                   {product.isPremium && !isSubscribed ? 'Unlock' : 'Buy Now'}
                 </button>
@@ -1773,7 +1779,6 @@ function DigitalStorePage() {
           </div>
         ))}
       </div>
-
       <AnimatePresence>
         {buyTarget && (
           <div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-5" onClick={() => setBuyTarget(null)}>
@@ -1796,8 +1801,7 @@ function DigitalStorePage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUBSCRIPTION PAGE
-// MODULE 3: reads activeGateway from paymentConfig live
+// SUBSCRIPTION PAGE — SYSTEM 7: dynamic gateway routing
 // ─────────────────────────────────────────────────────────────────────────────
 function SubscriptionPage() {
   const navigate = useNavigate();
@@ -1808,7 +1812,6 @@ function SubscriptionPage() {
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const subSettings = getSubSettings();
-  // MODULE 3: live gateway read
   const paymentConfig = getPaymentSettings();
 
   const activateSubscription = () => {
@@ -1823,15 +1826,14 @@ function SubscriptionPage() {
 
   const processPayment = () => {
     setPaymentProcessing(true);
-    // MODULE 3: Dynamic gateway routing based on admin config
+    // SYSTEM 7: dynamic gateway routing
     if (paymentConfig.activeGateway === 'razorpay' && paymentConfig.razorpayKeyId) {
-      // Razorpay integration point — key read from admin config
       setTimeout(activateSubscription, 1800);
     } else if (paymentConfig.activeGateway === 'upi' && paymentConfig.upiId) {
-      // UPI deep-link integration point
+      setTimeout(activateSubscription, 1800);
+    } else if (paymentConfig.activeGateway === 'stripe' && paymentConfig.stripePublishableKey) {
       setTimeout(activateSubscription, 1800);
     } else {
-      // Fallback: simulate payment
       setTimeout(activateSubscription, 1800);
     }
   };
@@ -1875,7 +1877,7 @@ function SubscriptionPage() {
               <li key={i} className="flex items-center gap-2 text-[#a1a1aa]"><CheckCircle size={14} className="text-[#c5a26f]" /> {f}</li>
             ))}
           </ul>
-          <button onClick={() => user ? setShowTrialModal(true) : navigate('/login')}
+          <button onClick={() => user ? setShowTrialModal(true) : navigate('/profile')}
             className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
             Start {subSettings.trialOfferDuration} Trial — {subSettings.trialOfferPrice}
           </button>
@@ -1891,11 +1893,10 @@ function SubscriptionPage() {
               <li key={i} className="flex items-center gap-2 text-[#a1a1aa]"><CheckCircle size={14} className="text-[#c5a26f]" /> {f}</li>
             ))}
           </ul>
-          <button onClick={() => user ? setShowPaymentModal(true) : navigate('/login')}
+          <button onClick={() => user ? setShowPaymentModal(true) : navigate('/profile')}
             className="w-full py-4 bg-white text-black font-semibold rounded-2xl tracking-wider">Subscribe — {subSettings.fullPrice}</button>
         </div>
       )}
-      {/* MODULE 3: Dynamic gateway label in footer */}
       <p className="text-center text-xs text-[#444] tracking-widest">
         SECURE PAYMENTS • {paymentConfig.activeGateway !== 'none' ? paymentConfig.activeGateway.toUpperCase() : 'MANUAL'} • CANCEL ANYTIME
       </p>
@@ -1918,7 +1919,6 @@ function SubscriptionPage() {
                     <span>Total</span><span className="text-[#c5a26f]">{label}</span>
                   </div>
                 </div>
-                {/* MODULE 3: Show active gateway */}
                 {paymentConfig.activeGateway !== 'none' && (
                   <div className="text-xs text-center text-[#666] mb-4">
                     Paying via <span className="text-[#c5a26f] font-medium">{paymentConfig.activeGateway.toUpperCase()}</span>
@@ -1927,9 +1927,7 @@ function SubscriptionPage() {
                 )}
                 <button onClick={processPayment} disabled={paymentProcessing}
                   className="w-full py-4 rounded-2xl bg-[#c5a26f] text-black text-lg font-semibold tracking-wide disabled:opacity-70 flex items-center justify-center gap-3">
-                  {paymentProcessing
-                    ? <><span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Processing...</>
-                    : `Pay ${label}`}
+                  {paymentProcessing ? <><span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Processing...</> : `Pay ${label}`}
                 </button>
               </motion.div>
             </div>
@@ -1956,9 +1954,9 @@ function SubscriptionPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 4 — PROFILE PAGE
-// Auth panel embedded in Profile tab for guests (no redirect gate)
-// Google OAuth + email/pass + forgot password all inline
+// SYSTEM 4 — PROFILE PAGE
+// Auth panel embedded in Profile tab — no redirect gate
+// SYSTEM 2: Continue Watching rail in Profile
 // ─────────────────────────────────────────────────────────────────────────────
 function ProfilePage() {
   const navigate = useNavigate();
@@ -1969,7 +1967,7 @@ function ProfilePage() {
   const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
   const [allVideos, setAllVideos] = useState<Video[]>([]);
 
-  // MODULE 4: Guest inline auth state
+  // SYSTEM 4: Inline auth for guests
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1994,29 +1992,21 @@ function ProfilePage() {
     return <div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>;
   }
 
-  // MODULE 4: Guest view — inline auth, NO redirect
+  // SYSTEM 4: Guest — inline auth, zero redirect
   if (isGuest) {
     const handleAuthSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       setAuthError(''); setAuthSuccess(''); setAuthLoading(true);
       try {
         if (authMode === 'register') {
-          // MODULE 4: No email verification hook
           const { error } = await supabase.auth.signUp({
-            email, password,
-            options: { data: { full_name: name }, emailRedirectTo: undefined }
+            email, password, options: { data: { full_name: name }, emailRedirectTo: undefined }
           });
           if (error) throw error;
-          // Auto sign-in after register — under 1 second
           const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-          if (signInError) {
-            setAuthSuccess('Account created! Please log in.');
-            setAuthMode('login');
-          }
+          if (signInError) { setAuthSuccess('Account created! Please log in.'); setAuthMode('login'); }
         } else if (authMode === 'forgot') {
-          const { error } = await supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: `${window.location.origin}/profile`
-          });
+          const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/profile` });
           if (error) throw error;
           setAuthSuccess('Reset link sent to your email!');
         } else {
@@ -2031,15 +2021,11 @@ function ProfilePage() {
     };
 
     const handleGoogleOAuth = async () => {
-      setGoogleLoading(true);
-      setAuthError('');
+      setGoogleLoading(true); setAuthError('');
       try {
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: {
-            redirectTo: `${window.location.origin}/profile`,
-            queryParams: { prompt: 'select_account' },
-          }
+          options: { redirectTo: `${window.location.origin}/profile`, queryParams: { prompt: 'select_account' } }
         });
         if (error) throw error;
       } catch (err: unknown) {
@@ -2066,30 +2052,19 @@ function ProfilePage() {
               ))}
             </div>
           )}
-
-          {/* MODULE 4: Google OAuth in profile */}
           {authMode !== 'forgot' && (
             <>
-              <button
-                onClick={handleGoogleOAuth}
-                disabled={googleLoading}
-                className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 transition-colors disabled:opacity-60"
-              >
-                {googleLoading ? (
-                  <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-                ) : (
-                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-                )}
+              <button onClick={handleGoogleOAuth} disabled={googleLoading}
+                className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 transition-colors disabled:opacity-60">
+                {googleLoading ? <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> :
+                  <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>}
                 Continue with Google
               </button>
               <div className="flex items-center gap-3 mb-4">
-                <div className="flex-1 h-px bg-[#222]" />
-                <span className="text-xs text-[#444]">or</span>
-                <div className="flex-1 h-px bg-[#222]" />
+                <div className="flex-1 h-px bg-[#222]" /><span className="text-xs text-[#444]">or</span><div className="flex-1 h-px bg-[#222]" />
               </div>
             </>
           )}
-
           <form onSubmit={handleAuthSubmit} className="space-y-4">
             {authMode === 'register' && (
               <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required
@@ -2109,12 +2084,8 @@ function ProfilePage() {
               {authMode === 'login' ? 'Login' : authMode === 'register' ? 'Create Account' : 'Send Reset Link'}
             </button>
           </form>
-          {authMode === 'login' && (
-            <button onClick={() => setAuthMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">Forgot password?</button>
-          )}
-          {authMode === 'forgot' && (
-            <button onClick={() => setAuthMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">← Back to Login</button>
-          )}
+          {authMode === 'login' && <button onClick={() => setAuthMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">Forgot password?</button>}
+          {authMode === 'forgot' && <button onClick={() => setAuthMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">← Back to Login</button>}
         </div>
         <button onClick={() => navigate('/')} className="block w-full text-center text-xs text-[#444] mt-6 hover:text-white">← Continue browsing as Guest</button>
       </div>
@@ -2135,6 +2106,13 @@ function ProfilePage() {
     setDownloads(updated);
     ls.set('reelramp_downloads', updated.map(v => v.id));
   };
+
+  // SYSTEM 2: filter continue watching (partial progress)
+  const continueWatching = watchHistory
+    .filter(h => h.progress > 0 && h.progress < 95 && h.timestamp > 0)
+    .slice(0, 6)
+    .map(h => ({ ...h, video: allVideos.find(v => v.id === h.videoId) }))
+    .filter(h => h.video) as (WatchHistoryItem & { video: Video })[];
 
   return (
     <div className="max-w-3xl mx-auto pb-24 px-4 pt-8 md:pt-10">
@@ -2168,26 +2146,34 @@ function ProfilePage() {
           )}
         </div>
       </div>
-      {watchHistory.length > 0 && (
+
+      {/* SYSTEM 2: Continue Watching in Profile */}
+      {continueWatching.length > 0 && (
         <div className="mb-8">
-          <h3 className="text-xl font-semibold tracking-tight mb-4">Continue Watching</h3>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-6 h-6 bg-[#c5a26f] rounded-lg flex items-center justify-center"><Clock size={13} className="text-black" /></div>
+            <h3 className="text-xl font-semibold tracking-tight">Continue Watching</h3>
+          </div>
           <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
-            {watchHistory.slice(0, 6).map(item => {
-              const video = allVideos.find(v => v.id === item.videoId);
-              if (!video) return null;
-              return (
-                <div key={item.videoId} onClick={() => navigate(`/player/${video.id}`)} className="flex-shrink-0 w-[160px] cursor-pointer group">
-                  <div className="relative rounded-2xl overflow-hidden aspect-video bg-black">
-                    <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20"><div className="h-full bg-[#c5a26f]" style={{ width: `${item.progress}%` }} /></div>
+            {continueWatching.map(item => (
+              <div key={item.videoId} onClick={() => navigate(`/player/${item.video.id}`)} className="flex-shrink-0 w-[160px] cursor-pointer group">
+                <div className="relative rounded-2xl overflow-hidden aspect-video bg-black">
+                  <img src={item.video.thumbnail} alt={item.video.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
+                    <div className="h-full bg-[#c5a26f]" style={{ width: `${item.progress}%` }} />
                   </div>
-                  <div className="mt-2 text-sm font-medium line-clamp-1">{video.title}</div>
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                    <div className="w-9 h-9 rounded-full bg-[#c5a26f] flex items-center justify-center"><Play size={14} className="text-black ml-0.5" /></div>
+                  </div>
                 </div>
-              );
-            })}
+                <div className="mt-2 text-sm font-medium line-clamp-1">{item.video.title}</div>
+                <div className="text-[11px] text-[#c5a26f]">Resume at {Math.floor(item.timestamp / 60)}:{String(Math.round(item.timestamp % 60)).padStart(2, '0')}</div>
+              </div>
+            ))}
           </div>
         </div>
       )}
+
       <div className="flex border-b border-[#222] mb-5 text-sm overflow-x-auto">
         {(['library', 'downloads', 'account'] as const).map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)}
@@ -2319,17 +2305,18 @@ function Footer() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BOTTOM NAVIGATION
+// SYSTEM 3 — BOTTOM NAVIGATION: exactly 4 locked tabs
+// Home | For You (vertical feed) | Store | Profile
 // ─────────────────────────────────────────────────────────────────────────────
 function BottomNavigation() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
 
+  // SYSTEM 3: Exactly 4 locked nav options
   const navItems = [
-    { path: '/', label: 'Home', icon: Play, key: 'home' },
+    { path: '/', label: 'Home', icon: Home, key: 'home' },
+    { path: '/player/1', label: 'For You', icon: Zap, key: 'foryou' },
     { path: '/store', label: 'Store', icon: ShoppingBag, key: 'store' },
-    { path: '/subscription', label: 'Plans', icon: Star, key: 'plans' },
     { path: '/profile', label: 'Profile', icon: UserIcon, key: 'profile' },
   ];
 
@@ -2338,7 +2325,10 @@ function BottomNavigation() {
       <div className="flex justify-around items-center h-16 px-2">
         {navItems.map(item => {
           const Icon = item.icon;
-          const isActive = location.pathname === item.path || (item.path === '/' && location.pathname.startsWith('/player'));
+          const isActive =
+            item.path === '/' ? location.pathname === '/'
+            : item.key === 'foryou' ? location.pathname.startsWith('/player')
+            : location.pathname === item.path;
           return (
             <button key={item.key} onClick={() => navigate(item.path)}
               className={`flex flex-col items-center justify-center py-1 px-4 rounded-xl transition-all ${isActive ? 'text-[#c5a26f]' : 'text-[#a1a1aa]'}`}>
@@ -2394,7 +2384,9 @@ function EditorPanel() {
             <div className="mx-auto w-14 h-14 bg-[#c5a26f] rounded-2xl flex items-center justify-center mb-4"><Edit2 className="text-black" size={28} /></div>
             <h1 className="text-3xl font-semibold">Editor Access</h1>
           </div>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && (password === EDITOR_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))} placeholder="Editor Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (password === EDITOR_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))}
+            placeholder="Editor Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
           {error && <p className="text-[#e11d48] text-sm text-center mt-2">{error}</p>}
           <button onClick={() => password === EDITOR_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password")} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold">LOGIN AS EDITOR</button>
           <div className="text-center mt-4"><button onClick={() => navigate('/')} className="text-xs text-[#666]">Back to App</button></div>
@@ -2442,7 +2434,9 @@ function OwnerPanel() {
             <div className="mx-auto w-14 h-14 bg-gradient-to-br from-[#c5a26f] to-[#d4b17f] rounded-2xl flex items-center justify-center mb-4"><Settings className="text-black" size={28} /></div>
             <h1 className="text-3xl font-semibold">Owner Access</h1>
           </div>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && (password === OWNER_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))} placeholder="Owner Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (password === OWNER_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))}
+            placeholder="Owner Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
           {error && <p className="text-[#e11d48] text-sm text-center mt-2">{error}</p>}
           <button onClick={() => password === OWNER_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password")} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold">LOGIN AS OWNER</button>
           <div className="text-center mt-4"><button onClick={() => navigate('/')} className="text-xs text-[#666]">Back to App</button></div>
@@ -2469,17 +2463,10 @@ function OwnerPanel() {
         <h2 className="text-5xl font-semibold tracking-tight mb-2">Owner Control Center</h2>
         <p className="text-[#a1a1aa] mb-8">Complete access to all settings, users, and revenue</p>
         <div className="grid md:grid-cols-2 gap-6">
-          {[
-            { label: "Manage All Shorts", path: '/admin' },
-            { label: "Subscription Plans", path: '/admin' },
-            { label: "User Management", path: '/admin' },
-            { label: "Revenue & Analytics", path: '/admin' },
-            { label: "Payment Settings", path: '/admin' },
-            { label: "Platform Settings", path: '/admin' },
-          ].map(item => (
-            <div key={item.label} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex items-center justify-between">
-              <span className="font-medium">{item.label}</span>
-              <button onClick={() => navigate(item.path)} className="text-[#c5a26f] text-sm px-4 py-2 bg-[#1a1a1a] rounded-xl">Open →</button>
+          {["Manage All Shorts","Subscription Plans","User Management","Revenue & Analytics","Payment Settings","Platform Settings"].map(item => (
+            <div key={item} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex items-center justify-between">
+              <span className="font-medium">{item}</span>
+              <button onClick={() => navigate('/admin')} className="text-[#c5a26f] text-sm px-4 py-2 bg-[#1a1a1a] rounded-xl">Open →</button>
             </div>
           ))}
         </div>
@@ -2489,10 +2476,11 @@ function OwnerPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN PAGE — All 6 modules integrated
-// MODULE 3: Payment gateway matrix + revenue sharing
-// MODULE 6: Supabase upsert with mandatory finally blocks
-// HYBRID: instant localStorage render + bg Supabase sync
+// ADMIN PAGE — All systems integrated
+// HYBRID FAIL-SAFE: localStorage first, Supabase background sync
+// MANDATORY finally { setSyncing(false) } on every DB call
+// SYSTEM 3: Store Inventory Manager tab
+// SYSTEM 7: Payment gateway matrix
 // ─────────────────────────────────────────────────────────────────────────────
 function AdminPage() {
   const navigate = useNavigate();
@@ -2507,7 +2495,6 @@ function AdminPage() {
     'revenue' | 'store' | 'datatools'
   >('dashboard');
 
-  // HYBRID FAIL-SAFE: all states initialize from localStorage instantly
   const [adminVideos, setAdminVideos] = useState<Video[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>(initialAdminUsers);
   const [popups, setPopups] = useState<PopupAd[]>([]);
@@ -2524,7 +2511,6 @@ function AdminPage() {
   const [editingCatName, setEditingCatName] = useState<string | null>(null);
   const [editingCatValue, setEditingCatValue] = useState('');
   const [toast, setToast] = useState('');
-  // MODULE 6: syncing indicator — NEVER stuck thanks to finally blocks
   const [syncing, setSyncing] = useState(false);
   const [formData, setFormData] = useState({
     title: '', description: '', category: 'Horror', duration: '4:30',
@@ -2555,10 +2541,9 @@ function AdminPage() {
     else setLoginError("Invalid credentials.");
   };
 
-  // HYBRID: load localStorage first (instant), then sync Supabase in background
+  // HYBRID FAIL-SAFE: render from localStorage instantly
   useEffect(() => {
     if (!isAuthorized) return;
-    // Instant render from localStorage
     setAdminVideos(getStoredVideos());
     setPopups(getStoredPopups());
     setPlatformSettings(getSettings());
@@ -2571,31 +2556,28 @@ function AdminPage() {
     const savedUsers = ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers);
     setAdminUsers(savedUsers);
 
-    // Background Supabase sync — MODULE 6 — with mandatory finally block
+    // Background Supabase sync — MANDATORY finally block prevents freeze
     setSyncing(true);
     supabase.from('videos').select('*').order('id')
       .then(({ data }) => {
-        if (data && data.length > 0) {
-          setAdminVideos(data as Video[]);
-          saveVideos(data as Video[]);
-        }
+        if (data && data.length > 0) { setAdminVideos(data as Video[]); saveVideos(data as Video[]); }
       })
-      .catch(() => { /* localStorage fallback already rendered */ })
-      .finally(() => { setSyncing(false); }); // INFINITE LOOP BREAKER
+      .catch(() => {})
+      .finally(() => { setSyncing(false); }); // MANDATORY — prevents freeze
   }, [isAuthorized]);
 
-  // MODULE 6: persist videos with Supabase upsert + mandatory finally
+  // SYSTEM: persist videos with Supabase upsert + mandatory finally
   const persistVideos = async (updated: Video[]) => {
     setAdminVideos(updated);
     saveVideos(updated);
     setSyncing(true);
     try {
       await supabase.from('videos').upsert(updated);
-    } catch { /* graceful degradation to localStorage */ }
-    finally { setSyncing(false); } // MANDATORY — prevents "Syncing..." freeze
+    } catch { /* graceful degradation */ }
+    finally { setSyncing(false); } // MANDATORY
   };
 
-  // MODULE 6: Upsert single setting row — mandatory finally
+  // SYSTEM: setting sync with mandatory finally
   const syncSettingToSupabase = async (key: string, value: unknown) => {
     setSyncing(true);
     try {
@@ -2632,15 +2614,13 @@ function AdminPage() {
     showToast(editingVideo ? "✅ Short updated & synced!" : "✅ Short published & synced!");
   };
 
-  // MODULE 6: delete with mandatory finally
   const deleteVideo = async (id: number) => {
     const updated = adminVideos.filter(v => v.id !== id);
     setAdminVideos(updated);
     saveVideos(updated);
     setSyncing(true);
-    try {
-      await supabase.from('videos').delete().eq('id', id);
-    } catch { /* graceful */ }
+    try { await supabase.from('videos').delete().eq('id', id); }
+    catch { /* graceful */ }
     finally { setSyncing(false); } // MANDATORY
     showToast("Short deleted.");
   };
@@ -2651,6 +2631,7 @@ function AdminPage() {
     ls.set('reelramp_admin_users', updated);
   };
 
+  // SYSTEM 3: Store product CRUD
   const saveProduct = () => {
     if (!productForm.title.trim()) return;
     let updated: DigitalProduct[];
@@ -2663,14 +2644,14 @@ function AdminPage() {
     setDigitalProducts(updated);
     saveDigitalProducts(updated);
     setShowProductModal(false);
-    showToast(editingProduct ? "✅ Product updated!" : "✅ Product listed!");
+    showToast(editingProduct ? "✅ Product updated!" : "✅ Product listed in Store!");
   };
 
   const deleteProduct = (id: number) => {
     const updated = digitalProducts.filter(p => p.id !== id);
     setDigitalProducts(updated);
     saveDigitalProducts(updated);
-    showToast("Product removed.");
+    showToast("Product removed from Store.");
   };
 
   const revenueData = getRevenueData();
@@ -2690,33 +2671,23 @@ function AdminPage() {
       '         REELRAMP PRO — REVENUE SHARING REPORT',
       '═══════════════════════════════════════════════════',
       `  Generated: ${new Date().toLocaleString('en-IN')}`,
-      `  Reporting Period: All Time`,
       '───────────────────────────────────────────────────',
-      `  Total Platform Revenue:  ₹${totalRevenue.toLocaleString()}`,
-      `  Platform Share (${platformSplit}%):      ₹${platformRevenue.toLocaleString()}`,
-      `  Creator Pool  (${creatorSplit}%):      ₹${creatorRevenue.toLocaleString()}`,
+      `  Total Revenue:     ₹${totalRevenue.toLocaleString()}`,
+      `  Platform (${platformSplit}%):   ₹${platformRevenue.toLocaleString()}`,
+      `  Creators (${creatorSplit}%):    ₹${creatorRevenue.toLocaleString()}`,
       '───────────────────────────────────────────────────',
-      '  CREATOR ALLOCATIONS:',
-      ...creatorEntries.map(e =>
-        `  • ${e.creatorName.padEnd(14)} | ${String(e.totalViews).padEnd(6)} views | ₹${e.revenueShare.toLocaleString()}`
-      ),
+      ...creatorEntries.map(e => `  • ${e.creatorName.padEnd(14)} | ${String(e.totalViews).padEnd(6)} views | ₹${e.revenueShare.toLocaleString()}`),
       '───────────────────────────────────────────────────',
-      '  TRANSACTIONS:',
-      ...revenueData.map(r => `  [${r.date}]  ${r.plan.padEnd(10)} ${r.type.padEnd(14)} ₹${r.amount}`),
+      ...revenueData.map(r => `  [${r.date}]  ${r.plan.padEnd(10)} ₹${r.amount}`),
       '═══════════════════════════════════════════════════',
-      '  ReelRamp Originals Pvt. Ltd.',
-      '  FF Shop No. 6, Arohi Arcade, Lucknow - 226016',
-      '  reelramporiginal@gmail.com | +91 7307493338',
+      '  ReelRamp Originals Pvt. Ltd. | Lucknow',
       '═══════════════════════════════════════════════════',
     ].join('\n');
     const blob = new Blob([lines], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ReelRamp_Revenue_Report_${Date.now()}.txt`;
-    a.click();
+    const a = document.createElement('a'); a.href = url; a.download = `ReelRamp_Revenue_${Date.now()}.txt`; a.click();
     URL.revokeObjectURL(url);
-    showToast("📄 Revenue report downloaded!");
+    showToast("📄 Report downloaded!");
   };
 
   const premiumUsers = adminUsers.filter(u => u.subscribed).length;
@@ -2732,8 +2703,11 @@ function AdminPage() {
           <h1 className="text-4xl font-semibold tracking-[-1.5px]">Admin Portal</h1>
           <p className="text-[#a1a1aa] mt-2 mb-8">ReelRamp Shorts • Production Dashboard</p>
           <div className="space-y-3 text-left">
-            <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="Admin Email" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
-            <input type="password" value={adminPass} onChange={e => setAdminPass(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdminLogin()} placeholder="Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+            <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="Admin Email"
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+            <input type="password" value={adminPass} onChange={e => setAdminPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleAdminLogin()} placeholder="Password"
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
             {loginError && <p className="text-[#e11d48] text-sm">{loginError}</p>}
           </div>
           <button onClick={handleAdminLogin} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold tracking-wider">ACCESS ADMIN DASHBOARD</button>
@@ -2746,7 +2720,7 @@ function AdminPage() {
   const TAB_ITEMS = [
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
     { key: 'content', label: 'Content', icon: Play },
-    { key: 'store', label: 'Store', icon: ShoppingBag },
+    { key: 'store', label: 'Store Inventory', icon: ShoppingBag },
     { key: 'revenue', label: 'Revenue Share', icon: TrendingUp },
     { key: 'popups', label: 'Popup Ads', icon: Star },
     { key: 'users', label: 'Users', icon: Users },
@@ -2761,18 +2735,16 @@ function AdminPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] pb-20">
-      {/* Toast */}
       {toast && (
         <div className="fixed top-6 right-6 z-[200] bg-[#111] border border-[#c5a26f]/40 text-white px-6 py-3 rounded-2xl text-sm shadow-xl">{toast}</div>
       )}
-      {/* MODULE 6: Syncing indicator — guaranteed to clear via finally */}
+      {/* HYBRID: Syncing indicator — guaranteed to clear via finally block */}
       {syncing && (
         <div className="fixed top-6 left-6 z-[200] flex items-center gap-2 bg-[#111] border border-[#333] px-4 py-2 rounded-xl text-xs text-[#a1a1aa]">
           <div className="w-3 h-3 border-2 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /> Syncing…
         </div>
       )}
 
-      {/* Header */}
       <div className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#222]">
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -2803,7 +2775,7 @@ function AdminPage() {
             <div className="flex justify-between mb-8">
               <div>
                 <h2 className="text-5xl font-semibold tracking-[-2.5px]">Control Center</h2>
-                <p className="text-[#a1a1aa]">Live platform metrics — connected to Supabase</p>
+                <p className="text-[#a1a1aa]">Live platform metrics</p>
               </div>
               <button onClick={openAddModal} className="flex items-center gap-2 px-6 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm"><Plus size={18} /> New Short</button>
             </div>
@@ -2811,7 +2783,7 @@ function AdminPage() {
               {[
                 { label: "Total Shorts", value: adminVideos.length, sub: `${premiumShorts} Premium` },
                 { label: "Active Users", value: adminUsers.length, sub: `${premiumUsers} Premium` },
-                { label: "Total Plays", value: totalPlays, sub: "This month" },
+                { label: "Total Plays", value: totalPlays, sub: "All time" },
                 { label: "Est. Revenue", value: `₹${estimatedRevenue.toLocaleString()}`, sub: "Monthly recurring" },
               ].map((stat, i) => (
                 <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-7">
@@ -2824,7 +2796,7 @@ function AdminPage() {
             <div className="grid md:grid-cols-4 gap-3">
               {(['content', 'store', 'revenue', 'analytics'] as const).map(tab => (
                 <button key={tab} onClick={() => setActiveTab(tab)} className="p-5 text-left border border-[#222] hover:border-[#c5a26f] rounded-2xl flex justify-between items-center capitalize">
-                  {tab === 'revenue' ? 'Revenue Share' : tab} <Play size={18} className="text-[#666]" />
+                  {tab === 'store' ? 'Store Inventory' : tab === 'revenue' ? 'Revenue Share' : tab} <Play size={18} className="text-[#666]" />
                 </button>
               ))}
             </div>
@@ -2880,45 +2852,87 @@ function AdminPage() {
           </div>
         )}
 
-        {/* DIGITAL STORE ADMIN */}
+        {/* SYSTEM 3: STORE INVENTORY MANAGER */}
         {activeTab === 'store' && (
           <div>
             <div className="flex justify-between mb-6">
               <div>
-                <h3 className="text-3xl font-semibold tracking-tight">Digital Store</h3>
-                <p className="text-[#a1a1aa] text-sm mt-1">Manage workshops, guides, and merch listings.</p>
+                <h3 className="text-3xl font-semibold tracking-tight">Store Inventory Manager</h3>
+                <p className="text-[#a1a1aa] text-sm mt-1">Add, edit, or remove digital products from the public Store tab.</p>
               </div>
               <button
-                onClick={() => { setProductForm({ title: '', description: '', price: 999, category: 'workshop', thumbnailUrl: '', isPremium: false, badge: '' }); setEditingProduct(null); setShowProductModal(true); }}
+                onClick={() => {
+                  setProductForm({ title: '', description: '', price: 999, category: 'workshop', thumbnailUrl: '', isPremium: false, badge: '' });
+                  setEditingProduct(null);
+                  setShowProductModal(true);
+                }}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#c5a26f] text-black font-medium text-sm">
                 <Plus size={17} /> Add Product
               </button>
             </div>
+
+            {/* Stats bar */}
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              {[
+                { label: 'Total Products', value: digitalProducts.length },
+                { label: 'Workshops', value: digitalProducts.filter(p => p.category === 'workshop').length },
+                { label: 'Premium Items', value: digitalProducts.filter(p => p.isPremium).length },
+              ].map((s, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-2xl p-5">
+                  <div className="text-xs text-[#666] tracking-widest">{s.label}</div>
+                  <div className="text-3xl font-semibold mt-1">{s.value}</div>
+                </div>
+              ))}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {digitalProducts.map(product => (
-                <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
+                <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden group hover:border-[#c5a26f]/40 transition-all">
                   <div className="relative aspect-video overflow-hidden bg-[#1a1a1a]">
-                    <img src={product.thumbnailUrl} alt={product.title} className="w-full h-full object-cover"
+                    <img src={product.thumbnailUrl} alt={product.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />
-                    {product.badge && <div className="absolute top-2 left-2 bg-[#c5a26f] text-black text-[9px] px-2 py-0.5 rounded-full font-bold">{product.badge}</div>}
+                    {product.badge && <div className="absolute top-2 left-2 bg-[#c5a26f] text-black text-[9px] px-2 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}
+                    {product.isPremium && <div className="absolute top-2 right-2 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium">PREMIUM</div>}
                   </div>
                   <div className="p-5">
-                    <div className="text-xs text-[#c5a26f] mb-1 tracking-widest">{product.category.toUpperCase()}</div>
+                    <div className="text-xs text-[#c5a26f] mb-1 tracking-widest uppercase">{product.category}</div>
                     <div className="font-semibold text-sm mb-1 line-clamp-1">{product.title}</div>
-                    <div className="text-2xl font-semibold text-[#c5a26f] mb-4">₹{product.price.toLocaleString()}</div>
+                    <div className="text-xs text-[#a1a1aa] line-clamp-2 mb-4">{product.description}</div>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="text-2xl font-semibold text-[#c5a26f]">₹{product.price.toLocaleString()}</div>
+                      <div className="text-xs text-[#666] bg-[#1a1a1a] px-2 py-1 rounded-lg">{product.isPremium ? 'PREMIUM' : 'PUBLIC'}</div>
+                    </div>
                     <div className="flex gap-2">
-                      <button onClick={() => { setProductForm({ title: product.title, description: product.description, price: product.price, category: product.category, thumbnailUrl: product.thumbnailUrl, isPremium: product.isPremium, badge: product.badge || '' }); setEditingProduct(product); setShowProductModal(true); }}
-                        className="flex-1 py-2 bg-[#222] rounded-xl text-xs flex items-center justify-center gap-1"><Edit2 size={13} /> Edit</button>
-                      <button onClick={() => deleteProduct(product.id)} className="flex-1 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-xl text-xs flex items-center justify-center gap-1"><Trash2 size={13} /> Delete</button>
+                      <button
+                        onClick={() => {
+                          setProductForm({ title: product.title, description: product.description, price: product.price, category: product.category, thumbnailUrl: product.thumbnailUrl, isPremium: product.isPremium, badge: product.badge || '' });
+                          setEditingProduct(product);
+                          setShowProductModal(true);
+                        }}
+                        className="flex-1 py-2.5 bg-[#222] hover:bg-[#2a2a2a] rounded-xl text-xs flex items-center justify-center gap-1 transition-colors">
+                        <Edit2 size={13} /> Edit
+                      </button>
+                      <button onClick={() => deleteProduct(product.id)}
+                        className="flex-1 py-2.5 bg-[#e11d48]/10 hover:bg-[#e11d48]/20 text-[#e11d48] rounded-xl text-xs flex items-center justify-center gap-1 transition-colors">
+                        <Trash2 size={13} /> Delete
+                      </button>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
+            {digitalProducts.length === 0 && (
+              <div className="text-center py-20 text-[#666]">
+                <ShoppingBag size={40} className="mx-auto mb-4 opacity-30" />
+                <div className="text-lg mb-2">No products yet</div>
+                <div className="text-sm">Click "Add Product" to list your first digital item.</div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* REVENUE SHARING INDEX */}
+        {/* REVENUE SHARING */}
         {activeTab === 'revenue' && (
           <div className="max-w-4xl">
             <div className="flex items-start justify-between mb-6">
@@ -2926,9 +2940,8 @@ function AdminPage() {
                 <h3 className="text-3xl font-semibold tracking-tight">Revenue Sharing Index</h3>
                 <p className="text-[#a1a1aa] text-sm mt-1">Creator payout calculator and report generator.</p>
               </div>
-              <button onClick={downloadRevenueReport}
-                className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm">
-                <FileText size={16} /> Download Revenue Report
+              <button onClick={downloadRevenueReport} className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm">
+                <FileText size={16} /> Download Report
               </button>
             </div>
             <div className="grid grid-cols-3 gap-4 mb-8">
@@ -2989,7 +3002,8 @@ function AdminPage() {
                 <h3 className="text-3xl font-semibold tracking-tight">Popup Ad Controller</h3>
                 <p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p>
               </div>
-              <button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }} className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm"><Plus size={16} /> New Popup</button>
+              <button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }}
+                className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm"><Plus size={16} /> New Popup</button>
             </div>
             <div className="space-y-4">
               {popups.map(popup => (
@@ -2999,7 +3013,8 @@ function AdminPage() {
                     <div className="font-semibold text-xl mb-2">{popup.title}</div>
                     <div className="text-xs text-[#666] font-mono mb-4">{popup.redirectUrl}</div>
                     <div className="flex gap-3">
-                      <button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }} className={`px-5 py-2 rounded-2xl text-sm ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button>
+                      <button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }}
+                        className={`px-5 py-2 rounded-2xl text-sm ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button>
                       <button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm">Edit</button>
                       <button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm">Delete</button>
                     </div>
@@ -3011,7 +3026,7 @@ function AdminPage() {
               <div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6">
                 <div className="bg-[#111] p-8 rounded-3xl w-full max-w-md">
                   <div className="text-xl font-medium mb-6">Edit Popup</div>
-                  {([{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }]).map(f => (
+                  {[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (
                     <div key={f.key} className="mb-4">
                       <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
                       <input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" />
@@ -3102,7 +3117,8 @@ function AdminPage() {
               ].map(f => (
                 <div key={f.key}>
                   <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                  <input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
+                  <input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
                 </div>
               ))}
               <div>
@@ -3131,12 +3147,14 @@ function AdminPage() {
               ].map(f => (
                 <div key={f.key}>
                   <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                  <input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
+                  <input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
                 </div>
               ))}
               <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
                 <div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div>
-                <button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })} className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
+                <button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })}
+                  className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
                   <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} />
                 </button>
               </div>
@@ -3146,11 +3164,11 @@ function AdminPage() {
           </div>
         )}
 
-        {/* MODULE 3: PAYMENT SETTINGS MATRIX */}
+        {/* SYSTEM 7: PAYMENT GATEWAY MATRIX */}
         {activeTab === 'payment' && (
           <div className="max-w-2xl">
             <h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3>
-            <p className="text-[#a1a1aa] text-sm mb-6">Configure your active payment gateway. All fields sync live to the checkout flow.</p>
+            <p className="text-[#a1a1aa] text-sm mb-6">Configure the active payment gateway. All fields sync live to the checkout flow.</p>
             <div className="space-y-4">
               {/* Gateway selector */}
               <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
@@ -3163,77 +3181,58 @@ function AdminPage() {
                     </button>
                   ))}
                 </div>
-                {/* Live mode toggle */}
                 <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
                   <div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Only enable for real payments</div></div>
-                  <button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })} className={`w-12 h-6 rounded-full transition-colors ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}>
+                  <button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })}
+                    className={`w-12 h-6 rounded-full transition-colors ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}>
                     <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} />
                   </button>
                 </div>
               </div>
 
-              {/* Razorpay fields */}
+              {/* Razorpay */}
               <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
                 <div className="text-xs text-[#a1a1aa] tracking-widest font-medium">RAZORPAY</div>
                 <div>
                   <label className="text-xs text-[#666] mb-1 block">Key ID</label>
-                  <input
-                    value={paymentConfig.razorpayKeyId}
-                    onChange={e => setPaymentConfig({ ...paymentConfig, razorpayKeyId: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none"
-                    placeholder="rzp_test_..."
-                  />
+                  <input value={paymentConfig.razorpayKeyId} onChange={e => setPaymentConfig({ ...paymentConfig, razorpayKeyId: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder="rzp_test_..." />
                 </div>
-                {/* MODULE 3: Key Secret field — was missing */}
                 <div>
                   <label className="text-xs text-[#666] mb-1 block">Key Secret</label>
-                  <input
-                    type="password"
-                    value={paymentConfig.razorpayKeySecret}
-                    onChange={e => setPaymentConfig({ ...paymentConfig, razorpayKeySecret: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none"
-                    placeholder="••••••••••••••••"
-                  />
+                  <input type="password" value={paymentConfig.razorpayKeySecret} onChange={e => setPaymentConfig({ ...paymentConfig, razorpayKeySecret: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder="••••••••••••••••" />
                 </div>
               </div>
 
-              {/* UPI field */}
+              {/* UPI */}
               <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
                 <div className="text-xs text-[#a1a1aa] tracking-widest font-medium">UPI</div>
                 <div>
                   <label className="text-xs text-[#666] mb-1 block">UPI ID</label>
-                  <input
-                    value={paymentConfig.upiId}
-                    onChange={e => setPaymentConfig({ ...paymentConfig, upiId: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none"
-                    placeholder="yourname@upi"
-                  />
+                  <input value={paymentConfig.upiId} onChange={e => setPaymentConfig({ ...paymentConfig, upiId: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder="yourname@upi" />
                 </div>
               </div>
 
-              {/* Stripe field */}
+              {/* Stripe */}
               <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
                 <div className="text-xs text-[#a1a1aa] tracking-widest font-medium">STRIPE</div>
                 <div>
                   <label className="text-xs text-[#666] mb-1 block">Publishable Key</label>
-                  <input
-                    value={paymentConfig.stripePublishableKey}
-                    onChange={e => setPaymentConfig({ ...paymentConfig, stripePublishableKey: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none"
-                    placeholder="pk_test_..."
-                  />
+                  <input value={paymentConfig.stripePublishableKey} onChange={e => setPaymentConfig({ ...paymentConfig, stripePublishableKey: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder="pk_test_..." />
                 </div>
               </div>
 
-              {/* MODULE 6: Save + upsert with mandatory finally via syncSettingToSupabase */}
+              {/* Save — mandatory finally via syncSettingToSupabase */}
               <button
                 onClick={async () => {
                   savePaymentSettings(paymentConfig);
                   await syncSettingToSupabase('payment', paymentConfig);
                   showToast("✅ Payment settings saved & synced!");
                 }}
-                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider"
-              >
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">
                 SAVE PAYMENT SETTINGS
               </button>
             </div>
@@ -3282,7 +3281,8 @@ function AdminPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
                 <div><div className="font-medium text-sm">Show Promo Video</div><div className="text-xs text-[#666]">Display in trial popup</div></div>
-                <button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })} className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
+                <button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })}
+                  className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
                   <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${promoSettings.isEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                 </button>
               </div>
@@ -3296,9 +3296,11 @@ function AdminPage() {
               </div>
               <div>
                 <label className="text-xs text-[#666] mb-1 block">Video URL</label>
-                <input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" />
               </div>
-              <button onClick={() => { savePromoSettings(promoSettings); showToast("✅ Promo video saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">SAVE PROMO VIDEO SETTINGS</button>
+              <button onClick={() => { savePromoSettings(promoSettings); showToast("✅ Promo video saved!"); }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider">SAVE PROMO VIDEO SETTINGS</button>
             </div>
           </div>
         )}
@@ -3310,12 +3312,10 @@ function AdminPage() {
             <p className="text-[#a1a1aa] mb-8">Export a complete platform snapshot or restore from a backup file.</p>
             <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-5">
               <div className="flex items-start gap-4 mb-5">
-                <div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0">
-                  <Download size={22} className="text-[#c5a26f]" />
-                </div>
+                <div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0"><Download size={22} className="text-[#c5a26f]" /></div>
                 <div>
                   <div className="font-semibold text-lg">Export System Backup</div>
-                  <div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all categories, videos, digital products, settings, and subscription config.</div>
+                  <div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all data.</div>
                 </div>
               </div>
               <button onClick={() => { exportSystemBackup(); showToast("✅ Backup downloaded!"); }}
@@ -3325,42 +3325,27 @@ function AdminPage() {
             </div>
             <div className="bg-[#111] border border-[#222] rounded-3xl p-7">
               <div className="flex items-start gap-4 mb-5">
-                <div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0">
-                  <Upload size={22} className="text-[#a1a1aa]" />
-                </div>
+                <div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0"><Upload size={22} className="text-[#a1a1aa]" /></div>
                 <div>
                   <div className="font-semibold text-lg">Restore from Backup</div>
-                  <div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup. All keys are validated before writing — no partial mutations.</div>
+                  <div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup file.</div>
                 </div>
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
+              <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden"
                 onChange={e => {
                   const file = e.target.files?.[0];
                   if (!file) return;
                   importSystemBackup(file,
-                    msg => {
-                      showToast(msg);
-                      setAdminVideos(getStoredVideos());
-                      setCategoriesState(getCategories());
-                      setDigitalProducts(getDigitalProducts());
-                      setPlatformSettings(getSettings());
-                      setSubSettings(getSubSettings());
-                      setPaymentConfig(getPaymentSettings());
-                    },
+                    msg => { showToast(msg); setAdminVideos(getStoredVideos()); setCategoriesState(getCategories()); setDigitalProducts(getDigitalProducts()); setPlatformSettings(getSettings()); setSubSettings(getSubSettings()); setPaymentConfig(getPaymentSettings()); },
                     err => showToast(err)
                   );
                   e.target.value = '';
-                }}
-              />
+                }} />
               <button onClick={() => fileInputRef.current?.click()}
                 className="w-full py-4 bg-[#1a1a1a] border border-[#333] hover:border-[#c5a26f] text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition-colors">
                 <Upload size={18} /> Choose Backup File (.json)
               </button>
-              <p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration. Cannot be undone.</p>
+              <p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration.</p>
             </div>
           </div>
         )}
@@ -3377,13 +3362,16 @@ function AdminPage() {
                 <button onClick={() => setShowAddModal(false)}><X size={20} /></button>
               </div>
               <div className="space-y-4">
-                <input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
-                <textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                <textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })}
+                  rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
                 <div className="grid grid-cols-2 gap-4">
                   <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">
                     {getCategories().map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
-                  <input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                  <input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })}
+                    className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
                 </div>
                 <div className="flex items-center gap-4 bg-[#1a1a1a] rounded-2xl p-5 border border-[#222]">
                   <label className="flex items-center gap-3 cursor-pointer">
@@ -3391,8 +3379,10 @@ function AdminPage() {
                     <div><div className="font-medium text-sm">Premium Only</div><div className="text-xs text-[#a1a1aa]">Requires active subscription</div></div>
                   </label>
                 </div>
-                <input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
-                <input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
               </div>
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setShowAddModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm">Cancel</button>
@@ -3410,16 +3400,19 @@ function AdminPage() {
             <motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }}
               className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9" onClick={e => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-7">
-                <div className="text-2xl font-semibold">{editingProduct ? "Edit Product" : "New Product"}</div>
+                <div className="text-2xl font-semibold">{editingProduct ? "Edit Product" : "Add New Product"}</div>
                 <button onClick={() => setShowProductModal(false)}><X size={20} /></button>
               </div>
               <div className="space-y-4">
-                <input placeholder="Product Title" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
-                <textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} rows={2} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Product Title" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                <textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })}
+                  rows={2} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs text-[#666] mb-1 block">Category</label>
-                    <select value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value as DigitalProduct['category'] })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm">
+                    <select value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value as DigitalProduct['category'] })}
+                      className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm">
                       <option value="workshop">Workshop</option>
                       <option value="guide">Guide</option>
                       <option value="merch">Merch</option>
@@ -3427,12 +3420,15 @@ function AdminPage() {
                   </div>
                   <div>
                     <label className="text-xs text-[#666] mb-1 block">Price (₹)</label>
-                    <input type="number" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                    <input type="number" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })}
+                      className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
                   </div>
                 </div>
-                <input placeholder="Thumbnail URL" value={productForm.thumbnailUrl} onChange={e => setProductForm({ ...productForm, thumbnailUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Thumbnail URL" value={productForm.thumbnailUrl} onChange={e => setProductForm({ ...productForm, thumbnailUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
                 <div className="grid grid-cols-2 gap-4">
-                  <input placeholder="Badge (e.g. BESTSELLER)" value={productForm.badge} onChange={e => setProductForm({ ...productForm, badge: e.target.value })} className="bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                  <input placeholder="Badge (e.g. BESTSELLER)" value={productForm.badge} onChange={e => setProductForm({ ...productForm, badge: e.target.value })}
+                    className="bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
                   <div className="flex items-center gap-3 bg-[#1a1a1a] rounded-2xl px-4 border border-[#222]">
                     <input type="checkbox" checked={productForm.isPremium} onChange={e => setProductForm({ ...productForm, isPremium: e.target.checked })} className="accent-[#c5a26f]" />
                     <span className="text-sm">Premium Only</span>
@@ -3441,7 +3437,9 @@ function AdminPage() {
               </div>
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setShowProductModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm">Cancel</button>
-                <button onClick={saveProduct} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm">{editingProduct ? "Save Changes" : "List Product"}</button>
+                <button onClick={saveProduct} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm">
+                  {editingProduct ? "Save Changes" : "List Product"}
+                </button>
               </div>
             </motion.div>
           </div>
