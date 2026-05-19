@@ -4018,29 +4018,3 @@ export function ShortsPlayerPage() {
         </AnimatePresence>
 
       </motion.div>{/* end drag container */}
-
-      {/* ══════════════════════════════════════════════════
-          PAYWALL MODALS
-      ══════════════════════════════════════════════════ */}
-      <AnimatePresence>
-        {showScrollPaywall && (
-          <SubscriptionInterceptModal
-            onClose={() => setShowScrollPaywall(false)}
-            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }}
-          />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {showPaywall && (
-          <PaywallModal
-            video={currentVideo}
-            onClose={() => setShowPaywall(false)}
-            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }}
-          />
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-export default ShortsPlayerPage;
