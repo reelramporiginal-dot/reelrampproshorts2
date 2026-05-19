@@ -408,19 +408,9 @@ interface PremiumVideoPlayerProps {
   onProgress?: (pct: number) => void;
 }
 
-interface PremiumVideoPlayerProps {
-  video: Video;
-  isPlaying: boolean;
-  onPlayPause: () => void;
-  onEnded: () => void;
-  onProgress?: (pct: number) => void;
-}
-
 function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress }: PremiumVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  
-  // FIX: !isLoaded को हटाकर मजबूत HTML5 isLoading स्टेट लगाई है
-  const [isLoading, setIsLoading] = useState(false); 
+  const [isLoaded, setIsLoaded] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -432,64 +422,224 @@ function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress
   const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
-  // वीडियो प्ले/पॉज़ का एकदम फ़ास्ट रिस्पॉन्स
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (isPlaying) {
-      setIsLoading(true); // प्ले करने से पहले लोडिंग शुरू
-      v.play()
-        .then(() => setIsLoading(false)) // प्ले होते ही लोडिंग ख़त्म
-        .catch(() => setIsLoading(false));
-    } else {
-      v.pause();
-    }
-  }, [isPlaying, video.videoUrl]);
+    if (isPlaying) { v.play().catch(() => { /* noop */ }); }
+    else { v.pause(); }
+  }, [isPlaying]);
 
-  // टाइम और प्रोग्रेस अपडेट करने के लिए
-  const handleTimeUpdate = () => {
+  useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    setCurrentTime(v.currentTime);
-    const pct = v.duration ? (v.currentTime / v.duration) * 100 : 0;
+    v.muted = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = playbackSpeed;
+  }, [playbackSpeed]);
+
+  const handleTimeUpdate = (): void => {
+    const v = videoRef.current;
+    if (!v || !v.duration) return;
+    const pct = (v.currentTime / v.duration) * 100;
     setProgress(pct);
-    if (onProgress) onProgress(pct);
+    setCurrentTime(v.currentTime);
+    onProgress?.(pct);
   };
 
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) setDuration(videoRef.current.duration);
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>): void => {
+    const v = videoRef.current;
+    if (!v) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    v.currentTime = ratio * v.duration;
   };
+
+  const handleTap = (e: React.MouseEvent<HTMLDivElement>): void => {
+    const now = Date.now();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const tapX = e.clientX - rect.left;
+    const isLeft = tapX < rect.width / 2;
+    const diff = now - lastTapRef.current.time;
+
+    if (diff < 300) {
+      const v = videoRef.current;
+      if (v) {
+        v.currentTime = isLeft ? Math.max(0, v.currentTime - 10) : Math.min(v.duration, v.currentTime + 10);
+      }
+      setDoubleTapSide(isLeft ? 'left' : 'right');
+      if (!isLeft) setLikeAnim(true);
+      setTimeout(() => { setDoubleTapSide(null); setLikeAnim(false); }, 700);
+    } else {
+      setTimeout(() => {
+        if (Date.now() - now >= 280) onPlayPause();
+      }, 300);
+    }
+    lastTapRef.current = { time: now, x: tapX };
+  };
+
+  const formatTime = (s: number): string => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  if (video.source === 'youtube') {
+    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] ?? '';
+    return (
+      <div className="relative w-full h-full bg-black">
+        <iframe
+          width="100%" height="100%"
+          src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
+          title={video.title}
+          frameBorder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          className="w-full h-full"
+          onLoad={() => setIsLoaded(true)}
+        />
+        {!isLoaded && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black">
+            <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
 
   return (
-    <div className="relative w-full h-full bg-black flex items-center justify-center overflow-hidden">
+    <div className="relative w-full h-full bg-black select-none">
       <video
         ref={videoRef}
-        src={video.videoUrl}
-        className="w-full h-full object-contain"
-        onClick={onPlayPause}
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onEnded={onEnded}
-        // असली जादू यहाँ है: इन इवेंट्स से स्पिनर कभी नहीं अटकेगा
-        onWaiting={() => setIsLoading(true)}
-        onPlaying={() => setIsLoading(false)}
-        onCanPlay={() => setIsLoading(false)}
-        onSeeking={() => setIsLoading(true)}
-        onSeeked={() => setIsLoading(false)}
+        src={resolvedUrl}
+        className="w-full h-full object-cover"
         playsInline
+        autoPlay={isPlaying}
+        onEnded={onEnded}
+        onLoadedData={() => { setIsLoaded(true); setDuration(videoRef.current?.duration ?? 0); }}
+        onTimeUpdate={handleTimeUpdate}
       />
 
-      {/* वीडियो लोडिंग स्पिनर जो अब अटकेगा नहीं */}
-      {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-20 pointer-events-none">
-          <div className="w-12 h-12 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin"></div>
+      {/* Tap zone */}
+      <div className="absolute inset-0 z-10" onClick={handleTap} />
+
+      {/* Double-tap flash */}
+      <AnimatePresence>
+        {doubleTapSide && (
+          <motion.div
+            key={doubleTapSide}
+            initial={{ opacity: 0.9, scale: 0.8 }}
+            animate={{ opacity: 0, scale: 1.2 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6 }}
+            className={`absolute top-1/2 -translate-y-1/2 z-20 pointer-events-none flex items-center justify-center w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm ${doubleTapSide === 'left' ? 'left-8' : 'right-8'}`}
+          >
+            <span className="text-white text-2xl font-bold">{doubleTapSide === 'left' ? '−10s' : '+10s'}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Heart burst on double-tap right */}
+      <AnimatePresence>
+        {likeAnim && (
+          <motion.div
+            initial={{ opacity: 1, scale: 0.5, y: 0 }}
+            animate={{ opacity: 0, scale: 1.8, y: -80 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.8, ease: 'easeOut' }}
+            className="absolute bottom-32 right-12 z-30 pointer-events-none text-[#e11d48] text-5xl"
+          >
+            ❤️
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Loading spinner */}
+      {!isLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-20">
+          <div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
-      {/* नीचे आपके बाकी कंट्रोल्स, बटन्स और overlays का पुराना डिज़ाइन वैसे का वैसा ही रहेगा */}
+      {/* Pause overlay */}
+      {!isPlaying && isLoaded && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 flex items-center justify-center bg-black/25 z-10 pointer-events-none"
+        >
+          <div className="w-20 h-20 rounded-full bg-white/90 flex items-center justify-center shadow-2xl">
+            <Play size={38} className="text-black ml-1" />
+          </div>
+        </motion.div>
+      )}
+
+      {/* Top controls: mute + speed */}
+      <div className="absolute top-4 right-4 z-30 flex flex-col items-end gap-2">
+        <button
+          onClick={(e) => { e.stopPropagation(); setIsMuted(m => !m); }}
+          className="p-2.5 bg-black/50 backdrop-blur-md rounded-xl border border-white/10"
+        >
+          {isMuted ? <VolumeX size={18} className="text-white" /> : <Volume2 size={18} className="text-white" />}
+        </button>
+        <div className="relative">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(s => !s); }}
+            className="px-3 py-2 bg-black/50 backdrop-blur-md rounded-xl border border-white/10 text-white text-xs font-mono font-semibold"
+          >
+            {playbackSpeed}×
+          </button>
+          <AnimatePresence>
+            {showSpeedMenu && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="absolute right-0 top-10 bg-[#111]/95 backdrop-blur-xl border border-[#333] rounded-2xl overflow-hidden z-50 w-24"
+                onClick={e => e.stopPropagation()}
+              >
+                {SPEEDS.map(s => (
+                  <button
+                    key={s}
+                    onClick={() => { setPlaybackSpeed(s); setShowSpeedMenu(false); }}
+                    className={`w-full py-2.5 text-center text-sm font-mono transition ${playbackSpeed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white hover:bg-[#222]'}`}
+                  >
+                    {s}×
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div
+        className="absolute bottom-0 left-0 right-0 z-30 px-0 pb-0 cursor-pointer group"
+        onClick={e => { e.stopPropagation(); handleSeek(e); }}
+      >
+        <div className="relative h-[3px] bg-white/20 group-hover:h-[5px] transition-all">
+          <div
+            className="h-full bg-[#c5a26f] relative"
+            style={{ width: `${progress}%` }}
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-[#c5a26f] opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" />
+          </div>
+        </div>
+        <div className="absolute bottom-2 right-3 text-[10px] font-mono text-white/60 opacity-0 group-hover:opacity-100 transition-opacity">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </div>
+      </div>
     </div>
   );
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
 // APP SHELL
 // ─────────────────────────────────────────────────────────────────────────────
