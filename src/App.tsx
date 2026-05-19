@@ -14,9 +14,9 @@ import {
   Home, Zap
 } from 'lucide-react';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PRODUCTION CREDENTIALS
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// PRODUCTION CREDENTIALS (Aapka original)
+// ============================================================
 const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dG5kcW9ycGl6b296YnBjbWNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDYwMjMsImV4cCI6MjA5NDE4MjAyM30.8mHW5OGBM8mNuMBp-yASHWYlwcbQkNaUhYQ-JvMl_6Q";
@@ -34,9 +34,6 @@ const getBunnyCdnUrl = (path: string) =>
 const REELRAMP_LOGO =
   "https://drive.google.com/uc?export=view&id=1qs734lVBcgz-fJ_TitnibEG-KqX0LCVg";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GUEST ID
-// ─────────────────────────────────────────────────────────────────────────────
 const getOrCreateGuestId = (): string => {
   const existing = localStorage.getItem('rr_guest_id');
   if (existing) return existing;
@@ -45,9 +42,9 @@ const getOrCreateGuestId = (): string => {
   return id;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// TYPES (Aapke original)
+// ============================================================
 interface Video {
   id: number;
   title: string;
@@ -149,9 +146,9 @@ interface CreatorRevenueEntry {
   revenueShare: number;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// INITIAL DATA
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// INITIAL DATA (Aapke original)
+// ============================================================
 const initialVideos: Video[] = [
   { id: 1, title: "The Silent Whisper", description: "A haunting tale of a woman trapped in an abandoned mansion where whispers reveal dark secrets.", category: "Horror", duration: "4:32", isPremium: true, thumbnail: "/images/horror1.jpg", videoUrl: "https://media.w3.org/2010/05/sintel/trailer.mp4", source: 'direct' },
   { id: 2, title: "Midnight Rain", description: "A detective uncovers a chilling murder case in a rain-soaked alley filled with lies.", category: "Mystery", duration: "5:18", isPremium: false, thumbnail: "/images/mystery1.jpg", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4", source: 'direct' },
@@ -214,9 +211,9 @@ const defaultPromoVideo: PromoVideoSettings = {
   videoType: 'youtube',
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOCAL STORAGE HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// LOCAL STORAGE HELPERS (Aapke original)
+// ============================================================
 const ls = {
   get: <T,>(key: string, fallback: T): T => {
     try {
@@ -227,7 +224,7 @@ const ls = {
     }
   },
   set: (key: string, value: unknown) => {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota */ }
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { }
   },
   remove: (key: string) => localStorage.removeItem(key),
 };
@@ -301,17 +298,11 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
   return { average: simulated, count: 12 + (videoId % 30) };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAYWALL TRACKER
-// ─────────────────────────────────────────────────────────────────────────────
 const getScrollCount = (): number => parseInt(sessionStorage.getItem('rr_scroll_count') || '0');
 const incrementScrollCount = () =>
   sessionStorage.setItem('rr_scroll_count', String(getScrollCount() + 1));
 const resetScrollCount = () => sessionStorage.removeItem('rr_scroll_count');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DATA TOOLS
-// ─────────────────────────────────────────────────────────────────────────────
 const exportSystemBackup = () => {
   const backup = {
     exportedAt: new Date().toISOString(),
@@ -364,9 +355,9 @@ const importSystemBackup = (
   reader.readAsText(file);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
 // SUPABASE HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
 async function safeUpsert(table: string, data: Record<string, unknown>, conflictCol = 'id'): Promise<boolean> {
   try {
     const { error } = await supabase.from(table).upsert(data, { onConflict: conflictCol });
@@ -388,9 +379,9 @@ async function safeMaybeSelect<T>(table: string, filters: Record<string, unknown
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PLATFORM CONTEXT (FIX: Real-time Admin Sync)
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// PLATFORM CONTEXT (NEW - FIX FOR REAL-TIME ADMIN SYNC)
+// ============================================================
 interface PlatformContextValue {
   videos: Video[];
   settings: PlatformSettings;
@@ -399,12 +390,6 @@ interface PlatformContextValue {
   popups: PopupAd[];
   categories: string[];
   refreshAllData: () => void;
-  updateVideos: (videos: Video[]) => void;
-  updateSettings: (settings: PlatformSettings) => void;
-  updateSubSettings: (settings: SubscriptionSettings) => void;
-  updatePaymentConfig: (config: PaymentSettings) => void;
-  updatePopups: (popups: PopupAd[]) => void;
-  updateCategories: (categories: string[]) => void;
 }
 
 const PlatformContext = React.createContext<PlatformContextValue | null>(null);
@@ -434,51 +419,17 @@ function PlatformProvider({ children }: { children: React.ReactNode }) {
     setCategories(getCategories());
   }, []);
 
-  const updateVideos = useCallback((newVideos: Video[]) => {
-    saveVideos(newVideos);
-    setVideos(newVideos);
-  }, []);
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key?.startsWith('reelramp_')) {
+        refreshAllData();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [refreshAllData]);
 
-  const updateSettings = useCallback((newSettings: PlatformSettings) => {
-    saveSettings(newSettings);
-    setSettings(newSettings);
-  }, []);
-
-  const updateSubSettings = useCallback((newSubSettings: SubscriptionSettings) => {
-    saveSubSettings(newSubSettings);
-    setSubSettings(newSubSettings);
-  }, []);
-
-  const updatePaymentConfig = useCallback((newConfig: PaymentSettings) => {
-    savePaymentSettings(newConfig);
-    setPaymentConfig(newConfig);
-  }, []);
-
-  const updatePopups = useCallback((newPopups: PopupAd[]) => {
-    savePopups(newPopups);
-    setPopups(newPopups);
-  }, []);
-
-  const updateCategories = useCallback((newCategories: string[]) => {
-    saveCategories(newCategories);
-    setCategories(newCategories);
-  }, []);
-
-  const value = {
-    videos,
-    settings,
-    subSettings,
-    paymentConfig,
-    popups,
-    categories,
-    refreshAllData,
-    updateVideos,
-    updateSettings,
-    updateSubSettings,
-    updatePaymentConfig,
-    updatePopups,
-    updateCategories,
-  };
+  const value = { videos, settings, subSettings, paymentConfig, popups, categories, refreshAllData };
 
   return (
     <PlatformContext.Provider value={value}>
@@ -487,9 +438,9 @@ function PlatformProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH CONTEXT
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// AUTH CONTEXT (Aapka original)
+// ============================================================
 interface AuthContextValue {
   user: User | null;
   session: Session | null;
@@ -562,9 +513,9 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGO
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// LOGO (Aapka original)
+// ============================================================
 const Logo = ({ size = 32, className = "" }: { size?: number; className?: string }) => (
   <div className={`inline-flex items-center gap-2.5 ${className}`}>
     <svg width={size} height={size} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -584,9 +535,9 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
   </div>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PWA INSTALL BANNER
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// PWA INSTALL BANNER (Aapka original)
+// ============================================================
 function PWAInstallBanner() {
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
   const [show, setShow] = useState(false);
@@ -640,9 +591,9 @@ function PWAInstallBanner() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUBSCRIPTION INTERCEPT MODAL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// SUBSCRIPTION INTERCEPT MODAL (Aapka original)
+// ============================================================
 function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => void; onSubscribe: () => void }) {
   const subSettings = getSubSettings();
   return (
@@ -677,9 +628,9 @@ function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => v
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CINEMATIC PLAYER (FIX: Video loading issue)
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// CINEMATIC PLAYER (FIXED - NO MORE SPINNING CIRCLE HANG)
+// ============================================================
 interface CinematicPlayerProps {
   video: Video;
   isPlaying: boolean;
@@ -694,7 +645,7 @@ interface CinematicPlayerProps {
 
 function CinematicPlayer({
   video, isPlaying, onPlayPause, onEnded,
-  overlayVisible, onUserActivity, resumeFrom = 0, onTimeUpdate
+  onUserActivity, resumeFrom = 0, onTimeUpdate
 }: CinematicPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -713,29 +664,30 @@ function CinematicPlayer({
   const timeUpdateThrottle = useRef(0);
   const loadTimeoutRef = useRef<NodeJS.Timeout>();
 
+  // Handle can play - video is ready
   const handleCanPlay = () => {
     setIsLoaded(true);
     setIsBuffering(false);
     if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
     
     if (isPlaying && videoRef.current) {
-      videoRef.current.play().catch(err => {
-        console.warn("Auto-play failed:", err);
-        setIsBuffering(true);
-      });
+      videoRef.current.play().catch(() => {});
     }
   };
 
+  // Handle waiting (buffering)
   const handleWaiting = () => {
     setIsBuffering(true);
   };
 
+  // Handle playing
   const handlePlaying = () => {
     setIsBuffering(false);
     setIsLoaded(true);
     if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
   };
 
+  // Handle error - show retry button
   const handleError = () => {
     setHasError(true);
     setIsLoaded(false);
@@ -746,31 +698,30 @@ function CinematicPlayer({
         videoRef.current.load();
         setHasError(false);
       }
-    }, 2000);
+    }, 3000);
   };
 
+  // Play/pause control
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !isLoaded) return;
 
     if (isPlaying) {
-      const playPromise = v.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          setIsBuffering(true);
-          setTimeout(() => {
-            if (videoRef.current && isPlaying) {
-              videoRef.current.play().catch(() => {});
-            }
-          }, 500);
-        });
-      }
+      v.play().catch(() => {
+        setIsBuffering(true);
+        setTimeout(() => {
+          if (videoRef.current && isPlaying) {
+            videoRef.current.play().catch(() => {});
+          }
+        }, 500);
+      });
     } else {
       v.pause();
       setIsBuffering(false);
     }
   }, [isPlaying, isLoaded]);
 
+  // Resume from timestamp
   useEffect(() => {
     const v = videoRef.current;
     if (v && resumeFrom > 0 && !hasResumed.current && isLoaded) {
@@ -779,6 +730,7 @@ function CinematicPlayer({
     }
   }, [resumeFrom, isLoaded]);
 
+  // Loading timeout fallback
   useEffect(() => {
     loadTimeoutRef.current = setTimeout(() => {
       if (!isLoaded && !hasError) {
@@ -786,7 +738,7 @@ function CinematicPlayer({
           videoRef.current.load();
         }
       }
-    }, 8000);
+    }, 10000);
 
     return () => {
       if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
@@ -812,6 +764,7 @@ function CinematicPlayer({
     onTimeUpdate?.(t, duration);
   };
 
+  // Scroll to seek
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -914,24 +867,26 @@ function CinematicPlayer({
         }}
       />
 
+      {/* Loading Spinner - ONLY shows during actual buffering/loading */}
       {(!isLoaded || isBuffering) && !hasError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-20">
           <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
+      {/* Error state with retry button */}
       {hasError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-20">
           <div className="text-center">
-            <div className="text-[#e11d48] mb-2">⚠️</div>
-            <div className="text-white text-sm mb-3">Unable to load video</div>
+            <div className="text-[#e11d48] text-4xl mb-3">⚠️</div>
+            <div className="text-white text-sm mb-4">Unable to load video</div>
             <button 
               onClick={() => {
                 setHasError(false);
                 setIsLoaded(false);
                 if (videoRef.current) videoRef.current.load();
               }}
-              className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs font-medium"
+              className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-xl text-sm font-medium"
             >
               Retry
             </button>
@@ -986,9 +941,9 @@ function CinematicPlayer({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONTINUE WATCHING RAIL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// CONTINUE WATCHING RAIL (Aapka original)
+// ============================================================
 function ContinueWatchingRail({ onNavigate }: { onNavigate: (id: number, timestamp: number) => void }) {
   const [items, setItems] = useState<(WatchHistoryItem & { video: Video })[]>([]);
 
@@ -1044,9 +999,9 @@ function ContinueWatchingRail({ onNavigate }: { onNavigate: (id: number, timesta
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// APP SHELL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// APP SHELL (UPDATED WITH PlatformProvider)
+// ============================================================
 function App() {
   useEffect(() => {
     let meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement | null;
@@ -1106,9 +1061,9 @@ function AppContent() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGIN PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// LOGIN PAGE (Aapka original)
+// ============================================================
 function LoginPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -1239,9 +1194,9 @@ function LoginPage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HOME PAGE (with Platform Context)
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// HOME PAGE (UPDATED with usePlatform for real-time sync)
+// ============================================================
 function HomePage() {
   const navigate = useNavigate();
   const { user, isSubscribed } = useAuth();
@@ -1256,11 +1211,10 @@ function HomePage() {
   const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
+  // Listen for storage events to sync across tabs
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'reelramp_videos' || e.key === 'reelramp_settings' || 
-          e.key === 'reelramp_sub_settings' || e.key === 'reelramp_popups' ||
-          e.key === 'reelramp_categories') {
+      if (e.key && e.key.startsWith('reelramp_')) {
         refreshAllData();
       }
     };
@@ -1509,9 +1463,9 @@ function HomePage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// VIDEO CARD
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// VIDEO CARD (Aapka original)
+// ============================================================
 interface VideoCardProps {
   video: Video;
   isSubscribed: boolean;
@@ -1558,9 +1512,9 @@ function VideoCard({ video, isSubscribed, isSaved, onClick, onSave }: VideoCardP
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAYWALL MODAL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// PAYWALL MODAL (Aapka original)
+// ============================================================
 function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: () => void; onSubscribe: () => void }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 px-4" onClick={onClose}>
@@ -1586,9 +1540,9 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SHORTS PLAYER PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// SHORTS PLAYER PAGE (Aapka original with fixed CinematicPlayer)
+// ============================================================
 function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -1824,9 +1778,9 @@ function ShortsPlayerPage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DIGITAL STORE PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// DIGITAL STORE PAGE (Aapka original)
+// ============================================================
 function DigitalStorePage() {
   const navigate = useNavigate();
   const { isSubscribed } = useAuth();
@@ -1903,9 +1857,9 @@ function DigitalStorePage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUBSCRIPTION PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// SUBSCRIPTION PAGE (Aapka original)
+// ============================================================
 function SubscriptionPage() {
   const navigate = useNavigate();
   const { user, isSubscribed, setIsSubscribed } = useAuth();
@@ -2048,9 +2002,9 @@ function SubscriptionPage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PROFILE PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// PROFILE PAGE (Aapka original)
+// ============================================================
 function ProfilePage() {
   const navigate = useNavigate();
   const { user, isSubscribed, isGuest, signOut, loading } = useAuth();
@@ -2318,9 +2272,9 @@ function ProfilePage() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FOOTER (with Platform Context)
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// FOOTER (UPDATED with usePlatform for real-time settings)
+// ============================================================
 function Footer() {
   const { settings } = usePlatform();
   const socialLinks = [
@@ -2386,9 +2340,9 @@ function Footer() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOTTOM NAVIGATION
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// BOTTOM NAVIGATION (Aapka original)
+// ============================================================
 function BottomNavigation() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -2419,9 +2373,9 @@ function BottomNavigation() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LEGAL PAGES
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// LEGAL PAGES (Aapka original)
+// ============================================================
 function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping' }) {
   const navigate = useNavigate();
   const titles: Record<string, string> = { privacy: "Privacy Policy", terms: "Terms & Conditions", refund: "Cancellation & Refund Policy", shipping: "Shipping & Delivery Policy" };
@@ -2444,9 +2398,9 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping'
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EDITOR PANEL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// EDITOR PANEL (Aapka original - simple)
+// ============================================================
 function EditorPanel() {
   const navigate = useNavigate();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -2494,9 +2448,9 @@ function EditorPanel() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OWNER PANEL
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// OWNER PANEL (Aapka original - simple)
+// ============================================================
 function OwnerPanel() {
   const navigate = useNavigate();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -2552,9 +2506,9 @@ function OwnerPanel() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================
+// ADMIN PAGE (Aapka original with refreshAllData)
+// ============================================================
 function AdminPage() {
   const navigate = useNavigate();
   const { refreshAllData } = usePlatform();
@@ -2563,11 +2517,7 @@ function AdminPage() {
   const [adminPass, setAdminPass] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loggedInAdmin, setLoggedInAdmin] = useState('');
-  const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'content' | 'users' | 'analytics' | 'popups' |
-    'settings' | 'plans' | 'payment' | 'categories' | 'promo' |
-    'revenue' | 'store' | 'datatools'
-  >('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'users' | 'analytics' | 'popups' | 'settings' | 'plans' | 'payment' | 'categories' | 'promo' | 'revenue' | 'store' | 'datatools'>('dashboard');
 
   const [adminVideos, setAdminVideos] = useState<Video[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>(initialAdminUsers);
@@ -2585,7 +2535,7 @@ function AdminPage() {
   const [editingCatName, setEditingCatName] = useState<string | null>(null);
   const [editingCatValue, setEditingCatValue] = useState('');
   const [toast, setToast] = useState('');
-  const [syncing, setSyncing] = useState(false);
+  const [syncing] = useState(false);
   const [formData, setFormData] = useState({
     title: '', description: '', category: 'Horror', duration: '4:30',
     isPremium: true, thumbnail: '', videoUrl: ''
@@ -2629,15 +2579,10 @@ function AdminPage() {
     setAdminUsers(ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers));
   }, [isAuthorized]);
 
-  const persistVideos = async (updated: Video[]) => {
+  const persistVideos = (updated: Video[]) => {
     setAdminVideos(updated);
     saveVideos(updated);
     refreshAllData();
-    setSyncing(true);
-    supabase.from('videos').upsert(updated)
-      .then(() => {})
-      .catch(() => {})
-      .finally(() => setSyncing(false));
   };
 
   const persistPopups = (updated: PopupAd[]) => { 
@@ -2658,7 +2603,7 @@ function AdminPage() {
     setShowAddModal(true);
   };
 
-  const saveVideo = async () => {
+  const saveVideo = () => {
     if (!formData.title.trim()) return;
     let updated: Video[];
     if (editingVideo) {
@@ -2669,20 +2614,15 @@ function AdminPage() {
     }
     setShowAddModal(false);
     showToast(editingVideo ? "✅ Short updated!" : "✅ Short published!");
-    await persistVideos(updated);
+    persistVideos(updated);
   };
 
-  const deleteVideo = async (id: number) => {
+  const deleteVideo = (id: number) => {
     const updated = adminVideos.filter(v => v.id !== id);
     setAdminVideos(updated);
     saveVideos(updated);
     refreshAllData();
     showToast("Short deleted.");
-    setSyncing(true);
-    supabase.from('videos').delete().eq('id', id)
-      .then(() => {})
-      .catch(() => {})
-      .finally(() => setSyncing(false));
   };
 
   const toggleUserSub = (userId: number) => {
@@ -2873,37 +2813,17 @@ function AdminPage() {
             <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
               <table className="w-full min-w-[640px]">
                 <thead className="border-b border-[#222] text-sm text-[#a1a1aa]">
-                  <tr>
-                    <th className="text-left py-4 px-6">Short</th>
-                    <th className="text-left py-4">Category</th>
-                    <th className="text-left py-4">Duration</th>
-                    <th className="text-left py-4">Views</th>
-                    <th className="text-left py-4">Access</th>
-                    <th className="text-right py-4 px-6">Actions</th>
-                  </tr>
+                  <tr><th className="text-left py-4 px-6">Short</th><th className="text-left py-4">Category</th><th className="text-left py-4">Duration</th><th className="text-left py-4">Views</th><th className="text-left py-4">Access</th><th className="text-right py-4 px-6">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-[#222]">
                   {adminVideos.map(video => (
                     <tr key={video.id} className="hover:bg-[#1a1a1a] transition-colors">
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-4">
-                          <img src={video.thumbnail} className="w-12 h-12 object-cover rounded-xl flex-shrink-0" alt="" />
-                          <div>
-                            <div className="font-medium text-sm">{video.title}</div>
-                            <div className="text-xs text-[#666] line-clamp-1">{video.description}</div>
-                          </div>
-                        </div>
-                      </td>
+                      <td className="py-4 px-6"><div className="flex items-center gap-4"><img src={video.thumbnail} className="w-12 h-12 object-cover rounded-xl flex-shrink-0" alt="" /><div><div className="font-medium text-sm">{video.title}</div><div className="text-xs text-[#666] line-clamp-1">{video.description}</div></div></div></td>
                       <td className="text-sm text-[#a1a1aa]">{video.category}</td>
                       <td className="font-mono text-sm text-[#a1a1aa]">{video.duration}</td>
                       <td className="font-mono text-sm text-[#c5a26f]">{videoViews[video.id] || 0}</td>
                       <td>{video.isPremium ? <span className="text-xs px-2 py-px bg-[#e11d48] rounded">PREMIUM</span> : <span className="text-xs px-2 py-px bg-[#22c55e] text-black rounded">FREE</span>}</td>
-                      <td className="text-right px-6">
-                        <div className="flex justify-end gap-1">
-                          <button onClick={() => openEditModal(video)} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl"><Edit2 size={16} /></button>
-                          <button onClick={() => deleteVideo(video.id)} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={16} /></button>
-                        </div>
-                      </td>
+                      <td className="text-right px-6"><div className="flex justify-end gap-1"><button onClick={() => openEditModal(video)} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl"><Edit2 size={16} /></button><button onClick={() => deleteVideo(video.id)} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={16} /></button></div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2915,52 +2835,19 @@ function AdminPage() {
         {activeTab === 'store' && (
           <div>
             <div className="flex justify-between mb-6 flex-wrap gap-3">
-              <div>
-                <h3 className="text-3xl font-semibold tracking-tight">Store Inventory</h3>
-                <p className="text-[#a1a1aa] text-sm mt-1">Add, edit, or remove digital products.</p>
-              </div>
-              <button
-                onClick={() => { setProductForm({ title: '', description: '', price: 999, category: 'workshop', thumbnailUrl: '', isPremium: false, badge: '' }); setEditingProduct(null); setShowProductModal(true); }}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#c5a26f] text-black font-medium text-sm active:scale-95 transition-transform self-start">
-                <Plus size={17} /> Add Product
-              </button>
+              <div><h3 className="text-3xl font-semibold tracking-tight">Store Inventory</h3><p className="text-[#a1a1aa] text-sm mt-1">Add, edit, or remove digital products.</p></div>
+              <button onClick={() => { setProductForm({ title: '', description: '', price: 999, category: 'workshop', thumbnailUrl: '', isPremium: false, badge: '' }); setEditingProduct(null); setShowProductModal(true); }} className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#c5a26f] text-black font-medium text-sm active:scale-95 transition-transform self-start"><Plus size={17} /> Add Product</button>
             </div>
             <div className="grid grid-cols-3 gap-4 mb-6">
-              {[
-                { label: 'Total Products', value: digitalProducts.length },
-                { label: 'Workshops', value: digitalProducts.filter(p => p.category === 'workshop').length },
-                { label: 'Premium Items', value: digitalProducts.filter(p => p.isPremium).length },
-              ].map((s, i) => (
-                <div key={i} className="bg-[#111] border border-[#222] rounded-2xl p-4 sm:p-5">
-                  <div className="text-xs text-[#666] tracking-widest">{s.label}</div>
-                  <div className="text-2xl sm:text-3xl font-semibold mt-1">{s.value}</div>
-                </div>
+              {[{ label: 'Total Products', value: digitalProducts.length }, { label: 'Workshops', value: digitalProducts.filter(p => p.category === 'workshop').length }, { label: 'Premium Items', value: digitalProducts.filter(p => p.isPremium).length }].map((s, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-2xl p-4 sm:p-5"><div className="text-xs text-[#666] tracking-widest">{s.label}</div><div className="text-2xl sm:text-3xl font-semibold mt-1">{s.value}</div></div>
               ))}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               {digitalProducts.map(product => (
                 <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
-                  <div className="relative aspect-video overflow-hidden bg-[#1a1a1a]">
-                    <img src={product.thumbnailUrl} alt={product.title} className="w-full h-full object-cover"
-                      onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />
-                    {product.badge && <div className="absolute top-2 left-2 bg-[#c5a26f] text-black text-[9px] px-2 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}
-                  </div>
-                  <div className="p-4">
-                    <div className="text-xs text-[#c5a26f] mb-1 tracking-widest uppercase">{product.category}</div>
-                    <div className="font-semibold text-sm mb-1 line-clamp-1">{product.title}</div>
-                    <div className="text-2xl font-semibold text-[#c5a26f] mb-3">₹{product.price.toLocaleString()}</div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setProductForm({ title: product.title, description: product.description, price: product.price, category: product.category, thumbnailUrl: product.thumbnailUrl, isPremium: product.isPremium, badge: product.badge || '' }); setEditingProduct(product); setShowProductModal(true); }}
-                        className="flex-1 py-2.5 bg-[#222] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform">
-                        <Edit2 size={13} /> Edit
-                      </button>
-                      <button onClick={() => deleteProduct(product.id)}
-                        className="flex-1 py-2.5 bg-[#e11d48]/10 text-[#e11d48] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform">
-                        <Trash2 size={13} /> Delete
-                      </button>
-                    </div>
-                  </div>
+                  <div className="relative aspect-video overflow-hidden bg-[#1a1a1a]"><img src={product.thumbnailUrl} alt={product.title} className="w-full h-full object-cover" onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />{product.badge && <div className="absolute top-2 left-2 bg-[#c5a26f] text-black text-[9px] px-2 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}</div>
+                  <div className="p-4"><div className="text-xs text-[#c5a26f] mb-1 tracking-widest uppercase">{product.category}</div><div className="font-semibold text-sm mb-1 line-clamp-1">{product.title}</div><div className="text-2xl font-semibold text-[#c5a26f] mb-3">₹{product.price.toLocaleString()}</div><div className="flex gap-2"><button onClick={() => { setProductForm({ title: product.title, description: product.description, price: product.price, category: product.category, thumbnailUrl: product.thumbnailUrl, isPremium: product.isPremium, badge: product.badge || '' }); setEditingProduct(product); setShowProductModal(true); }} className="flex-1 py-2.5 bg-[#222] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform"><Edit2 size={13} /> Edit</button><button onClick={() => deleteProduct(product.id)} className="flex-1 py-2.5 bg-[#e11d48]/10 text-[#e11d48] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform"><Trash2 size={13} /> Delete</button></div></div>
                 </div>
               ))}
             </div>
@@ -2969,320 +2856,59 @@ function AdminPage() {
 
         {activeTab === 'revenue' && (
           <div className="max-w-4xl">
-            <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
-              <div>
-                <h3 className="text-3xl font-semibold tracking-tight">Revenue Sharing</h3>
-                <p className="text-[#a1a1aa] text-sm mt-1">Creator payout calculator.</p>
-              </div>
-              <button onClick={downloadRevenueReport} className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm active:scale-95 transition-transform">
-                <FileText size={16} /> Download Report
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-4 mb-8">
-              {[
-                { label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}`, color: 'text-white' },
-                { label: `Platform (${platformSplit}%)`, value: `₹${platformRevenue.toLocaleString()}`, color: 'text-[#c5a26f]' },
-                { label: `Creators (${creatorSplit}%)`, value: `₹${creatorRevenue.toLocaleString()}`, color: 'text-[#22c55e]' },
-              ].map((m, i) => (
-                <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6">
-                  <div className="text-xs text-[#666] tracking-widest mb-1">{m.label}</div>
-                  <div className={`text-2xl sm:text-4xl font-semibold tracking-tighter ${m.color}`}>{m.value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-8">
-              <div className="font-medium mb-4">Adjust Split Ratio</div>
-              <div className="flex items-center gap-4 mb-3">
-                <span className="text-sm text-[#a1a1aa] w-24">Platform {platformSplit}%</span>
-                <input type="range" min={30} max={90} step={5} value={platformSplit} onChange={e => setPlatformSplit(Number(e.target.value))} className="flex-1 accent-[#c5a26f]" />
-                <span className="text-sm text-[#22c55e] w-24 text-right">Creators {creatorSplit}%</span>
-              </div>
-              <div className="w-full h-3 bg-[#1a1a1a] rounded-full overflow-hidden flex">
-                <div className="h-full bg-[#c5a26f] transition-all" style={{ width: `${platformSplit}%` }} />
-                <div className="h-full bg-[#22c55e] transition-all flex-1" />
-              </div>
-            </div>
-            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
-              <div className="px-6 py-4 border-b border-[#222] font-medium">Creator Allocations</div>
-              <table className="w-full text-sm min-w-[400px]">
-                <thead className="text-[#a1a1aa] border-b border-[#222]">
-                  <tr>
-                    <th className="text-left py-3 px-6">Creator</th>
-                    <th className="text-left py-3">Video</th>
-                    <th className="text-left py-3">Views</th>
-                    <th className="text-right py-3 px-6">Payout</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#222]">
-                  {creatorEntries.map((e, i) => (
-                    <tr key={i} className="hover:bg-[#1a1a1a]">
-                      <td className="py-4 px-6 font-medium">{e.creatorName}</td>
-                      <td className="text-[#a1a1aa] line-clamp-1 max-w-[160px]">{e.videoTitle}</td>
-                      <td className="font-mono text-[#c5a26f]">{e.totalViews}</td>
-                      <td className="text-right px-6 font-semibold text-[#22c55e]">₹{e.revenueShare.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <div className="flex items-start justify-between mb-6 flex-wrap gap-3"><div><h3 className="text-3xl font-semibold tracking-tight">Revenue Sharing</h3><p className="text-[#a1a1aa] text-sm mt-1">Creator payout calculator.</p></div><button onClick={downloadRevenueReport} className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm active:scale-95 transition-transform"><FileText size={16} /> Download Report</button></div>
+            <div className="grid grid-cols-3 gap-4 mb-8">{[{ label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}`, color: 'text-white' }, { label: `Platform (${platformSplit}%)`, value: `₹${platformRevenue.toLocaleString()}`, color: 'text-[#c5a26f]' }, { label: `Creators (${creatorSplit}%)`, value: `₹${creatorRevenue.toLocaleString()}`, color: 'text-[#22c55e]' }].map((m, i) => (<div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6"><div className="text-xs text-[#666] tracking-widest mb-1">{m.label}</div><div className={`text-2xl sm:text-4xl font-semibold tracking-tighter ${m.color}`}>{m.value}</div></div>))}</div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-8"><div className="font-medium mb-4">Adjust Split Ratio</div><div className="flex items-center gap-4 mb-3"><span className="text-sm text-[#a1a1aa] w-24">Platform {platformSplit}%</span><input type="range" min={30} max={90} step={5} value={platformSplit} onChange={e => setPlatformSplit(Number(e.target.value))} className="flex-1 accent-[#c5a26f]" /><span className="text-sm text-[#22c55e] w-24 text-right">Creators {creatorSplit}%</span></div><div className="w-full h-3 bg-[#1a1a1a] rounded-full overflow-hidden flex"><div className="h-full bg-[#c5a26f] transition-all" style={{ width: `${platformSplit}%` }} /><div className="h-full bg-[#22c55e] transition-all flex-1" /></div></div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto"><div className="px-6 py-4 border-b border-[#222] font-medium">Creator Allocations</div><table className="w-full text-sm min-w-[400px]"><thead className="text-[#a1a1aa] border-b border-[#222]"><tr><th className="text-left py-3 px-6">Creator</th><th className="text-left py-3">Video</th><th className="text-left py-3">Views</th><th className="text-right py-3 px-6">Payout</th></tr></thead><tbody className="divide-y divide-[#222]">{creatorEntries.map((e, i) => (<tr key={i} className="hover:bg-[#1a1a1a]"><td className="py-4 px-6 font-medium">{e.creatorName}</td><td className="text-[#a1a1aa] line-clamp-1 max-w-[160px]">{e.videoTitle}</td><td className="font-mono text-[#c5a26f]">{e.totalViews}</td><td className="text-right px-6 font-semibold text-[#22c55e]">₹{e.revenueShare.toLocaleString()}</td></tr>))}</tbody></table></div>
           </div>
         )}
 
         {activeTab === 'popups' && (
-          <div>
-            <div className="flex justify-between items-center mb-7 flex-wrap gap-3">
-              <div>
-                <h3 className="text-3xl font-semibold tracking-tight">Popup Ads</h3>
-                <p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p>
-              </div>
-              <button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }}
-                className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm active:scale-95 transition-transform"><Plus size={16} /> New Popup</button>
-            </div>
-            <div className="space-y-4">
-              {popups.map(popup => (
-                <div key={popup.id} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex flex-col md:flex-row gap-6 items-start">
-                  <img src={popup.imageUrl} className="w-full md:w-64 h-36 object-cover rounded-2xl" alt="" />
-                  <div className="flex-1">
-                    <div className="font-semibold text-xl mb-2">{popup.title}</div>
-                    <div className="text-xs text-[#666] font-mono mb-4">{popup.redirectUrl}</div>
-                    <div className="flex gap-3 flex-wrap">
-                      <button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }}
-                        className={`px-5 py-2 rounded-2xl text-sm active:scale-95 transition-transform ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button>
-                      <button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm active:scale-95 transition-transform">Edit</button>
-                      <button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm active:scale-95 transition-transform">Delete</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <AnimatePresence>
-              {editingPopup && (
-                <div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6">
-                  <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
-                    className="bg-[#111] p-8 rounded-3xl w-full max-w-md border border-[#333]">
-                    <div className="text-xl font-medium mb-6">Edit Popup</div>
-                    {[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (
-                      <div key={f.key} className="mb-4">
-                        <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                        <input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" />
-                      </div>
-                    ))}
-                    <div className="flex gap-3">
-                      <button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button>
-                      <button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl active:scale-95 transition-transform">Save</button>
-                    </div>
-                  </motion.div>
-                </div>
-              )}
-            </AnimatePresence>
+          <div><div className="flex justify-between items-center mb-7 flex-wrap gap-3"><div><h3 className="text-3xl font-semibold tracking-tight">Popup Ads</h3><p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p></div><button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }} className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm active:scale-95 transition-transform"><Plus size={16} /> New Popup</button></div><div className="space-y-4">{popups.map(popup => (<div key={popup.id} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex flex-col md:flex-row gap-6 items-start"><img src={popup.imageUrl} className="w-full md:w-64 h-36 object-cover rounded-2xl" alt="" /><div className="flex-1"><div className="font-semibold text-xl mb-2">{popup.title}</div><div className="text-xs text-[#666] font-mono mb-4">{popup.redirectUrl}</div><div className="flex gap-3 flex-wrap"><button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }} className={`px-5 py-2 rounded-2xl text-sm active:scale-95 transition-transform ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button><button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm active:scale-95 transition-transform">Edit</button><button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm active:scale-95 transition-transform">Delete</button></div></div></div>))}</div>
+            <AnimatePresence>{editingPopup && (<div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6"><motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="bg-[#111] p-8 rounded-3xl w-full max-w-md border border-[#333]"><div className="text-xl font-medium mb-6">Edit Popup</div>{[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (<div key={f.key} className="mb-4"><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" /></div>))}<div className="flex gap-3"><button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button><button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl active:scale-95 transition-transform">Save</button></div></motion.div></div>)}</AnimatePresence>
           </div>
         )}
 
         {activeTab === 'users' && (
-          <div>
-            <h3 className="text-3xl font-semibold tracking-tight mb-6">User Management • {premiumUsers} Premium</h3>
-            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
-              <table className="w-full min-w-[560px] text-sm">
-                <thead className="border-b border-[#222] text-[#a1a1aa]">
-                  <tr>
-                    <th className="py-4 px-6 text-left">User</th>
-                    <th className="py-4 text-left">Joined</th>
-                    <th className="py-4 text-left">Watched</th>
-                    <th className="py-4 px-6 text-left">Status</th>
-                    <th className="py-4 px-6 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#222]">
-                  {adminUsers.map(u => (
-                    <tr key={u.id}>
-                      <td className="py-5 px-6"><div className="font-medium">{u.name}</div><div className="text-xs text-[#666]">{u.email}</div></td>
-                      <td className="text-[#a1a1aa]">{u.joinDate}</td>
-                      <td className="font-mono">{u.totalWatched}</td>
-                      <td className="px-6"><span className={`px-3 py-px rounded text-xs ${u.subscribed ? 'bg-[#c5a26f] text-black' : 'bg-[#333]'}`}>{u.subscribed ? "PREMIUM" : "FREE"}</span></td>
-                      <td className="px-6 text-right"><button onClick={() => toggleUserSub(u.id)} className="px-4 py-2 border border-[#333] rounded-xl text-xs hover:bg-[#222] active:scale-95 transition-all">{u.subscribed ? "Revoke" : "Upgrade"}</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <div><h3 className="text-3xl font-semibold tracking-tight mb-6">User Management • {premiumUsers} Premium</h3><div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead className="border-b border-[#222] text-[#a1a1aa]"><tr><th className="py-4 px-6 text-left">User</th><th className="py-4 text-left">Joined</th><th className="py-4 text-left">Watched</th><th className="py-4 px-6 text-left">Status</th><th className="py-4 px-6 text-right">Actions</th></tr></thead><tbody className="divide-y divide-[#222]">{adminUsers.map(u => (<tr key={u.id}><td className="py-5 px-6"><div className="font-medium">{u.name}</div><div className="text-xs text-[#666]">{u.email}</div></td><td className="text-[#a1a1aa]">{u.joinDate}</td><td className="font-mono">{u.totalWatched}</td><td className="px-6"><span className={`px-3 py-px rounded text-xs ${u.subscribed ? 'bg-[#c5a26f] text-black' : 'bg-[#333]'}`}>{u.subscribed ? "PREMIUM" : "FREE"}</span></td><td className="px-6 text-right"><button onClick={() => toggleUserSub(u.id)} className="px-4 py-2 border border-[#333] rounded-xl text-xs hover:bg-[#222] active:scale-95 transition-all">{u.subscribed ? "Revoke" : "Upgrade"}</button></td></tr>))}</tbody></table></div></div>
         )}
 
         {activeTab === 'analytics' && (
-          <div>
-            <h3 className="text-3xl font-semibold tracking-tight mb-6">Revenue Dashboard</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-              {[
-                { label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}` },
-                { label: "Monthly Recurring", value: "₹7,298" },
-                { label: "Active Subscribers", value: premiumUsers },
-                { label: "Trial Conversions", value: "64%" },
-              ].map((m, i) => (
-                <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6">
-                  <div className="text-xs text-[#666] tracking-wider">{m.label}</div>
-                  <div className="text-3xl sm:text-4xl font-semibold tracking-tighter mt-1">{m.value}</div>
-                </div>
-              ))}
-            </div>
-            <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
-              <div className="font-medium mb-6">Recent Transactions</div>
-              <div className="space-y-4">
-                {getRevenueData().slice().reverse().map((entry, i) => (
-                  <div key={i} className="flex items-center justify-between py-3 border-b border-[#222] last:border-0">
-                    <div><div className="font-medium">{entry.plan}</div><div className="text-xs text-[#666]">{entry.date}</div></div>
-                    <div className="text-right"><div className="font-semibold text-[#c5a26f]">+₹{entry.amount}</div><div className="text-xs text-[#666]">{entry.type}</div></div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <div><h3 className="text-3xl font-semibold tracking-tight mb-6">Revenue Dashboard</h3><div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">{[{ label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}` }, { label: "Monthly Recurring", value: "₹7,298" }, { label: "Active Subscribers", value: premiumUsers }, { label: "Trial Conversions", value: "64%" }].map((m, i) => (<div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6"><div className="text-xs text-[#666] tracking-wider">{m.label}</div><div className="text-3xl sm:text-4xl font-semibold tracking-tighter mt-1">{m.value}</div></div>))}</div><div className="bg-[#111] border border-[#222] rounded-3xl p-8"><div className="font-medium mb-6">Recent Transactions</div><div className="space-y-4">{getRevenueData().slice().reverse().map((entry, i) => (<div key={i} className="flex items-center justify-between py-3 border-b border-[#222] last:border-0"><div><div className="font-medium">{entry.plan}</div><div className="text-xs text-[#666]">{entry.date}</div></div><div className="text-right"><div className="font-semibold text-[#c5a26f]">+₹{entry.amount}</div><div className="text-xs text-[#666]">{entry.type}</div></div></div>))}</div></div></div>
         )}
 
         {activeTab === 'settings' && (
-          <div className="max-w-2xl">
-            <h3 className="text-3xl font-semibold tracking-tight mb-6">Platform Settings</h3>
-            <div className="space-y-4">
-              {[
-                { label: "App Name", key: 'appName' as const },
-                { label: "Tagline", key: 'tagline' as const },
-                { label: "Support Email", key: 'supportEmail' as const },
-                { label: "Support Phone", key: 'supportPhone' as const },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                  <input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
-                </div>
-              ))}
-              <div>
-                <label className="text-xs text-[#666] mb-2 block">Accent Color</label>
-                <div className="flex items-center gap-3">
-                  <input type="color" value={platformSettings.accentColor} onChange={e => setPlatformSettings({ ...platformSettings, accentColor: e.target.value })} className="w-12 h-10 rounded-xl cursor-pointer" />
-                  <span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span>
-                </div>
-              </div>
-              <button onClick={async () => { saveSettings(platformSettings); refreshAllData(); showToast("✅ Platform settings saved!"); }}
-                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLATFORM SETTINGS</button>
-            </div>
-          </div>
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Platform Settings</h3><div className="space-y-4">{[{ label: "App Name", key: 'appName' as const }, { label: "Tagline", key: 'tagline' as const }, { label: "Support Email", key: 'supportEmail' as const }, { label: "Support Phone", key: 'supportPhone' as const }].map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>))}<div><label className="text-xs text-[#666] mb-2 block">Accent Color</label><div className="flex items-center gap-3"><input type="color" value={platformSettings.accentColor} onChange={e => setPlatformSettings({ ...platformSettings, accentColor: e.target.value })} className="w-12 h-10 rounded-xl cursor-pointer" /><span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span></div></div><button onClick={() => { saveSettings(platformSettings); refreshAllData(); showToast("✅ Platform settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLATFORM SETTINGS</button></div></div>
         )}
 
         {activeTab === 'plans' && (
-          <div className="max-w-2xl">
-            <h3 className="text-3xl font-semibold tracking-tight mb-6">Plan Settings</h3>
-            <div className="space-y-4">
-              {[
-                { label: "Trial Price", key: 'trialOfferPrice' as const },
-                { label: "Trial Duration", key: 'trialOfferDuration' as const },
-                { label: "Full Price", key: 'fullPrice' as const },
-                { label: "Full Plan Validity", key: 'fullValidity' as const },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                  <input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })}
-                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
-                </div>
-              ))}
-              <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
-                <div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div>
-                <button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })}
-                  className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
-                  <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} />
-                </button>
-              </div>
-              <button onClick={async () => { saveSubSettings(subSettings); refreshAllData(); showToast("✅ Plan settings saved!"); }}
-                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLAN SETTINGS</button>
-            </div>
-          </div>
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Plan Settings</h3><div className="space-y-4">{[{ label: "Trial Price", key: 'trialOfferPrice' as const }, { label: "Trial Duration", key: 'trialOfferDuration' as const }, { label: "Full Price", key: 'fullPrice' as const }, { label: "Full Plan Validity", key: 'fullValidity' as const }].map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>))}<div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div><button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })} className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} /></button></div><button onClick={() => { saveSubSettings(subSettings); refreshAllData(); showToast("✅ Plan settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLAN SETTINGS</button></div></div>
         )}
 
         {activeTab === 'payment' && (
-          <div className="max-w-2xl">
-            <h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3>
-            <p className="text-[#a1a1aa] text-sm mb-6">Active gateway routes live to checkout.</p>
-            <div className="space-y-4">
-              <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
-                <div className="text-xs text-[#c5a26f] tracking-widest font-medium">ACTIVE GATEWAY</div>
-                <div className="grid grid-cols-2 gap-3">
-                  {(['razorpay', 'stripe', 'upi', 'none'] as const).map(gw => (
-                    <button key={gw} onClick={() => setPaymentConfig({ ...paymentConfig, activeGateway: gw })}
-                      className={`py-3 rounded-2xl text-sm font-medium border transition active:scale-95 ${paymentConfig.activeGateway === gw ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>
-                      {gw === 'none' ? 'None / Manual' : gw.charAt(0).toUpperCase() + gw.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
-                  <div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Real payments only</div></div>
-                  <button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })}
-                    className={`w-12 h-6 rounded-full transition-colors active:scale-95 ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}>
-                    <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-              </div>
-
-              {[
-                { title: 'RAZORPAY', fields: [{ label: 'Key ID', key: 'razorpayKeyId' as const, placeholder: 'rzp_test_...' }, { label: 'Key Secret', key: 'razorpayKeySecret' as const, placeholder: '••••••••', type: 'password' }] },
-                { title: 'UPI', fields: [{ label: 'UPI ID', key: 'upiId' as const, placeholder: 'yourname@upi' }] },
-                { title: 'STRIPE', fields: [{ label: 'Publishable Key', key: 'stripePublishableKey' as const, placeholder: 'pk_test_...' }] },
-              ].map(section => (
-                <div key={section.title} className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
-                  <div className="text-xs text-[#a1a1aa] tracking-widest font-medium">{section.title}</div>
-                  {section.fields.map(f => (
-                    <div key={f.key}>
-                      <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
-                      <input type={f.type || 'text'} value={paymentConfig[f.key] as string} onChange={e => setPaymentConfig({ ...paymentConfig, [f.key]: e.target.value })}
-                        className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder={f.placeholder} />
-                    </div>
-                  ))}
-                </div>
-              ))}
-
-              <button
-                onClick={async () => {
-                  savePaymentSettings(paymentConfig);
-                  refreshAllData();
-                  showToast("✅ Payment settings saved!");
-                }}
-                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">
-                SAVE PAYMENT SETTINGS
-              </button>
-            </div>
-          </div>
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3><p className="text-[#a1a1aa] text-sm mb-6">Active gateway routes live to checkout.</p><div className="space-y-4"><div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#c5a26f] tracking-widest font-medium">ACTIVE GATEWAY</div><div className="grid grid-cols-2 gap-3">{(['razorpay', 'stripe', 'upi', 'none'] as const).map(gw => (<button key={gw} onClick={() => setPaymentConfig({ ...paymentConfig, activeGateway: gw })} className={`py-3 rounded-2xl text-sm font-medium border transition active:scale-95 ${paymentConfig.activeGateway === gw ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{gw === 'none' ? 'None / Manual' : gw.charAt(0).toUpperCase() + gw.slice(1)}</button>))}</div><div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Real payments only</div></div><button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })} className={`w-12 h-6 rounded-full transition-colors active:scale-95 ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} /></button></div></div>{[{ title: 'RAZORPAY', fields: [{ label: 'Key ID', key: 'razorpayKeyId' as const, placeholder: 'rzp_test_...' }, { label: 'Key Secret', key: 'razorpayKeySecret' as const, placeholder: '••••••••', type: 'password' }] }, { title: 'UPI', fields: [{ label: 'UPI ID', key: 'upiId' as const, placeholder: 'yourname@upi' }] }, { title: 'STRIPE', fields: [{ label: 'Publishable Key', key: 'stripePublishableKey' as const, placeholder: 'pk_test_...' }] }].map(section => (<div key={section.title} className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#a1a1aa] tracking-widest font-medium">{section.title}</div>{section.fields.map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input type={f.type || 'text'} value={paymentConfig[f.key] as string} onChange={e => setPaymentConfig({ ...paymentConfig, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder={f.placeholder} /></div>))}</div>))}<button onClick={() => { savePaymentSettings(paymentConfig); refreshAllData(); showToast("✅ Payment settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PAYMENT SETTINGS</button></div></div>
         )}
 
         {activeTab === 'categories' && (
-          <div className="max-w-2xl">
-            <h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3>
-            <div className="flex gap-3 mb-6">
-              <input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }}
-                placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
-              <button onClick={() => { if (newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }}
-                className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm active:scale-95 transition-transform"><Plus size={16} /> Add</button>
-            </div>
-            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
-              <div className="divide-y divide-[#222]">
-                {categories.map(cat => (
-                  <div key={cat} className="flex items-center gap-4 px-6 py-4">
-                    {editingCatName === cat ? (
-                      <>
-                        <input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus />
-                        <button onClick={() => { const u = categories.map(c => c === cat ? editingCatValue : c); setCategoriesState(u); saveCategories(u); refreshAllData(); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs active:scale-95 transition-transform">Save</button>
-                        <button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button>
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex-1 font-medium">{cat}</div>
-                        <button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button>
-                        <button onClick={() => { const u = categories.filter(c => c !== cat); setCategoriesState(u); saveCategories(u); refreshAllData(); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={15} /></button>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3><div className="flex gap-3 mb-6"><input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }} placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /><button onClick={() => { if (newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }} className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm active:scale-95 transition-transform"><Plus size={16} /> Add</button></div><div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden"><div className="divide-y divide-[#222]">{categories.map(cat => (<div key={cat} className="flex items-center gap-4 px-6 py-4">{editingCatName === cat ? (<><input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus /><button onClick={() => { const u = categories.map(c => c === cat ? editingCatValue : c); setCategoriesState(u); saveCategories(u); refreshAllData(); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs active:scale-95 transition-transform">Save</button><button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button></>) : (<><div className="flex-1 font-medium">{cat}</div><button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button><button onClick={() => { const u = categories.filter(c => c !== cat); setCategoriesState(u); saveCategories(u); refreshAllData(); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={15} /></button></>)}</div>))}</div></div></div>
         )}
 
         {activeTab === 'promo' && (
-          <div className="max-w-2xl
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Promo Video</h3><div className="space-y-4"><div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Promo Video</div><div className="text-xs text-[#666]">Display in trial popup</div></div><button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })} className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${promoSettings.isEnabled ? 'translate-x-6' : 'translate-x-0'}`} /></button></div><div className="flex gap-3">{(['youtube', 'direct'] as const).map(t => (<button key={t} onClick={() => setPromoSettings({ ...promoSettings, videoType: t })} className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition active:scale-95 ${promoSettings.videoType === t ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{t === 'youtube' ? 'YouTube' : 'Direct URL'}</button>))}</div><div><label className="text-xs text-[#666] mb-1 block">Video URL</label><input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div>{promoSettings.videoUrl && promoSettings.isEnabled && (<div className="rounded-2xl overflow-hidden border border-[#333] aspect-video bg-black"><iframe src={(() => { const u = promoSettings.videoUrl; if (u.includes('embed')) return `${u}?autoplay=0&controls=1`; const id = u.includes('v=') ? u.split('v=')[1]?.split('&')[0] : u.split('/').pop(); return `https://www.youtube.com/embed/${id}?controls=1&modestbranding=1&rel=0`; })()} className="w-full h-full" title="Promo Preview" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media" allowFullScreen /></div>)}<button onClick={() => { savePromoSettings(promoSettings); refreshAllData(); showToast("✅ Promo video saved & synced!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PROMO VIDEO SETTINGS</button></div></div>
+        )}
+
+        {activeTab === 'datatools' && (
+          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-2">Data Integrity Hub</h3><p className="text-[#a1a1aa] mb-8">Export a complete platform snapshot or restore from a backup file.</p><div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-5"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0"><Download size={22} className="text-[#c5a26f]" /></div><div><div className="font-semibold text-lg">Export System Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all data.</div></div></div><button onClick={() => { exportSystemBackup(); showToast("✅ Backup downloaded!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"><Database size={18} /> Download Full JSON Backup</button></div><div className="bg-[#111] border border-[#222] rounded-3xl p-7"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0"><Upload size={22} className="text-[#a1a1aa]" /></div><div><div className="font-semibold text-lg">Restore from Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup file.</div></div></div><input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (!file) return; importSystemBackup(file, msg => { showToast(msg); setAdminVideos(getStoredVideos()); setCategoriesState(getCategories()); setDigitalProducts(getDigitalProducts()); setPlatformSettings(getSettings()); setSubSettings(getSubSettings()); setPaymentConfig(getPaymentSettings()); refreshAllData(); }, err => showToast(err)); e.target.value = ''; }} /><button onClick={() => fileInputRef.current?.click()} className="w-full py-4 bg-[#1a1a1a] border border-[#333] hover:border-[#c5a26f] text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition-colors active:scale-[0.98]"><Upload size={18} /> Choose Backup File (.json)</button><p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration.</p></div></div>
+        )}
+      </div>
+
+      {/* Add/Edit Video Modal */}
+      <AnimatePresence>{showAddModal && (<div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowAddModal(false)}><motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }} className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-7"><div className="text-2xl font-semibold">{editingVideo ? "Edit Short" : "Publish New Short"}</div><button onClick={() => setShowAddModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button></div><div className="space-y-4"><input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">{getCategories().map(c => <option key={c} value={c}>{c}</option>)}</select><input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /></div><div className="flex items-center gap-4 bg-[#1a1a1a] rounded-2xl p-5 border border-[#222]"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={formData.isPremium} onChange={e => setFormData({ ...formData, isPremium: e.target.checked })} className="accent-[#c5a26f] scale-125" /><div><div className="font-medium text-sm">Premium Only</div><div className="text-xs text-[#a1a1aa]">Requires active subscription</div></div></label></div><input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /><input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div><div className="flex gap-3 mt-8"><button onClick={() => setShowAddModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button><button onClick={saveVideo} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingVideo ? "Save Changes" : "Publish Short"}</button></div></motion.div></div>)}</AnimatePresence>
+
+      {/* Add/Edit Product Modal */}
+      <AnimatePresence>{showProductModal && (<div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowProductModal(false)}><motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }} className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-7"><div className="text-2xl font-semibold">{editingProduct ? "Edit Product" : "Add New Product"}</div><button onClick={() => setShowProductModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button></div><div className="space-y-4"><input placeholder="Product Title" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} rows={2} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><div><label className="text-xs text-[#666] mb-1 block">Category</label><select value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value as DigitalProduct['category'] })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm"><option value="workshop">Workshop</option><option value="guide">Guide</option><option value="merch">Merch</option></select></div><div><label className="text-xs text-[#666] mb-1 block">Price (₹)</label><input type="number" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /></div></div><input placeholder="Thumbnail URL" value={productForm.thumbnailUrl} onChange={e => setProductForm({ ...productForm, thumbnailUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><input placeholder="Badge (e.g. BESTSELLER)" value={productForm.badge} onChange={e => setProductForm({ ...productForm, badge: e.target.value })} className="bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><div className="flex items-center gap-3 bg-[#1a1a1a] rounded-2xl px-4 border border-[#222]"><input type="checkbox" checked={productForm.isPremium} onChange={e => setProductForm({ ...productForm, isPremium: e.target.checked })} className="accent-[#c5a26f]" /><span className="text-sm">Premium Only</span></div></div></div><div className="flex gap-3 mt-8"><button onClick={() => setShowProductModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button><button onClick={saveProduct} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingProduct ? "Save Changes" : "List Product"}</button></div></motion.div></div>)}</AnimatePresence>
+    </div>
+  );
+}
+
+export default App;
