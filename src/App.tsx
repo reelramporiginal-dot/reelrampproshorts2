@@ -1076,11 +1076,26 @@ function HomePage() {
   const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
-  useEffect(() => {
-    // Background Supabase sync — non-blocking
-    supabase.from('videos').select('*').order('id').then(({ data }) => {
-      if (data && data.length > 0) { setAllVideos(data as Video[]); saveVideos(data as Video[]); }
-    }).catch(() => {});
+useEffect(() => {
+    // Supabase se initial fetch
+    const fetchVideos = () => {
+      supabase.from('videos').select('*').order('id').then(({ data }) => {
+        if (data && data.length > 0) { setAllVideos(data as Video[]); saveVideos(data as Video[]); }
+      }).catch(() => {});
+    };
+    fetchVideos();
+
+    // 🔥 REAL-TIME SUBSCRIPTION - YE NAYA HAI (Sirf yeh 15 lines add karo)
+    const channel = supabase
+      .channel('videos_realtime')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'videos' },
+        (payload) => {
+          console.log('Video change detected:', payload);
+          fetchVideos();
+        }
+      )
+      .subscribe();
 
     const popups = getStoredPopups();
     const active = popups.find(p => p.isActive);
@@ -1091,9 +1106,13 @@ function HomePage() {
     const t2 = setTimeout(() => {
       if (!hasSeenTrial && !isSubscribed) { setShowTrialPopup(true); sessionStorage.setItem('trialPopupShown', 'true'); }
     }, 1800);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [isSubscribed]);
-
+    
+    return () => { 
+      clearTimeout(t1); 
+      clearTimeout(t2);
+      channel.unsubscribe(); // Cleanup
+    };
+}, [isSubscribed]);
   const allCats = ["All", ...categories];
 
   const filtered = allVideos.filter(v => {
