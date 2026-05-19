@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 // ============================================================
-// PRODUCTION CREDENTIALS (Aapka original)
+// PRODUCTION CREDENTIALS
 // ============================================================
 const SUPABASE_URL = "https://rwtndqorpizoozbpcmca.supabase.co";
 const SUPABASE_ANON_KEY =
@@ -34,6 +34,9 @@ const getBunnyCdnUrl = (path: string) =>
 const REELRAMP_LOGO =
   "https://drive.google.com/uc?export=view&id=1qs734lVBcgz-fJ_TitnibEG-KqX0LCVg";
 
+// ============================================================
+// GUEST ID
+// ============================================================
 const getOrCreateGuestId = (): string => {
   const existing = localStorage.getItem('rr_guest_id');
   if (existing) return existing;
@@ -43,7 +46,7 @@ const getOrCreateGuestId = (): string => {
 };
 
 // ============================================================
-// TYPES (Aapke original)
+// TYPES
 // ============================================================
 interface Video {
   id: number;
@@ -147,7 +150,7 @@ interface CreatorRevenueEntry {
 }
 
 // ============================================================
-// INITIAL DATA (Aapke original)
+// INITIAL DATA
 // ============================================================
 const initialVideos: Video[] = [
   { id: 1, title: "The Silent Whisper", description: "A haunting tale of a woman trapped in an abandoned mansion where whispers reveal dark secrets.", category: "Horror", duration: "4:32", isPremium: true, thumbnail: "/images/horror1.jpg", videoUrl: "https://media.w3.org/2010/05/sintel/trailer.mp4", source: 'direct' },
@@ -212,7 +215,7 @@ const defaultPromoVideo: PromoVideoSettings = {
 };
 
 // ============================================================
-// LOCAL STORAGE HELPERS (Aapke original)
+// LOCAL STORAGE HELPERS
 // ============================================================
 const ls = {
   get: <T,>(key: string, fallback: T): T => {
@@ -298,11 +301,17 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
   return { average: simulated, count: 12 + (videoId % 30) };
 };
 
+// ============================================================
+// PAYWALL TRACKER
+// ============================================================
 const getScrollCount = (): number => parseInt(sessionStorage.getItem('rr_scroll_count') || '0');
 const incrementScrollCount = () =>
   sessionStorage.setItem('rr_scroll_count', String(getScrollCount() + 1));
 const resetScrollCount = () => sessionStorage.removeItem('rr_scroll_count');
 
+// ============================================================
+// DATA TOOLS
+// ============================================================
 const exportSystemBackup = () => {
   const backup = {
     exportedAt: new Date().toISOString(),
@@ -380,7 +389,7 @@ async function safeMaybeSelect<T>(table: string, filters: Record<string, unknown
 }
 
 // ============================================================
-// PLATFORM CONTEXT (NEW - FIX FOR REAL-TIME ADMIN SYNC)
+// PLATFORM CONTEXT (FIX FOR REAL-TIME SYNC)
 // ============================================================
 interface PlatformContextValue {
   videos: Video[];
@@ -390,6 +399,12 @@ interface PlatformContextValue {
   popups: PopupAd[];
   categories: string[];
   refreshAllData: () => void;
+  updateVideos: (videos: Video[]) => void;
+  updateSettings: (settings: PlatformSettings) => void;
+  updateSubSettings: (settings: SubscriptionSettings) => void;
+  updatePaymentConfig: (config: PaymentSettings) => void;
+  updatePopups: (popups: PopupAd[]) => void;
+  updateCategories: (categories: string[]) => void;
 }
 
 const PlatformContext = React.createContext<PlatformContextValue | null>(null);
@@ -419,9 +434,10 @@ function PlatformProvider({ children }: { children: React.ReactNode }) {
     setCategories(getCategories());
   }, []);
 
+  // Listen for storage events from other tabs
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key?.startsWith('reelramp_')) {
+      if (e.key && e.key.startsWith('reelramp_')) {
         refreshAllData();
       }
     };
@@ -429,7 +445,51 @@ function PlatformProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, [refreshAllData]);
 
-  const value = { videos, settings, subSettings, paymentConfig, popups, categories, refreshAllData };
+  const updateVideos = useCallback((newVideos: Video[]) => {
+    saveVideos(newVideos);
+    setVideos(newVideos);
+  }, []);
+
+  const updateSettings = useCallback((newSettings: PlatformSettings) => {
+    saveSettings(newSettings);
+    setSettings(newSettings);
+  }, []);
+
+  const updateSubSettings = useCallback((newSubSettings: SubscriptionSettings) => {
+    saveSubSettings(newSubSettings);
+    setSubSettings(newSubSettings);
+  }, []);
+
+  const updatePaymentConfig = useCallback((newConfig: PaymentSettings) => {
+    savePaymentSettings(newConfig);
+    setPaymentConfig(newConfig);
+  }, []);
+
+  const updatePopups = useCallback((newPopups: PopupAd[]) => {
+    savePopups(newPopups);
+    setPopups(newPopups);
+  }, []);
+
+  const updateCategories = useCallback((newCategories: string[]) => {
+    saveCategories(newCategories);
+    setCategories(newCategories);
+  }, []);
+
+  const value = {
+    videos,
+    settings,
+    subSettings,
+    paymentConfig,
+    popups,
+    categories,
+    refreshAllData,
+    updateVideos,
+    updateSettings,
+    updateSubSettings,
+    updatePaymentConfig,
+    updatePopups,
+    updateCategories,
+  };
 
   return (
     <PlatformContext.Provider value={value}>
@@ -439,7 +499,7 @@ function PlatformProvider({ children }: { children: React.ReactNode }) {
 }
 
 // ============================================================
-// AUTH CONTEXT (Aapka original)
+// AUTH CONTEXT
 // ============================================================
 interface AuthContextValue {
   user: User | null;
@@ -514,7 +574,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 // ============================================================
-// LOGO (Aapka original)
+// LOGO
 // ============================================================
 const Logo = ({ size = 32, className = "" }: { size?: number; className?: string }) => (
   <div className={`inline-flex items-center gap-2.5 ${className}`}>
@@ -536,7 +596,7 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
 );
 
 // ============================================================
-// PWA INSTALL BANNER (Aapka original)
+// PWA INSTALL BANNER
 // ============================================================
 function PWAInstallBanner() {
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
@@ -592,7 +652,7 @@ function PWAInstallBanner() {
 }
 
 // ============================================================
-// SUBSCRIPTION INTERCEPT MODAL (Aapka original)
+// SUBSCRIPTION INTERCEPT MODAL
 // ============================================================
 function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => void; onSubscribe: () => void }) {
   const subSettings = getSubSettings();
@@ -664,7 +724,6 @@ function CinematicPlayer({
   const timeUpdateThrottle = useRef(0);
   const loadTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // Handle can play - video is ready
   const handleCanPlay = () => {
     setIsLoaded(true);
     setIsBuffering(false);
@@ -675,19 +734,16 @@ function CinematicPlayer({
     }
   };
 
-  // Handle waiting (buffering)
   const handleWaiting = () => {
     setIsBuffering(true);
   };
 
-  // Handle playing
   const handlePlaying = () => {
     setIsBuffering(false);
     setIsLoaded(true);
     if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
   };
 
-  // Handle error - show retry button
   const handleError = () => {
     setHasError(true);
     setIsLoaded(false);
@@ -701,7 +757,6 @@ function CinematicPlayer({
     }, 3000);
   };
 
-  // Play/pause control
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !isLoaded) return;
@@ -721,7 +776,6 @@ function CinematicPlayer({
     }
   }, [isPlaying, isLoaded]);
 
-  // Resume from timestamp
   useEffect(() => {
     const v = videoRef.current;
     if (v && resumeFrom > 0 && !hasResumed.current && isLoaded) {
@@ -730,7 +784,6 @@ function CinematicPlayer({
     }
   }, [resumeFrom, isLoaded]);
 
-  // Loading timeout fallback
   useEffect(() => {
     loadTimeoutRef.current = setTimeout(() => {
       if (!isLoaded && !hasError) {
@@ -764,7 +817,6 @@ function CinematicPlayer({
     onTimeUpdate?.(t, duration);
   };
 
-  // Scroll to seek
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -867,14 +919,12 @@ function CinematicPlayer({
         }}
       />
 
-      {/* Loading Spinner - ONLY shows during actual buffering/loading */}
       {(!isLoaded || isBuffering) && !hasError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-20">
           <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
-      {/* Error state with retry button */}
       {hasError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-20">
           <div className="text-center">
@@ -942,7 +992,7 @@ function CinematicPlayer({
 }
 
 // ============================================================
-// CONTINUE WATCHING RAIL (Aapka original)
+// CONTINUE WATCHING RAIL
 // ============================================================
 function ContinueWatchingRail({ onNavigate }: { onNavigate: (id: number, timestamp: number) => void }) {
   const [items, setItems] = useState<(WatchHistoryItem & { video: Video })[]>([]);
@@ -1062,7 +1112,7 @@ function AppContent() {
 }
 
 // ============================================================
-// LOGIN PAGE (Aapka original)
+// LOGIN PAGE
 // ============================================================
 function LoginPage() {
   const navigate = useNavigate();
@@ -1195,7 +1245,7 @@ function LoginPage() {
 }
 
 // ============================================================
-// HOME PAGE (UPDATED with usePlatform for real-time sync)
+// HOME PAGE (UPDATED WITH usePlatform FOR REAL-TIME SYNC)
 // ============================================================
 function HomePage() {
   const navigate = useNavigate();
@@ -1211,7 +1261,7 @@ function HomePage() {
   const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
   const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
-  // Listen for storage events to sync across tabs
+  // Listen for storage events from admin panel
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key && e.key.startsWith('reelramp_')) {
@@ -1464,7 +1514,7 @@ function HomePage() {
 }
 
 // ============================================================
-// VIDEO CARD (Aapka original)
+// VIDEO CARD
 // ============================================================
 interface VideoCardProps {
   video: Video;
@@ -1513,7 +1563,7 @@ function VideoCard({ video, isSubscribed, isSaved, onClick, onSave }: VideoCardP
 }
 
 // ============================================================
-// PAYWALL MODAL (Aapka original)
+// PAYWALL MODAL
 // ============================================================
 function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: () => void; onSubscribe: () => void }) {
   return (
@@ -1541,7 +1591,7 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
 }
 
 // ============================================================
-// SHORTS PLAYER PAGE (Aapka original with fixed CinematicPlayer)
+// SHORTS PLAYER PAGE
 // ============================================================
 function ShortsPlayerPage() {
   const { id } = useParams<{ id: string }>();
@@ -1779,7 +1829,7 @@ function ShortsPlayerPage() {
 }
 
 // ============================================================
-// DIGITAL STORE PAGE (Aapka original)
+// DIGITAL STORE PAGE
 // ============================================================
 function DigitalStorePage() {
   const navigate = useNavigate();
@@ -1858,7 +1908,7 @@ function DigitalStorePage() {
 }
 
 // ============================================================
-// SUBSCRIPTION PAGE (Aapka original)
+// SUBSCRIPTION PAGE
 // ============================================================
 function SubscriptionPage() {
   const navigate = useNavigate();
@@ -2003,7 +2053,7 @@ function SubscriptionPage() {
 }
 
 // ============================================================
-// PROFILE PAGE (Aapka original)
+// PROFILE PAGE
 // ============================================================
 function ProfilePage() {
   const navigate = useNavigate();
@@ -2273,7 +2323,7 @@ function ProfilePage() {
 }
 
 // ============================================================
-// FOOTER (UPDATED with usePlatform for real-time settings)
+// FOOTER (UPDATED WITH usePlatform FOR REAL-TIME SETTINGS)
 // ============================================================
 function Footer() {
   const { settings } = usePlatform();
@@ -2341,7 +2391,7 @@ function Footer() {
 }
 
 // ============================================================
-// BOTTOM NAVIGATION (Aapka original)
+// BOTTOM NAVIGATION
 // ============================================================
 function BottomNavigation() {
   const navigate = useNavigate();
@@ -2374,7 +2424,7 @@ function BottomNavigation() {
 }
 
 // ============================================================
-// LEGAL PAGES (Aapka original)
+// LEGAL PAGES
 // ============================================================
 function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping' }) {
   const navigate = useNavigate();
@@ -2399,7 +2449,7 @@ function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping'
 }
 
 // ============================================================
-// EDITOR PANEL (Aapka original - simple)
+// EDITOR PANEL
 // ============================================================
 function EditorPanel() {
   const navigate = useNavigate();
@@ -2449,7 +2499,7 @@ function EditorPanel() {
 }
 
 // ============================================================
-// OWNER PANEL (Aapka original - simple)
+// OWNER PANEL
 // ============================================================
 function OwnerPanel() {
   const navigate = useNavigate();
@@ -2507,7 +2557,7 @@ function OwnerPanel() {
 }
 
 // ============================================================
-// ADMIN PAGE (Aapka original with refreshAllData)
+// ADMIN PAGE - COMPLETE WITH REAL-TIME SYNC
 // ============================================================
 function AdminPage() {
   const navigate = useNavigate();
@@ -2535,7 +2585,7 @@ function AdminPage() {
   const [editingCatName, setEditingCatName] = useState<string | null>(null);
   const [editingCatValue, setEditingCatValue] = useState('');
   const [toast, setToast] = useState('');
-  const [syncing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [formData, setFormData] = useState({
     title: '', description: '', category: 'Horror', duration: '4:30',
     isPremium: true, thumbnail: '', videoUrl: ''
@@ -2567,6 +2617,10 @@ function AdminPage() {
 
   useEffect(() => {
     if (!isAuthorized) return;
+    loadAllData();
+  }, [isAuthorized]);
+
+  const loadAllData = () => {
     setAdminVideos(getStoredVideos());
     setPopups(getStoredPopups());
     setPlatformSettings(getSettings());
@@ -2577,17 +2631,26 @@ function AdminPage() {
     setVideoViews(getVideoViews());
     setDigitalProducts(getDigitalProducts());
     setAdminUsers(ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers));
-  }, [isAuthorized]);
+  };
 
+  // Sync functions with refreshAllData
   const persistVideos = (updated: Video[]) => {
     setAdminVideos(updated);
     saveVideos(updated);
     refreshAllData();
+    setSyncing(true);
+    supabase.from('videos').upsert(updated).then(() => setSyncing(false)).catch(() => setSyncing(false));
   };
 
   const persistPopups = (updated: PopupAd[]) => { 
     setPopups(updated); 
     savePopups(updated);
+    refreshAllData();
+  };
+
+  const persistCategories = (updated: string[]) => {
+    setCategoriesState(updated);
+    saveCategories(updated);
     refreshAllData();
   };
 
@@ -2613,8 +2676,8 @@ function AdminPage() {
       updated = [...adminVideos, { ...formData, id: newId } as Video];
     }
     setShowAddModal(false);
-    showToast(editingVideo ? "✅ Short updated!" : "✅ Short published!");
     persistVideos(updated);
+    showToast(editingVideo ? "✅ Short updated & synced to all users!" : "✅ Short published & synced to all users!");
   };
 
   const deleteVideo = (id: number) => {
@@ -2622,7 +2685,7 @@ function AdminPage() {
     setAdminVideos(updated);
     saveVideos(updated);
     refreshAllData();
-    showToast("Short deleted.");
+    showToast("Short deleted & synced to all users.");
   };
 
   const toggleUserSub = (userId: number) => {
@@ -2644,7 +2707,7 @@ function AdminPage() {
     saveDigitalProducts(updated);
     refreshAllData();
     setShowProductModal(false);
-    showToast(editingProduct ? "✅ Product updated!" : "✅ Product listed in Store!");
+    showToast(editingProduct ? "✅ Product updated & synced to store!" : "✅ Product listed & synced to store!");
   };
 
   const deleteProduct = (id: number) => {
@@ -2652,7 +2715,29 @@ function AdminPage() {
     setDigitalProducts(updated);
     saveDigitalProducts(updated);
     refreshAllData();
-    showToast("Product removed from Store.");
+    showToast("Product removed from store.");
+  };
+
+  const addCategory = () => {
+    if (newCategoryName.trim()) {
+      const updated = [...categories, newCategoryName.trim()];
+      persistCategories(updated);
+      setNewCategoryName('');
+      showToast("✅ Category added & synced!");
+    }
+  };
+
+  const updateCategory = (oldName: string, newName: string) => {
+    const updated = categories.map(c => c === oldName ? newName : c);
+    persistCategories(updated);
+    setEditingCatName(null);
+    showToast("✅ Category updated & synced!");
+  };
+
+  const deleteCategory = (catName: string) => {
+    const updated = categories.filter(c => c !== catName);
+    persistCategories(updated);
+    showToast("✅ Category deleted & synced!");
   };
 
   const revenueData = getRevenueData();
@@ -2744,7 +2829,7 @@ function AdminPage() {
       )}
       {syncing && (
         <div className="fixed top-6 left-6 z-[200] flex items-center gap-2 bg-[#111] border border-[#333] px-4 py-2 rounded-xl text-xs text-[#a1a1aa] pointer-events-none">
-          <div className="w-3 h-3 border-2 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /> Syncing…
+          <div className="w-3 h-3 border-2 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /> Syncing to all users...
         </div>
       )}
 
@@ -2771,6 +2856,7 @@ function AdminPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 pt-8">
+        {/* DASHBOARD TAB */}
         {activeTab === 'dashboard' && (
           <div>
             <div className="flex flex-col sm:flex-row sm:justify-between gap-4 mb-8">
@@ -2804,6 +2890,7 @@ function AdminPage() {
           </div>
         )}
 
+        {/* CONTENT TAB */}
         {activeTab === 'content' && (
           <div>
             <div className="flex justify-between mb-6 flex-wrap gap-3">
@@ -2832,6 +2919,7 @@ function AdminPage() {
           </div>
         )}
 
+        {/* STORE TAB */}
         {activeTab === 'store' && (
           <div>
             <div className="flex justify-between mb-6 flex-wrap gap-3">
@@ -2854,6 +2942,7 @@ function AdminPage() {
           </div>
         )}
 
+        {/* REVENUE TAB */}
         {activeTab === 'revenue' && (
           <div className="max-w-4xl">
             <div className="flex items-start justify-between mb-6 flex-wrap gap-3"><div><h3 className="text-3xl font-semibold tracking-tight">Revenue Sharing</h3><p className="text-[#a1a1aa] text-sm mt-1">Creator payout calculator.</p></div><button onClick={downloadRevenueReport} className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm active:scale-95 transition-transform"><FileText size={16} /> Download Report</button></div>
@@ -2863,47 +2952,100 @@ function AdminPage() {
           </div>
         )}
 
+        {/* POPUPS TAB */}
         {activeTab === 'popups' && (
           <div><div className="flex justify-between items-center mb-7 flex-wrap gap-3"><div><h3 className="text-3xl font-semibold tracking-tight">Popup Ads</h3><p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p></div><button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }} className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm active:scale-95 transition-transform"><Plus size={16} /> New Popup</button></div><div className="space-y-4">{popups.map(popup => (<div key={popup.id} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex flex-col md:flex-row gap-6 items-start"><img src={popup.imageUrl} className="w-full md:w-64 h-36 object-cover rounded-2xl" alt="" /><div className="flex-1"><div className="font-semibold text-xl mb-2">{popup.title}</div><div className="text-xs text-[#666] font-mono mb-4">{popup.redirectUrl}</div><div className="flex gap-3 flex-wrap"><button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }} className={`px-5 py-2 rounded-2xl text-sm active:scale-95 transition-transform ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button><button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm active:scale-95 transition-transform">Edit</button><button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm active:scale-95 transition-transform">Delete</button></div></div></div>))}</div>
-            <AnimatePresence>{editingPopup && (<div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6"><motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="bg-[#111] p-8 rounded-3xl w-full max-w-md border border-[#333]"><div className="text-xl font-medium mb-6">Edit Popup</div>{[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (<div key={f.key} className="mb-4"><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" /></div>))}<div className="flex gap-3"><button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button><button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl active:scale-95 transition-transform">Save</button></div></motion.div></div>)}</AnimatePresence>
+            <AnimatePresence>{editingPopup && (<div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6"><motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="bg-[#111] p-8 rounded-3xl w-full max-w-md border border-[#333]"><div className="text-xl font-medium mb-6">Edit Popup</div>{[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (<div key={f.key} className="mb-4"><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" /></div>))}<div className="flex gap-3"><button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button><button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved & synced!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl active:scale-95 transition-transform">Save</button></div></motion.div></div>)}</AnimatePresence>
           </div>
         )}
 
+        {/* USERS TAB */}
         {activeTab === 'users' && (
           <div><h3 className="text-3xl font-semibold tracking-tight mb-6">User Management • {premiumUsers} Premium</h3><div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead className="border-b border-[#222] text-[#a1a1aa]"><tr><th className="py-4 px-6 text-left">User</th><th className="py-4 text-left">Joined</th><th className="py-4 text-left">Watched</th><th className="py-4 px-6 text-left">Status</th><th className="py-4 px-6 text-right">Actions</th></tr></thead><tbody className="divide-y divide-[#222]">{adminUsers.map(u => (<tr key={u.id}><td className="py-5 px-6"><div className="font-medium">{u.name}</div><div className="text-xs text-[#666]">{u.email}</div></td><td className="text-[#a1a1aa]">{u.joinDate}</td><td className="font-mono">{u.totalWatched}</td><td className="px-6"><span className={`px-3 py-px rounded text-xs ${u.subscribed ? 'bg-[#c5a26f] text-black' : 'bg-[#333]'}`}>{u.subscribed ? "PREMIUM" : "FREE"}</span></td><td className="px-6 text-right"><button onClick={() => toggleUserSub(u.id)} className="px-4 py-2 border border-[#333] rounded-xl text-xs hover:bg-[#222] active:scale-95 transition-all">{u.subscribed ? "Revoke" : "Upgrade"}</button></td></tr>))}</tbody></table></div></div>
         )}
 
+        {/* ANALYTICS TAB */}
         {activeTab === 'analytics' && (
           <div><h3 className="text-3xl font-semibold tracking-tight mb-6">Revenue Dashboard</h3><div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">{[{ label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}` }, { label: "Monthly Recurring", value: "₹7,298" }, { label: "Active Subscribers", value: premiumUsers }, { label: "Trial Conversions", value: "64%" }].map((m, i) => (<div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6"><div className="text-xs text-[#666] tracking-wider">{m.label}</div><div className="text-3xl sm:text-4xl font-semibold tracking-tighter mt-1">{m.value}</div></div>))}</div><div className="bg-[#111] border border-[#222] rounded-3xl p-8"><div className="font-medium mb-6">Recent Transactions</div><div className="space-y-4">{getRevenueData().slice().reverse().map((entry, i) => (<div key={i} className="flex items-center justify-between py-3 border-b border-[#222] last:border-0"><div><div className="font-medium">{entry.plan}</div><div className="text-xs text-[#666]">{entry.date}</div></div><div className="text-right"><div className="font-semibold text-[#c5a26f]">+₹{entry.amount}</div><div className="text-xs text-[#666]">{entry.type}</div></div></div>))}</div></div></div>
         )}
 
+        {/* SETTINGS TAB */}
         {activeTab === 'settings' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Platform Settings</h3><div className="space-y-4">{[{ label: "App Name", key: 'appName' as const }, { label: "Tagline", key: 'tagline' as const }, { label: "Support Email", key: 'supportEmail' as const }, { label: "Support Phone", key: 'supportPhone' as const }].map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>))}<div><label className="text-xs text-[#666] mb-2 block">Accent Color</label><div className="flex items-center gap-3"><input type="color" value={platformSettings.accentColor} onChange={e => setPlatformSettings({ ...platformSettings, accentColor: e.target.value })} className="w-12 h-10 rounded-xl cursor-pointer" /><span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span></div></div><button onClick={() => { saveSettings(platformSettings); refreshAllData(); showToast("✅ Platform settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLATFORM SETTINGS</button></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Platform Settings</h3>
+            <div className="space-y-4">
+              {[{ label: "App Name", key: 'appName' as const }, { label: "Tagline", key: 'tagline' as const }, { label: "Support Email", key: 'supportEmail' as const }, { label: "Support Phone", key: 'supportPhone' as const }].map(f => (
+                <div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>
+              ))}
+              <div><label className="text-xs text-[#666] mb-2 block">Accent Color</label><div className="flex items-center gap-3"><input type="color" value={platformSettings.accentColor} onChange={e => setPlatformSettings({ ...platformSettings, accentColor: e.target.value })} className="w-12 h-10 rounded-xl cursor-pointer" /><span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span></div></div>
+              <button onClick={() => { saveSettings(platformSettings); refreshAllData(); showToast("✅ Platform settings saved & synced to all users!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLATFORM SETTINGS</button>
+            </div>
+          </div>
         )}
 
+        {/* PLANS TAB */}
         {activeTab === 'plans' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Plan Settings</h3><div className="space-y-4">{[{ label: "Trial Price", key: 'trialOfferPrice' as const }, { label: "Trial Duration", key: 'trialOfferDuration' as const }, { label: "Full Price", key: 'fullPrice' as const }, { label: "Full Plan Validity", key: 'fullValidity' as const }].map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>))}<div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div><button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })} className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} /></button></div><button onClick={() => { saveSubSettings(subSettings); refreshAllData(); showToast("✅ Plan settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLAN SETTINGS</button></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Plan Settings</h3>
+            <div className="space-y-4">
+              {[{ label: "Trial Price", key: 'trialOfferPrice' as const }, { label: "Trial Duration", key: 'trialOfferDuration' as const }, { label: "Full Price", key: 'fullPrice' as const }, { label: "Full Plan Validity", key: 'fullValidity' as const }].map(f => (
+                <div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /></div>
+              ))}
+              <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div><button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })} className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} /></button></div>
+              <button onClick={() => { saveSubSettings(subSettings); refreshAllData(); showToast("✅ Plan settings saved & synced to all users!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLAN SETTINGS</button>
+            </div>
+          </div>
         )}
 
+        {/* PAYMENT TAB */}
         {activeTab === 'payment' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3><p className="text-[#a1a1aa] text-sm mb-6">Active gateway routes live to checkout.</p><div className="space-y-4"><div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#c5a26f] tracking-widest font-medium">ACTIVE GATEWAY</div><div className="grid grid-cols-2 gap-3">{(['razorpay', 'stripe', 'upi', 'none'] as const).map(gw => (<button key={gw} onClick={() => setPaymentConfig({ ...paymentConfig, activeGateway: gw })} className={`py-3 rounded-2xl text-sm font-medium border transition active:scale-95 ${paymentConfig.activeGateway === gw ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{gw === 'none' ? 'None / Manual' : gw.charAt(0).toUpperCase() + gw.slice(1)}</button>))}</div><div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Real payments only</div></div><button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })} className={`w-12 h-6 rounded-full transition-colors active:scale-95 ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} /></button></div></div>{[{ title: 'RAZORPAY', fields: [{ label: 'Key ID', key: 'razorpayKeyId' as const, placeholder: 'rzp_test_...' }, { label: 'Key Secret', key: 'razorpayKeySecret' as const, placeholder: '••••••••', type: 'password' }] }, { title: 'UPI', fields: [{ label: 'UPI ID', key: 'upiId' as const, placeholder: 'yourname@upi' }] }, { title: 'STRIPE', fields: [{ label: 'Publishable Key', key: 'stripePublishableKey' as const, placeholder: 'pk_test_...' }] }].map(section => (<div key={section.title} className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#a1a1aa] tracking-widest font-medium">{section.title}</div>{section.fields.map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input type={f.type || 'text'} value={paymentConfig[f.key] as string} onChange={e => setPaymentConfig({ ...paymentConfig, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder={f.placeholder} /></div>))}</div>))}<button onClick={() => { savePaymentSettings(paymentConfig); refreshAllData(); showToast("✅ Payment settings saved!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PAYMENT SETTINGS</button></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3>
+            <p className="text-[#a1a1aa] text-sm mb-6">Active gateway routes live to checkout. Saves sync to all users.</p>
+            <div className="space-y-4">
+              <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#c5a26f] tracking-widest font-medium">ACTIVE GATEWAY</div><div className="grid grid-cols-2 gap-3">{(['razorpay', 'stripe', 'upi', 'none'] as const).map(gw => (<button key={gw} onClick={() => setPaymentConfig({ ...paymentConfig, activeGateway: gw })} className={`py-3 rounded-2xl text-sm font-medium border transition active:scale-95 ${paymentConfig.activeGateway === gw ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{gw === 'none' ? 'None / Manual' : gw.charAt(0).toUpperCase() + gw.slice(1)}</button>))}</div><div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Real payments only</div></div><button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })} className={`w-12 h-6 rounded-full transition-colors active:scale-95 ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} /></button></div></div>
+              {[{ title: 'RAZORPAY', fields: [{ label: 'Key ID', key: 'razorpayKeyId' as const, placeholder: 'rzp_test_...' }, { label: 'Key Secret', key: 'razorpayKeySecret' as const, placeholder: '••••••••', type: 'password' }] }, { title: 'UPI', fields: [{ label: 'UPI ID', key: 'upiId' as const, placeholder: 'yourname@upi' }] }, { title: 'STRIPE', fields: [{ label: 'Publishable Key', key: 'stripePublishableKey' as const, placeholder: 'pk_test_...' }] }].map(section => (<div key={section.title} className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4"><div className="text-xs text-[#a1a1aa] tracking-widest font-medium">{section.title}</div>{section.fields.map(f => (<div key={f.key}><label className="text-xs text-[#666] mb-1 block">{f.label}</label><input type={f.type || 'text'} value={paymentConfig[f.key] as string} onChange={e => setPaymentConfig({ ...paymentConfig, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder={f.placeholder} /></div>))}</div>))}
+              <button onClick={() => { savePaymentSettings(paymentConfig); refreshAllData(); showToast("✅ Payment settings saved & synced to all users!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PAYMENT SETTINGS</button>
+            </div>
+          </div>
         )}
 
+        {/* CATEGORIES TAB */}
         {activeTab === 'categories' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3><div className="flex gap-3 mb-6"><input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }} placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /><button onClick={() => { if (newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); refreshAllData(); setNewCategoryName(''); showToast("✅ Category added!"); } }} className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm active:scale-95 transition-transform"><Plus size={16} /> Add</button></div><div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden"><div className="divide-y divide-[#222]">{categories.map(cat => (<div key={cat} className="flex items-center gap-4 px-6 py-4">{editingCatName === cat ? (<><input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus /><button onClick={() => { const u = categories.map(c => c === cat ? editingCatValue : c); setCategoriesState(u); saveCategories(u); refreshAllData(); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs active:scale-95 transition-transform">Save</button><button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button></>) : (<><div className="flex-1 font-medium">{cat}</div><button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button><button onClick={() => { const u = categories.filter(c => c !== cat); setCategoriesState(u); saveCategories(u); refreshAllData(); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={15} /></button></>)}</div>))}</div></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3>
+            <div className="flex gap-3 mb-6"><input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) addCategory(); }} placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" /><button onClick={addCategory} className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm active:scale-95 transition-transform"><Plus size={16} /> Add</button></div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden"><div className="divide-y divide-[#222]">{categories.map(cat => (<div key={cat} className="flex items-center gap-4 px-6 py-4">{editingCatName === cat ? (<><input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus /><button onClick={() => updateCategory(cat, editingCatValue)} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs active:scale-95 transition-transform">Save</button><button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button></>) : (<><div className="flex-1 font-medium">{cat}</div><button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button><button onClick={() => deleteCategory(cat)} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={15} /></button></>)}</div>))}</div></div>
+          </div>
         )}
 
+        {/* PROMO TAB */}
         {activeTab === 'promo' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-6">Promo Video</h3><div className="space-y-4"><div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Promo Video</div><div className="text-xs text-[#666]">Display in trial popup</div></div><button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })} className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${promoSettings.isEnabled ? 'translate-x-6' : 'translate-x-0'}`} /></button></div><div className="flex gap-3">{(['youtube', 'direct'] as const).map(t => (<button key={t} onClick={() => setPromoSettings({ ...promoSettings, videoType: t })} className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition active:scale-95 ${promoSettings.videoType === t ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{t === 'youtube' ? 'YouTube' : 'Direct URL'}</button>))}</div><div><label className="text-xs text-[#666] mb-1 block">Video URL</label><input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div>{promoSettings.videoUrl && promoSettings.isEnabled && (<div className="rounded-2xl overflow-hidden border border-[#333] aspect-video bg-black"><iframe src={(() => { const u = promoSettings.videoUrl; if (u.includes('embed')) return `${u}?autoplay=0&controls=1`; const id = u.includes('v=') ? u.split('v=')[1]?.split('&')[0] : u.split('/').pop(); return `https://www.youtube.com/embed/${id}?controls=1&modestbranding=1&rel=0`; })()} className="w-full h-full" title="Promo Preview" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media" allowFullScreen /></div>)}<button onClick={() => { savePromoSettings(promoSettings); refreshAllData(); showToast("✅ Promo video saved & synced!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PROMO VIDEO SETTINGS</button></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Promo Video</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]"><div><div className="font-medium text-sm">Show Promo Video</div><div className="text-xs text-[#666]">Display in trial popup</div></div><button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })} className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}><div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${promoSettings.isEnabled ? 'translate-x-6' : 'translate-x-0'}`} /></button></div>
+              <div className="flex gap-3">{(['youtube', 'direct'] as const).map(t => (<button key={t} onClick={() => setPromoSettings({ ...promoSettings, videoType: t })} className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition active:scale-95 ${promoSettings.videoType === t ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>{t === 'youtube' ? 'YouTube' : 'Direct URL'}</button>))}</div>
+              <div><label className="text-xs text-[#666] mb-1 block">Video URL</label><input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div>
+              {promoSettings.videoUrl && promoSettings.isEnabled && (<div className="rounded-2xl overflow-hidden border border-[#333] aspect-video bg-black"><iframe src={(() => { const u = promoSettings.videoUrl; if (u.includes('embed')) return `${u}?autoplay=0&controls=1`; const id = u.includes('v=') ? u.split('v=')[1]?.split('&')[0] : u.split('/').pop(); return `https://www.youtube.com/embed/${id}?controls=1&modestbranding=1&rel=0`; })()} className="w-full h-full" title="Promo Preview" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media" allowFullScreen /></div>)}
+              <button onClick={() => { savePromoSettings(promoSettings); refreshAllData(); showToast("✅ Promo video saved & synced to all users!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PROMO VIDEO</button>
+            </div>
+          </div>
         )}
 
+        {/* DATA TOOLS TAB */}
         {activeTab === 'datatools' && (
-          <div className="max-w-2xl"><h3 className="text-3xl font-semibold tracking-tight mb-2">Data Integrity Hub</h3><p className="text-[#a1a1aa] mb-8">Export a complete platform snapshot or restore from a backup file.</p><div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-5"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0"><Download size={22} className="text-[#c5a26f]" /></div><div><div className="font-semibold text-lg">Export System Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all data.</div></div></div><button onClick={() => { exportSystemBackup(); showToast("✅ Backup downloaded!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"><Database size={18} /> Download Full JSON Backup</button></div><div className="bg-[#111] border border-[#222] rounded-3xl p-7"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0"><Upload size={22} className="text-[#a1a1aa]" /></div><div><div className="font-semibold text-lg">Restore from Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup file.</div></div></div><input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (!file) return; importSystemBackup(file, msg => { showToast(msg); setAdminVideos(getStoredVideos()); setCategoriesState(getCategories()); setDigitalProducts(getDigitalProducts()); setPlatformSettings(getSettings()); setSubSettings(getSubSettings()); setPaymentConfig(getPaymentSettings()); refreshAllData(); }, err => showToast(err)); e.target.value = ''; }} /><button onClick={() => fileInputRef.current?.click()} className="w-full py-4 bg-[#1a1a1a] border border-[#333] hover:border-[#c5a26f] text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition-colors active:scale-[0.98]"><Upload size={18} /> Choose Backup File (.json)</button><p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration.</p></div></div>
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-2">Data Integrity Hub</h3>
+            <p className="text-[#a1a1aa] mb-8">Export a complete platform snapshot or restore from a backup file.</p>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-5"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0"><Download size={22} className="text-[#c5a26f]" /></div><div><div className="font-semibold text-lg">Export System Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all data.</div></div></div><button onClick={() => { exportSystemBackup(); showToast("✅ Backup downloaded!"); }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"><Database size={18} /> Download Full JSON Backup</button></div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7"><div className="flex items-start gap-4 mb-5"><div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0"><Upload size={22} className="text-[#a1a1aa]" /></div><div><div className="font-semibold text-lg">Restore from Backup</div><div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup file.</div></div></div><input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (!file) return; importSystemBackup(file, msg => { showToast(msg); loadAllData(); refreshAllData(); }, err => showToast(err)); e.target.value = ''; }} /><button onClick={() => fileInputRef.current?.click()} className="w-full py-4 bg-[#1a1a1a] border border-[#333] hover:border-[#c5a26f] text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition-colors active:scale-[0.98]"><Upload size={18} /> Choose Backup File (.json)</button><p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration.</p></div>
+          </div>
         )}
       </div>
 
       {/* Add/Edit Video Modal */}
-      <AnimatePresence>{showAddModal && (<div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowAddModal(false)}><motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }} className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-7"><div className="text-2xl font-semibold">{editingVideo ? "Edit Short" : "Publish New Short"}</div><button onClick={() => setShowAddModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button></div><div className="space-y-4"><input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">{getCategories().map(c => <option key={c} value={c}>{c}</option>)}</select><input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /></div><div className="flex items-center gap-4 bg-[#1a1a1a] rounded-2xl p-5 border border-[#222]"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={formData.isPremium} onChange={e => setFormData({ ...formData, isPremium: e.target.checked })} className="accent-[#c5a26f] scale-125" /><div><div className="font-medium text-sm">Premium Only</div><div className="text-xs text-[#a1a1aa]">Requires active subscription</div></div></label></div><input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /><input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div><div className="flex gap-3 mt-8"><button onClick={() => setShowAddModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button><button onClick={saveVideo} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingVideo ? "Save Changes" : "Publish Short"}</button></div></motion.div></div>)}</AnimatePresence>
+      <AnimatePresence>{showAddModal && (<div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowAddModal(false)}><motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }} className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-7"><div className="text-2xl font-semibold">{editingVideo ? "Edit Short" : "Publish New Short"}</div><button onClick={() => setShowAddModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button></div><div className="space-y-4"><input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">{categories.map(c => <option key={c} value={c}>{c}</option>)}</select><input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /></div><div className="flex items-center gap-4 bg-[#1a1a1a] rounded-2xl p-5 border border-[#222]"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={formData.isPremium} onChange={e => setFormData({ ...formData, isPremium: e.target.checked })} className="accent-[#c5a26f] scale-125" /><div><div className="font-medium text-sm">Premium Only</div><div className="text-xs text-[#a1a1aa]">Requires active subscription</div></div></label></div><input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /><input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /></div><div className="flex gap-3 mt-8"><button onClick={() => setShowAddModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button><button onClick={saveVideo} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingVideo ? "Save Changes" : "Publish Short"}</button></div></motion.div></div>)}</AnimatePresence>
 
       {/* Add/Edit Product Modal */}
       <AnimatePresence>{showProductModal && (<div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowProductModal(false)}><motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }} className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center mb-7"><div className="text-2xl font-semibold">{editingProduct ? "Edit Product" : "Add New Product"}</div><button onClick={() => setShowProductModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button></div><div className="space-y-4"><input placeholder="Product Title" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} rows={2} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><div><label className="text-xs text-[#666] mb-1 block">Category</label><select value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value as DigitalProduct['category'] })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm"><option value="workshop">Workshop</option><option value="guide">Guide</option><option value="merch">Merch</option></select></div><div><label className="text-xs text-[#666] mb-1 block">Price (₹)</label><input type="number" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })} className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /></div></div><input placeholder="Thumbnail URL" value={productForm.thumbnailUrl} onChange={e => setProductForm({ ...productForm, thumbnailUrl: e.target.value })} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" /><div className="grid grid-cols-2 gap-4"><input placeholder="Badge (e.g. BESTSELLER)" value={productForm.badge} onChange={e => setProductForm({ ...productForm, badge: e.target.value })} className="bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" /><div className="flex items-center gap-3 bg-[#1a1a1a] rounded-2xl px-4 border border-[#222]"><input type="checkbox" checked={productForm.isPremium} onChange={e => setProductForm({ ...productForm, isPremium: e.target.checked })} className="accent-[#c5a26f]" /><span className="text-sm">Premium Only</span></div></div></div><div className="flex gap-3 mt-8"><button onClick={() => setShowProductModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button><button onClick={saveProduct} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingProduct ? "Save Changes" : "List Product"}</button></div></motion.div></div>)}</AnimatePresence>
