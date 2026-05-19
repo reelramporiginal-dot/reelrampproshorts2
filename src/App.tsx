@@ -2538,9 +2538,24 @@ function AdminPage() {
           <div className="max-w-2xl"><h2 className="text-3xl font-semibold mb-6">Plan Settings</h2><input value={subSettings.trialOfferPrice} onChange={e => setSubSettings({ ...subSettings, trialOfferPrice: e.target.value })} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-3" placeholder="Trial Price" /><input value={subSettings.fullPrice} onChange={e => setSubSettings({ ...subSettings, fullPrice: e.target.value })} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-6" placeholder="Full Price" /><button onClick={() => { saveSubSettings(subSettings); refreshAllData(); showToast("Plan settings saved & synced!"); }} className="w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold">SAVE PLANS</button></div>
         )}
       </div>
-      <AnimatePresence>{showAddModal && (<div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50" onClick={() => setShowAddModal(false)}><motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-[#111] max-w-lg w-full rounded-3xl p-8" onClick={e => e.stopPropagation()}><h3 className="text-2xl font-semibold mb-6">{editingVideo ? "Edit Short" : "Add New Short"}</h3><input placeholder="Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-3" /><textarea placeholder="Description" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows={3} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-3" /><div className="grid grid-cols-2 gap-3 mb-3"><select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] p-4 rounded-2xl"><option>Horror</option><option>Mystery</option><option>Life Lessons</option><option>Investigative</option><option>True Crime</option></select><input placeholder="Duration (e.g., 4:30)" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })} className="bg-[#1a1a1a] p-4 rounded-2xl" /></div><label className="flex items-center gap-3 mb-3"><input type="checkbox" checked={formData.isPremium} onChange={e => setFormData({ ...formData, isPremium: e.target.checked })} className="accent-[#c5a26f]" /> Premium Only</label><input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-3" /><input placeholder="Video URL" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })} className="w-full bg-[#1a1a1a] p-4 rounded-2xl mb-6" /><div className="flex gap-3"><button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button><button onClick={saveVideo} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl font-semibold">{editingVideo ? "Save" : "Publish"}</button></div></motion.div></div>)}</AnimatePresence>
+    <AnimatePresence>
+  {showAddModal && (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50" onClick={() => setShowAddModal(false)}>
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }} 
+        animate={{ scale: 1, opacity: 1 }} 
+        exit={{ scale: 0.9, opacity: 0 }} 
+        className="bg-[#111] max-w-lg w-full rounded-3xl p-8" 
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 className="text-2xl font-semibold mb-6">{editingVideo ? "Edit Short" : "Add New Short"}</h3>
+        {/* rest of your form */}
+        <div className="flex gap-3 mt-8">
+          <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button>
+          <button onClick={saveVideo} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl font-semibold">{editingVideo ? "Save" : "Publish"}</button>
+        </div>
+      </motion.div>
     </div>
-  );
-}
-
+  )}
+</AnimatePresence>
 export default App;
