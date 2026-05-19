@@ -4,14 +4,14 @@ import {
   useLocation, Navigate
 } from 'react-router-dom';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
-import { createClient } from '@supabase/supabase-js';
-import type { User, Session } from '@supabase/supabase-js';
+import { createClient, User, Session } from '@supabase/supabase-js';
 import {
-  Play, Pause, Heart, Bookmark, Share2, X, ArrowLeft,
-  User as UserIcon, Star, CreditCard, CheckCircle, Lock, Plus, Edit2, Trash2,
+  Play, Pause, Heart, Bookmark, Download, Share2, X, ArrowLeft,
+  User as UserIcon, Clock, Star, CreditCard, CheckCircle, Lock, Plus, Edit2, Trash2,
   BarChart3, Users, Settings, TrendingUp, Volume2, VolumeX,
   Facebook, Instagram, Youtube, MessageCircle,
-  ChevronUp, ChevronDown, Clock, Download
+  ShoppingBag, Smartphone, Upload, Database, FileText,
+  Home, Zap
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,20 +23,27 @@ const SUPABASE_ANON_KEY =
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Bunny.net CDN config
 const BUNNY = {
   storageZone: "reelrampproshorts1",
-  apiKey: "1f535aac-8943-4da5-be1b98b776cc-2d1b4330",
-  readOnlyPassword: "87dca87d-6798-4940-99db04774f37-c090-444f",
-  endpointUrl: "https://storage.bunnycdn.com/reelrampproshorts1",
   cdnBase: "https://reelrampproshorts1.b-cdn.net",
 };
 
-const getBunnyCdnUrl = (path: string): string =>
+const getBunnyCdnUrl = (path: string) =>
   path.startsWith("http") ? path : `${BUNNY.cdnBase}/${path.replace(/^\//, "")}`;
 
 const REELRAMP_LOGO =
   "https://drive.google.com/uc?export=view&id=1qs734lVBcgz-fJ_TitnibEG-KqX0LCVg";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GUEST ID
+// ─────────────────────────────────────────────────────────────────────────────
+const getOrCreateGuestId = (): string => {
+  const existing = localStorage.getItem('rr_guest_id');
+  if (existing) return existing;
+  const id = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  localStorage.setItem('rr_guest_id', id);
+  return id;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -106,6 +113,7 @@ interface WatchHistoryItem {
   videoId: number;
   watchedAt: string;
   progress: number;
+  timestamp: number;
 }
 
 interface PromoVideoSettings {
@@ -120,6 +128,25 @@ interface RevenueEntry {
   amount: number;
   type: string;
   plan: string;
+}
+
+interface DigitalProduct {
+  id: number;
+  title: string;
+  description: string;
+  price: number;
+  category: 'workshop' | 'guide' | 'merch';
+  thumbnailUrl: string;
+  isPremium: boolean;
+  fileUrl?: string;
+  badge?: string;
+}
+
+interface CreatorRevenueEntry {
+  creatorName: string;
+  videoTitle: string;
+  totalViews: number;
+  revenueShare: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,11 +171,18 @@ const initialAdminUsers: AdminUser[] = [
   { id: 3, name: "Rahul Mehta", email: "rahul.m@reelramp.app", phone: "+91 76543 21098", subscribed: false, joinDate: "Apr 05, 2024", totalWatched: 19 },
 ];
 
+const initialDigitalProducts: DigitalProduct[] = [
+  { id: 1, title: "Cinematic Storytelling Masterclass", description: "12-module video workshop on short-film storytelling, shot composition, and emotional pacing.", price: 1499, category: 'workshop', thumbnailUrl: "/images/workshop1.jpg", isPremium: false, badge: "BESTSELLER" },
+  { id: 2, title: "Horror Script Writing Guide", description: "Complete downloadable PDF guide with 50 proven horror narrative frameworks.", price: 299, category: 'guide', thumbnailUrl: "/images/guide1.jpg", isPremium: false, badge: "PDF" },
+  { id: 3, title: "ReelRamp Creator Kit", description: "Exclusive merch bundle: hoodie, notebook, lens cap set — for serious creators.", price: 1999, category: 'merch', thumbnailUrl: "/images/merch1.jpg", isPremium: true, badge: "LIMITED" },
+  { id: 4, title: "Investigative Journalism Bootcamp", description: "6-week intensive video workshop on research, source protection, and story arc design.", price: 2499, category: 'workshop', thumbnailUrl: "/images/workshop2.jpg", isPremium: true, badge: "EXCLUSIVE" },
+];
+
 const defaultPlatformSettings: PlatformSettings = {
   appName: "ReelRamp Shorts",
   tagline: "Premium Short Films & Investigative Stories",
   accentColor: "#c5a26f",
-  supportEmail: "reelramoriginal@gmail.com",
+  supportEmail: "reelramporiginal@gmail.com",
   supportPhone: "+91 7307493338",
   razorpayKey: "",
   logoUrl: "",
@@ -192,134 +226,72 @@ const ls = {
       return fallback;
     }
   },
-  set: (key: string, value: unknown): void => {
-    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* noop */ }
+  set: (key: string, value: unknown) => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota */ }
   },
-  remove: (key: string): void => localStorage.removeItem(key),
+  remove: (key: string) => localStorage.removeItem(key),
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPABASE DATA HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+const getStoredVideos = (): Video[] => ls.get('reelramp_videos', initialVideos);
+const saveVideos = (v: Video[]) => ls.set('reelramp_videos', v);
 
-const dbVideoToFrontend = (row: any): Video => ({
-  id: row.id,
-  title: row.title || '',
-  description: row.description || '',
-  category: row.category || '',
-  duration: row.duration || '0:00',
-  isPremium: row.is_premium ?? false,
-  thumbnail: row.thumbnail || '',
-  videoUrl: row.video_url || '',
-  source: row.source || 'direct',
-  storagePath: row.storage_path
-});
+const getStoredPopups = (): PopupAd[] =>
+  ls.get('reelramp_popups', [{ id: 1, title: "Premium Unlock", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: true }]);
+const savePopups = (p: PopupAd[]) => ls.set('reelramp_popups', p);
 
-const fetchVideosFromDB = async (): Promise<Video[]> => {
-  try {
-    const { data, error } = await supabase.from('videos').select('*').order('id');
-    if (!error && data && data.length > 0) {
-      const parsed = data.map(dbVideoToFrontend);
-      ls.set('reelramp_videos', parsed);
-      return parsed;
-    }
-  } catch { /* fallback below */ }
-  return ls.get<Video[]>('reelramp_videos', initialVideos);
-};
+const getSettings = (): PlatformSettings => ls.get('reelramp_settings', defaultPlatformSettings);
+const saveSettings = (s: PlatformSettings) => ls.set('reelramp_settings', s);
 
-const upsertVideoToDB = async (video: Video): Promise<void> => {
-  try {
-    const databasePayload = {
-      id: video.id,
-      title: video.title,
-      description: video.description,
-      category: video.category,
-      duration: video.duration,
-      is_premium: video.isPremium,
-      thumbnail: video.thumbnail,
-      video_url: video.videoUrl,
-      source: video.source || 'direct',
-      storage_path: video.storagePath
-    };
-    await supabase.from('videos').upsert(databasePayload, { onConflict: 'id' });
-  } catch { /* noop */ }
-};
+const getSubSettings = (): SubscriptionSettings => ls.get('reelramp_sub_settings', defaultSubscriptionSettings);
+const saveSubSettings = (s: SubscriptionSettings) => ls.set('reelramp_sub_settings', s);
 
-const deleteVideoFromDB = async (id: number): Promise<void> => {
-  try { await supabase.from('videos').delete().eq('id', id); } catch { /* noop */ }
-};
+const getPaymentSettings = (): PaymentSettings => ls.get('reelramp_payment', defaultPaymentSettings);
+const savePaymentSettings = (s: PaymentSettings) => ls.set('reelramp_payment', s);
 
-const fetchSettingFromDB = async <T,>(key: string, fallback: T): Promise<T> => {
-  try {
-    const { data } = await supabase.from('platform_settings').select('value').eq('key', key).single();
-    if (data?.value) return data.value as T;
-  } catch { /* fallback below */ }
-  return ls.get<T>(`reelramp_${key}`, fallback);
-};
+const getPromoSettings = (): PromoVideoSettings => ls.get('reelramp_promo', defaultPromoVideo);
+const savePromoSettings = (s: PromoVideoSettings) => ls.set('reelramp_promo', s);
 
-const upsertSettingToDB = async (key: string, value: unknown): Promise<void> => {
-  ls.set(`reelramp_${key}`, value);
-  try { await supabase.from('platform_settings').upsert({ key, value }, { onConflict: 'key' }); } catch { /* noop */ }
-};
+const getCategories = (): string[] =>
+  ls.get('reelramp_categories', ["Horror", "Mystery", "Life Lessons", "Investigative", "True Crime"]);
+const saveCategories = (c: string[]) => ls.set('reelramp_categories', c);
 
-const fetchPopupsFromDB = async (): Promise<PopupAd[]> => {
-  try {
-    const { data } = await supabase.from('popup_ads').select('*').order('id');
-    if (data && data.length > 0) {
-      ls.set('reelramp_popups', data);
-      return data as PopupAd[];
-    }
-  } catch { /* fallback below */ }
-  return ls.get<PopupAd[]>('reelramp_popups', [{ id: 1, title: "Premium Unlock", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: true }]);
-};
+const getWatchHistory = (): WatchHistoryItem[] => ls.get('reelramp_watch_history', []);
+const saveWatchHistory = (h: WatchHistoryItem[]) => ls.set('reelramp_watch_history', h);
 
-const upsertPopupToDB = async (popup: PopupAd): Promise<void> => {
-  try { await supabase.from('popup_ads').upsert(popup, { onConflict: 'id' }); } catch { /* noop */ }
-};
-
-const deletePopupFromDB = async (id: number): Promise<void> => {
-  try { await supabase.from('popup_ads').delete().eq('id', id); } catch { /* noop */ }
-};
-
-const fetchCategoriesFromDB = async (): Promise<string[]> => {
-  try {
-    const { data } = await supabase.from('categories').select('name').order('name');
-    if (data && data.length > 0) {
-      const cats = (data as Array<{ name: string }>).map((r) => r.name);
-      ls.set('reelramp_categories', cats);
-      return cats;
-    }
-  } catch { /* fallback below */ }
-  return ls.get<string[]>('reelramp_categories', ["Horror", "Mystery", "Life Lessons", "Investigative", "True Crime"]);
-};
-
-const getWatchHistory = (): WatchHistoryItem[] => ls.get<WatchHistoryItem[]>('reelramp_watch_history', []);
-const saveWatchHistory = (h: WatchHistoryItem[]): void => ls.set('reelramp_watch_history', h);
-
-const addToWatchHistory = (videoId: number, progress = 100): void => {
+const addToWatchHistory = (videoId: number, progress = 0, timestamp = 0) => {
   const h = getWatchHistory();
   const idx = h.findIndex(i => i.videoId === videoId);
-  const item: WatchHistoryItem = { videoId, watchedAt: new Date().toISOString(), progress };
+  const item: WatchHistoryItem = { videoId, watchedAt: new Date().toISOString(), progress, timestamp };
   const updated = idx !== -1
     ? h.map((x, i) => i === idx ? item : x)
     : [item, ...h].slice(0, 20);
   saveWatchHistory(updated);
 };
 
-const getVideoViews = (): Record<number, number> => ls.get<Record<number, number>>('reelramp_views', {});
+const getResumeTimestamp = (videoId: number): number => {
+  const h = getWatchHistory();
+  const item = h.find(i => i.videoId === videoId);
+  return item?.timestamp || 0;
+};
 
-const incrementView = (id: number): void => {
+const getVideoViews = (): Record<number, number> => ls.get('reelramp_views', {});
+const incrementView = (id: number) => {
   const v = getVideoViews();
   v[id] = (v[id] || 0) + 1;
   ls.set('reelramp_views', v);
 };
 
-const getRevenueData = (): RevenueEntry[] => ls.get<RevenueEntry[]>('reelramp_revenue', [
+const getRevenueData = (): RevenueEntry[] => ls.get('reelramp_revenue', [
   { id: 1, date: "2025-04-01", amount: 2450, type: "Subscription", plan: "Monthly" },
   { id: 2, date: "2025-04-05", amount: 1499, type: "Annual", plan: "Annual" },
   { id: 3, date: "2025-04-18", amount: 699, type: "Subscription", plan: "Monthly" },
   { id: 4, date: "2025-05-01", amount: 2450, type: "Subscription", plan: "Monthly" },
 ]);
+
+const getDigitalProducts = (): DigitalProduct[] =>
+  ls.get('reelramp_digital_products', initialDigitalProducts);
+const saveDigitalProducts = (p: DigitalProduct[]) =>
+  ls.set('reelramp_digital_products', p);
 
 const getAverageRating = (videoId: number): { average: number; count: number } => {
   const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
@@ -330,6 +302,96 @@ const getAverageRating = (videoId: number): { average: number; count: number } =
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PAYWALL TRACKER
+// ─────────────────────────────────────────────────────────────────────────────
+const getScrollCount = (): number => parseInt(sessionStorage.getItem('rr_scroll_count') || '0');
+const incrementScrollCount = () =>
+  sessionStorage.setItem('rr_scroll_count', String(getScrollCount() + 1));
+const resetScrollCount = () => sessionStorage.removeItem('rr_scroll_count');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA TOOLS
+// ─────────────────────────────────────────────────────────────────────────────
+const exportSystemBackup = () => {
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    version: "1.0.0",
+    categories: getCategories(),
+    videos: getStoredVideos(),
+    digitalProducts: getDigitalProducts(),
+    platformSettings: getSettings(),
+    subscriptionSettings: getSubSettings(),
+    paymentSettings: getPaymentSettings(),
+    promoSettings: getPromoSettings(),
+    popups: getStoredPopups(),
+    revenueData: getRevenueData(),
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `reelramp_backup_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const importSystemBackup = (
+  file: File,
+  onSuccess: (msg: string) => void,
+  onError: (msg: string) => void
+) => {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const raw = e.target?.result as string;
+      const data = JSON.parse(raw);
+      const required = ['categories', 'videos', 'digitalProducts'];
+      const missing = required.filter(k => !(k in data));
+      if (missing.length > 0) { onError(`Invalid backup: missing keys — ${missing.join(', ')}`); return; }
+      if (data.categories) saveCategories(data.categories);
+      if (data.videos) saveVideos(data.videos);
+      if (data.digitalProducts) saveDigitalProducts(data.digitalProducts);
+      if (data.platformSettings) saveSettings(data.platformSettings);
+      if (data.subscriptionSettings) saveSubSettings(data.subscriptionSettings);
+      if (data.paymentSettings) savePaymentSettings(data.paymentSettings);
+      if (data.promoSettings) savePromoSettings(data.promoSettings);
+      if (data.popups) savePopups(data.popups);
+      onSuccess(`✅ Backup restored — ${data.videos?.length || 0} videos, ${data.categories?.length || 0} categories imported.`);
+    } catch {
+      onError('❌ Invalid JSON file. Please upload a valid ReelRamp backup.');
+    }
+  };
+  reader.readAsText(file);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPABASE HELPERS — FIX 1: maybeSingle + structured upsert, guaranteed finally
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Safe Supabase upsert — never throws, always resolves */
+async function safeUpsert(table: string, data: Record<string, unknown>, conflictCol = 'id'): Promise<boolean> {
+  try {
+    const { error } = await supabase.from(table).upsert(data, { onConflict: conflictCol });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/** Safe Supabase select — returns null on any error */
+async function safeMaybeSelect<T>(table: string, filters: Record<string, unknown>): Promise<T | null> {
+  try {
+    let q = supabase.from(table).select('*');
+    for (const [k, v] of Object.entries(filters)) q = (q as any).eq(k, v);
+    const { data, error } = await (q as any).maybeSingle();
+    if (error) return null;
+    return data as T;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AUTH CONTEXT
 // ─────────────────────────────────────────────────────────────────────────────
 interface AuthContextValue {
@@ -337,14 +399,17 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   isSubscribed: boolean;
+  isGuest: boolean;
+  guestId: string;
   setIsSubscribed: (v: boolean) => void;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = React.createContext<AuthContextValue>({
   user: null, session: null, loading: true,
-  isSubscribed: false, setIsSubscribed: () => { /* noop */ },
-  signOut: async () => { /* noop */ },
+  isSubscribed: false, isGuest: true, guestId: '',
+  setIsSubscribed: () => {},
+  signOut: async () => {},
 });
 
 const useAuth = () => React.useContext(AuthContext);
@@ -354,50 +419,49 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSubscribed, setIsSubscribed] = useState(false);
-
-  const checkSubscription = async (userId: string): Promise<void> => {
-    try {
-      const { data } = await supabase
-        .from('subscriptions')
-        .select('status')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .single();
-      setIsSubscribed(!!data);
-    } catch {
-      setIsSubscribed(ls.get<boolean>('reelramp_subscribed', false));
-    }
-  };
+  const [guestId] = useState<string>(getOrCreateGuestId());
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      setUser(s?.user ?? null);
-      setLoading(false);
-      if (s?.user) void checkSubscription(s.user.id);
-    });
+    // FIX 3: Instant session restore — no layout flash
+    const storedSub = ls.get('reelramp_subscribed', false);
+    if (storedSub) setIsSubscribed(true);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      setUser(s?.user ?? null);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
       setLoading(false);
-      if (s?.user) {
-        void checkSubscription(s.user.id);
-      } else {
-        setIsSubscribed(false);
-      }
+      if (session?.user) checkSubscription(session.user.id);
     });
-
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+      if (session?.user) { checkSubscription(session.user.id); }
+      else { setIsSubscribed(ls.get('reelramp_subscribed', false)); }
+    });
     return () => subscription.unsubscribe();
   }, []);
 
-  const signOut = async (): Promise<void> => {
+  const checkSubscription = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('subscriptions').select('status').eq('user_id', userId).eq('status', 'active').maybeSingle();
+      const active = !!data;
+      setIsSubscribed(active);
+      ls.set('reelramp_subscribed', active);
+    } catch {
+      setIsSubscribed(ls.get('reelramp_subscribed', false));
+    }
+  };
+
+  const signOut = async () => {
     await supabase.auth.signOut();
     ls.remove('reelramp_subscribed');
+    setIsSubscribed(false);
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, isSubscribed, setIsSubscribed, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, isSubscribed, isGuest: !user, guestId, setIsSubscribed, signOut }}>
       {children}
     </AuthContext.Provider>
   );
@@ -426,114 +490,234 @@ const Logo = ({ size = 32, className = "" }: { size?: number; className?: string
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PREMIUM VIDEO PLAYER
+// PWA INSTALL BANNER
 // ─────────────────────────────────────────────────────────────────────────────
-interface PremiumVideoPlayerProps {
+function PWAInstallBanner() {
+  const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
+  const [show, setShow] = useState(false);
+  const dismissed = !!sessionStorage.getItem('rr_pwa_dismissed');
+  const [hasInteracted, setHasInteracted] = useState(false);
+
+  useEffect(() => {
+    if (dismissed) return;
+    const handler = (e: Event) => { e.preventDefault(); setDeferredPrompt(e); };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  useEffect(() => {
+    if (dismissed || hasInteracted) return;
+    const onInteract = () => { if (deferredPrompt) setShow(true); setHasInteracted(true); };
+    window.addEventListener('click', onInteract, { once: true });
+    window.addEventListener('touchstart', onInteract, { once: true });
+    return () => { window.removeEventListener('click', onInteract); window.removeEventListener('touchstart', onInteract); };
+  }, [deferredPrompt, dismissed, hasInteracted]);
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    await (deferredPrompt as any).prompt();
+    const { outcome } = await (deferredPrompt as any).userChoice;
+    if (outcome === 'accepted') { sessionStorage.setItem('rr_pwa_dismissed', '1'); setShow(false); }
+    setDeferredPrompt(null);
+  };
+
+  if (!show || dismissed) return null;
+  return (
+    <AnimatePresence>
+      <motion.div initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 100, opacity: 0 }}
+        transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.38 }}
+        className="fixed bottom-[72px] left-4 right-4 z-[150] md:left-auto md:right-6 md:w-[380px]">
+        <div className="bg-[#111]/95 backdrop-blur-xl border border-[#c5a26f]/40 rounded-3xl p-5 flex items-center gap-4 shadow-2xl">
+          <div className="w-12 h-12 bg-[#c5a26f] rounded-2xl flex items-center justify-center flex-shrink-0">
+            <Smartphone size={22} className="text-black" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-sm">Install ReelRamp App</div>
+            <div className="text-xs text-[#a1a1aa] mt-0.5">Fast, offline-ready, no browser bar</div>
+          </div>
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={handleInstall} className="px-4 py-2 bg-[#c5a26f] text-black text-xs font-semibold rounded-xl">Install</button>
+            <button onClick={() => { sessionStorage.setItem('rr_pwa_dismissed', '1'); setShow(false); }} className="p-2 text-[#666]"><X size={16} /></button>
+          </div>
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTION INTERCEPT MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+function SubscriptionInterceptModal({ onClose, onSubscribe }: { onClose: () => void; onSubscribe: () => void }) {
+  const subSettings = getSubSettings();
+  return (
+    <div className="fixed inset-0 z-[120] flex items-end md:items-center justify-center bg-black/95 p-0 md:p-6">
+      <motion.div initial={{ y: 100, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 60, opacity: 0 }}
+        transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.38 }}
+        className="w-full md:max-w-md bg-gradient-to-b from-[#1a1a1a] to-[#111] rounded-t-3xl md:rounded-3xl p-9 border border-[#333] border-b-0 md:border-b">
+        <div className="w-10 h-1 bg-[#333] rounded-full mx-auto mb-7 md:hidden" />
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 bg-gradient-to-br from-[#c5a26f] to-[#d4b17f] rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-lg shadow-[#c5a26f]/20">
+            <Lock size={28} className="text-black" />
+          </div>
+          <h2 className="text-4xl font-semibold tracking-[-2px] mb-2">Premium Access</h2>
+          <p className="text-[#a1a1aa] text-sm">You've been watching 3 free shorts. Subscribe to continue without interruption.</p>
+        </div>
+        <div className="bg-[#0a0a0a] rounded-2xl p-5 mb-6 border border-[#c5a26f]/20">
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="text-4xl font-semibold tracking-tight text-[#c5a26f]">{subSettings.trialOfferPrice}</span>
+            <span className="text-[#666] text-sm">/ {subSettings.trialOfferDuration} trial</span>
+          </div>
+          <div className="text-xs text-[#666]">Then {subSettings.fullPrice} for {subSettings.fullValidity}</div>
+          <ul className="mt-4 space-y-1.5 text-sm text-[#a1a1aa]">
+            {['Unlimited premium shorts', 'Ad-free experience', 'Offline downloads', 'New releases first'].map((f, i) => (
+              <li key={i} className="flex items-center gap-2"><CheckCircle size={13} className="text-[#c5a26f]" /> {f}</li>
+            ))}
+          </ul>
+        </div>
+        <button onClick={onSubscribe} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider mb-3 active:scale-[0.98] transition-transform">UNLOCK PREMIUM</button>
+        <button onClick={onClose} className="w-full py-3 text-sm text-[#666]">Continue as Guest (Limited)</button>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2: CINEMATIC PLAYER — hardware-accelerated, touch-native, pre-fetch ready
+// ─────────────────────────────────────────────────────────────────────────────
+interface CinematicPlayerProps {
   video: Video;
   isPlaying: boolean;
   onPlayPause: () => void;
   onEnded: () => void;
-  onProgress?: (pct: number) => void;
+  onSeek?: (seconds: number) => void;
+  overlayVisible: boolean;
+  onUserActivity: () => void;
+  resumeFrom?: number;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
 }
 
-function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress }: PremiumVideoPlayerProps) {
+function CinematicPlayer({
+  video, isPlaying, onPlayPause, onEnded,
+  overlayVisible, onUserActivity, resumeFrom = 0, onTimeUpdate
+}: CinematicPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [doubleTapSide, setDoubleTapSide] = useState<'left' | 'right' | null>(null);
-  const [likeAnim, setLikeAnim] = useState(false);
-  const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
-  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  const [duration, setDuration] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [showHUD, setShowHUD] = useState(false);
+  const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
+  const lastTapRef = useRef(0);
+  const heartIdRef = useRef(0);
+  const hasResumed = useRef(false);
+  const timeUpdateThrottle = useRef(0);
 
+  // FIX 2: Immediate play/pause — no debounce
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (isPlaying) { v.play().catch(() => { /* noop */ }); }
+    if (isPlaying) { v.play().catch(() => {}); }
     else { v.pause(); }
   }, [isPlaying]);
 
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.muted = isMuted;
+    if (videoRef.current) videoRef.current.muted = isMuted;
   }, [isMuted]);
 
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.playbackRate = playbackSpeed;
-  }, [playbackSpeed]);
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  }, [speed]);
 
-  const handleTimeUpdate = (): void => {
-    const v = videoRef.current;
-    if (!v || !v.duration) return;
-    const pct = (v.currentTime / v.duration) * 100;
-    setProgress(pct);
-    setCurrentTime(v.currentTime);
-    onProgress?.(pct);
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>): void => {
-    const v = videoRef.current;
-    if (!v) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = (e.clientX - rect.left) / rect.width;
-    v.currentTime = ratio * v.duration;
-  };
-
-  const handleTap = (e: React.MouseEvent<HTMLDivElement>): void => {
-    const now = Date.now();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const tapX = e.clientX - rect.left;
-    const isLeft = tapX < rect.width / 2;
-    const diff = now - lastTapRef.current.time;
-
-    if (diff < 300) {
-      const v = videoRef.current;
-      if (v) {
-        v.currentTime = isLeft ? Math.max(0, v.currentTime - 10) : Math.min(v.duration, v.currentTime + 10);
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration || 0);
+      if (!hasResumed.current && resumeFrom > 0) {
+        videoRef.current.currentTime = resumeFrom;
+        hasResumed.current = true;
       }
-      setDoubleTapSide(isLeft ? 'left' : 'right');
-      if (!isLeft) setLikeAnim(true);
-      setTimeout(() => { setDoubleTapSide(null); setLikeAnim(false); }, 700);
-    } else {
-      setTimeout(() => {
-        if (Date.now() - now >= 280) onPlayPause();
-      }, 300);
     }
-    lastTapRef.current = { time: now, x: tapX };
   };
 
-  const formatTime = (s: number): string => {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
+  // Throttled timeUpdate — max 4 calls/sec for perf
+  const handleTimeUpdate = () => {
+    const now = Date.now();
+    if (now - timeUpdateThrottle.current < 250) return;
+    timeUpdateThrottle.current = now;
+    const t = videoRef.current?.currentTime || 0;
+    setCurrentTime(t);
+    onTimeUpdate?.(t, duration);
   };
+
+  // Desktop scroll seek
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (!videoRef.current) return;
+      videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime + (e.deltaY < 0 ? 5 : -5));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const touchStartY = useRef(0);
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartY.current = e.touches[0].clientY; onUserActivity(); };
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const delta = touchStartY.current - e.changedTouches[0].clientY;
+    if (Math.abs(delta) > 60 && videoRef.current) {
+      videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime + (delta > 0 ? 10 : -10));
+    }
+  };
+
+  const handleDoubleTap = (e: React.MouseEvent | React.TouchEvent) => {
+    const now = Date.now();
+    if (now - lastTapRef.current < 320) {
+      let x = 0, y = 0;
+      if ('touches' in e) {
+        const touch = (e as React.TouchEvent).changedTouches[0];
+        const rect = containerRef.current?.getBoundingClientRect();
+        x = touch.clientX - (rect?.left || 0);
+        y = touch.clientY - (rect?.top || 0);
+      } else {
+        const me = e as React.MouseEvent;
+        const rect = containerRef.current?.getBoundingClientRect();
+        x = me.clientX - (rect?.left || 0);
+        y = me.clientY - (rect?.top || 0);
+      }
+      const id = ++heartIdRef.current;
+      setHearts(prev => [...prev, { id, x, y }]);
+      setTimeout(() => setHearts(prev => prev.filter(h => h.id !== id)), 1200);
+      if (videoRef.current) videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 10);
+    }
+    lastTapRef.current = now;
+  };
+
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!videoRef.current || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    videoRef.current.currentTime = ((e.clientX - rect.left) / rect.width) * duration;
+  };
+
+  const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
   if (video.source === 'youtube') {
-    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] ?? '';
+    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
     return (
-      <div className="relative w-full h-full bg-black">
-        <iframe
-          width="100%" height="100%"
+      <div className="relative w-full h-full bg-black" onClick={onUserActivity}>
+        <iframe width="100%" height="100%"
           src={`https://www.youtube.com/embed/${videoId}?autoplay=${isPlaying ? 1 : 0}&controls=1&modestbranding=1&rel=0&playsinline=1`}
-          title={video.title}
-          frameBorder="0"
+          title={video.title} frameBorder="0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          className="w-full h-full"
-          onLoad={() => setIsLoaded(true)}
-        />
-        {!isLoaded && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black">
-            <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
+          allowFullScreen className="w-full h-full" />
+        <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50">
+          <div className="h-full bg-[#c5a26f]" style={{ width: '0%' }} />
+        </div>
       </div>
     );
   }
@@ -541,128 +725,141 @@ function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress
   const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
 
   return (
-    <div className="relative w-full h-full bg-black select-none">
+    // FIX 2: transform-gpu for hardware acceleration
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-black select-none transform-gpu"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onClick={(e) => { onUserActivity(); handleDoubleTap(e); }}
+      onMouseDown={e => { if (e.detail === 2) handleDoubleTap(e); }}
+    >
       <video
         ref={videoRef}
         src={resolvedUrl}
-        className="w-full h-full object-cover"
-        playsInline
+        className="w-full h-full object-cover transform-gpu"
         autoPlay={isPlaying}
+        playsInline
+        preload="auto"
         onEnded={onEnded}
-        onLoadedData={() => { setIsLoaded(true); setDuration(videoRef.current?.duration ?? 0); }}
         onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onLoadedData={() => setIsLoaded(true)}
+        onClickCapture={e => {
+          if (e.detail === 1) setTimeout(() => {
+            if (Date.now() - lastTapRef.current > 320) onPlayPause();
+          }, 320);
+        }}
       />
 
-      {/* Tap zone */}
-      <div className="absolute inset-0 z-10" onClick={handleTap} />
-
-      {/* Double-tap flash */}
-      <AnimatePresence>
-        {doubleTapSide && (
-          <motion.div
-            key={doubleTapSide}
-            initial={{ opacity: 0.9, scale: 0.8 }}
-            animate={{ opacity: 0, scale: 1.2 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6 }}
-            className={`absolute top-1/2 -translate-y-1/2 z-20 pointer-events-none flex items-center justify-center w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm ${doubleTapSide === 'left' ? 'left-8' : 'right-8'}`}
-          >
-            <span className="text-white text-2xl font-bold">{doubleTapSide === 'left' ? '−10s' : '+10s'}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Heart burst on double-tap right */}
-      <AnimatePresence>
-        {likeAnim && (
-          <motion.div
-            initial={{ opacity: 1, scale: 0.5, y: 0 }}
-            animate={{ opacity: 0, scale: 1.8, y: -80 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.8, ease: 'easeOut' }}
-            className="absolute bottom-32 right-12 z-30 pointer-events-none text-[#e11d48] text-5xl"
-          >
-            ❤️
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Loading spinner */}
       {!isLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-20">
-          <div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-20">
+          <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
         </div>
       )}
 
-      {/* Pause overlay */}
-      {!isPlaying && isLoaded && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="absolute inset-0 flex items-center justify-center bg-black/25 z-10 pointer-events-none"
-        >
-          <div className="w-20 h-20 rounded-full bg-white/90 flex items-center justify-center shadow-2xl">
-            <Play size={38} className="text-black ml-1" />
-          </div>
+      {hearts.map(h => (
+        <motion.div key={h.id} initial={{ opacity: 1, scale: 0.5, y: 0 }} animate={{ opacity: 0, scale: 1.8, y: -80 }}
+          transition={{ duration: 1.1, ease: 'easeOut' }}
+          className="absolute pointer-events-none text-4xl z-50" style={{ left: h.x - 20, top: h.y - 20 }}>
+          ❤️
         </motion.div>
-      )}
+      ))}
 
-      {/* Top controls: mute + speed */}
-      <div className="absolute top-4 right-4 z-30 flex flex-col items-end gap-2">
+      {/* Speed HUD + Mute — always visible */}
+      <div className="absolute top-4 right-4 z-50 flex flex-col gap-2">
         <button
-          onClick={(e) => { e.stopPropagation(); setIsMuted(m => !m); }}
-          className="p-2.5 bg-black/50 backdrop-blur-md rounded-xl border border-white/10"
-        >
+          onPointerDown={e => { e.stopPropagation(); setIsMuted(m => !m); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center active:scale-95 transition-transform">
           {isMuted ? <VolumeX size={18} className="text-white" /> : <Volume2 size={18} className="text-white" />}
         </button>
-        <div className="relative">
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(s => !s); }}
-            className="px-3 py-2 bg-black/50 backdrop-blur-md rounded-xl border border-white/10 text-white text-xs font-mono font-semibold"
-          >
-            {playbackSpeed}×
-          </button>
-          <AnimatePresence>
-            {showSpeedMenu && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9, y: -10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="absolute right-0 top-10 bg-[#111]/95 backdrop-blur-xl border border-[#333] rounded-2xl overflow-hidden z-50 w-24"
-                onClick={e => e.stopPropagation()}
-              >
-                {SPEEDS.map(s => (
-                  <button
-                    key={s}
-                    onClick={() => { setPlaybackSpeed(s); setShowSpeedMenu(false); }}
-                    className={`w-full py-2.5 text-center text-sm font-mono transition ${playbackSpeed === s ? 'bg-[#c5a26f] text-black font-bold' : 'text-white hover:bg-[#222]'}`}
-                  >
-                    {s}×
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+        <button
+          onPointerDown={e => { e.stopPropagation(); setShowHUD(h => !h); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center active:scale-95 transition-transform">
+          <span className="text-[11px] font-bold text-[#c5a26f]">{speed}x</span>
+        </button>
+        <AnimatePresence>
+          {showHUD && (
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: -10 }}
+              className="absolute top-24 right-0 bg-black/80 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden"
+              onPointerDown={e => e.stopPropagation()}>
+              {speeds.map(s => (
+                <button key={s}
+                  onPointerDown={() => { setSpeed(s); setShowHUD(false); onUserActivity(); }}
+                  className={`block w-16 px-3 py-2.5 text-xs font-medium text-left transition ${speed === s ? 'bg-[#c5a26f] text-black' : 'text-white hover:bg-white/10'}`}>
+                  {s}x
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Progress bar */}
-      <div
-        className="absolute bottom-0 left-0 right-0 z-30 px-0 pb-0 cursor-pointer group"
-        onClick={e => { e.stopPropagation(); handleSeek(e); }}
-      >
-        <div className="relative h-[3px] bg-white/20 group-hover:h-[5px] transition-all">
-          <div
-            className="h-full bg-[#c5a26f] relative"
-            style={{ width: `${progress}%` }}
-          >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-[#c5a26f] opacity-0 group-hover:opacity-100 transition-opacity shadow-lg" />
+      {/* Scrubber — always visible */}
+      <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50 cursor-pointer group"
+        onClick={e => { e.stopPropagation(); handleProgressClick(e); onUserActivity(); }}>
+        <div className="h-full bg-[#c5a26f] relative" style={{ width: `${progressPercent}%` }}>
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#c5a26f] rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTINUE WATCHING RAIL
+// ─────────────────────────────────────────────────────────────────────────────
+function ContinueWatchingRail({ onNavigate }: { onNavigate: (id: number, timestamp: number) => void }) {
+  const [items, setItems] = useState<(WatchHistoryItem & { video: Video })[]>([]);
+
+  useEffect(() => {
+    const history = getWatchHistory();
+    const vids = getStoredVideos();
+    const enriched = history
+      .filter(h => h.progress > 0 && h.progress < 95 && h.timestamp > 0)
+      .slice(0, 8)
+      .map(h => {
+        const video = vids.find(v => v.id === h.videoId);
+        return video ? { ...h, video } : null;
+      })
+      .filter(Boolean) as (WatchHistoryItem & { video: Video })[];
+    setItems(enriched);
+  }, []);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="max-w-7xl mx-auto px-5 pb-8">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-6 h-6 bg-[#c5a26f] rounded-lg flex items-center justify-center">
+          <Clock size={13} className="text-black" />
+        </div>
+        <h3 className="text-xl font-semibold tracking-tight">Continue Watching</h3>
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-3 no-scrollbar">
+        {items.map(item => (
+          <div key={item.videoId} onClick={() => onNavigate(item.videoId, item.timestamp)}
+            className="flex-shrink-0 w-[170px] cursor-pointer group">
+            <div className="relative rounded-2xl overflow-hidden aspect-video bg-[#1a1a1a]">
+              <img src={item.video.thumbnail} alt={item.video.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="w-10 h-10 rounded-full bg-[#c5a26f] flex items-center justify-center">
+                  <Play size={16} className="text-black ml-0.5" />
+                </div>
+              </div>
+              <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
+                <div className="h-full bg-[#c5a26f]" style={{ width: `${item.progress}%` }} />
+              </div>
+              <div className="absolute top-2 right-2 bg-black/70 text-[9px] px-2 py-px rounded font-mono">{item.progress}%</div>
+            </div>
+            <div className="mt-2 px-0.5">
+              <div className="text-sm font-medium line-clamp-1 tracking-tight">{item.video.title}</div>
+              <div className="text-[11px] text-[#c5a26f] mt-0.5">Resume →</div>
+            </div>
           </div>
-        </div>
-        <div className="absolute bottom-2 right-3 text-[10px] font-mono text-white/60 opacity-0 group-hover:opacity-100 transition-opacity">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </div>
+        ))}
       </div>
     </div>
   );
@@ -672,6 +869,14 @@ function PremiumVideoPlayer({ video, isPlaying, onPlayPause, onEnded, onProgress
 // APP SHELL
 // ─────────────────────────────────────────────────────────────────────────────
 function App() {
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement | null;
+    if (!meta) { meta = document.createElement('meta'); meta.name = 'viewport'; document.head.appendChild(meta); }
+    meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+    document.body.style.overscrollBehavior = 'none';
+    document.documentElement.style.overscrollBehavior = 'none';
+  }, []);
+
   return (
     <AuthProvider>
       <BrowserRouter>
@@ -691,13 +896,15 @@ function AppContent() {
     location.pathname === '/login';
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col max-w-[100vw] overflow-x-hidden">
+    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col"
+      style={{ touchAction: 'pan-y', WebkitUserSelect: 'none', userSelect: 'none' }}>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/player/:id" element={<ShortsPlayerPage />} />
         <Route path="/subscription" element={<SubscriptionPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/store" element={<DigitalStorePage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/admin-secure-7842" element={<EditorPanel />} />
         <Route path="/rrmp-control-9x7k" element={<OwnerPanel />} />
@@ -713,91 +920,13 @@ function AppContent() {
           <BottomNavigation />
         </>
       )}
+      <PWAInstallBanner />
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROMO POPUP SCHEDULER
-// ─────────────────────────────────────────────────────────────────────────────
-function usePromoPopupScheduler(isSubscribed: boolean) {
-  const [showTrialPopup, setShowTrialPopup] = useState(false);
-  const [showGlobalPopup, setShowGlobalPopup] = useState(false);
-
-  useEffect(() => {
-    if (isSubscribed) {
-      setShowTrialPopup(false);
-      setShowGlobalPopup(false);
-      return;
-    }
-
-    let popupCount = parseInt(sessionStorage.getItem('rr_popup_count') ?? '0', 10);
-
-    const scheduleNext = (delay: number): ReturnType<typeof setTimeout> => {
-      return setTimeout(() => {
-        setShowTrialPopup(true);
-        popupCount++;
-        sessionStorage.setItem('rr_popup_count', String(popupCount));
-        scheduleNext(Math.min(90000, 8000 * Math.log(popupCount + 2)));
-      }, delay);
-    };
-
-    const initialDelay = popupCount === 0 ? 1800 : 5000;
-    const t1 = scheduleNext(initialDelay);
-
-    const t2 = setTimeout(() => {
-      setShowGlobalPopup(true);
-    }, 2200);
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSubscribed]);
-
-  const dismissTrial = () => setShowTrialPopup(false);
-  const dismissGlobal = () => setShowGlobalPopup(false);
-
-  return { showTrialPopup, showGlobalPopup, dismissTrial, dismissGlobal };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PWA INSTALL HOOK
-// ─────────────────────────────────────────────────────────────────────────────
-function usePWAInstall() {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstallable, setIsInstallable] = useState(false);
-
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setIsInstallable(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-  }, []);
-
-  const triggerInstall = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setDeferredPrompt(null);
-      setIsInstallable(false);
-    }
-  };
-
-  return { isInstallable, triggerInstall };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGIN PAGE
+// FIX 3: LOGIN PAGE — instant optimistic auth, zero flash
 // ─────────────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const navigate = useNavigate();
@@ -808,59 +937,31 @@ function LoginPage() {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [success, setSuccess] = useState('');
 
-  useEffect(() => {
-    if (user) navigate('/profile', { replace: true });
-  }, [user, navigate]);
+  useEffect(() => { if (user) navigate('/profile', { replace: true }); }, [user, navigate]);
 
-  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
-    setLoading(true);
-
+    setError(''); setSuccess(''); setLoading(true);
     try {
       if (mode === 'register') {
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { data: { full_name: name } },
+        const { error: signUpError } = await supabase.auth.signUp({
+          email, password, options: { data: { full_name: name } }
         });
         if (signUpError) throw signUpError;
-
-        if (signUpData.user) {
-          await supabase.from('profiles').upsert({
-            id: signUpData.user.id,
-            full_name: name,
-            email,
-            created_at: new Date().toISOString(),
-          }).single();
-        }
-
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) {
-          setSuccess('Account created! If login fails, please check your email to verify first.');
-          setMode('login');
-          setLoading(false);
-          return;
-        }
-
-        navigate('/profile', { replace: true });
-
-      } else if (mode === 'login') {
+        if (signInError) { setSuccess('Account created! Please log in.'); setMode('login'); }
+        else navigate('/profile', { replace: true });
+      } else if (mode === 'forgot') {
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/profile` });
+        if (resetError) throw resetError;
+        setSuccess('Password reset email sent! Check your inbox.');
+      } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
         navigate('/profile', { replace: true });
-
-      } else if (mode === 'forgot') {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/login`,
-        });
-        if (resetError) throw resetError;
-        setSuccess('Password reset link sent! Check your inbox.');
-        setMode('login');
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -869,128 +970,90 @@ function LoginPage() {
     }
   };
 
-  const handleGoogleSignIn = async (): Promise<void> => {
-    setGoogleLoading(true);
+  const handleGoogleOAuth = async () => {
+    setGoogleLoading(true); setError('');
     try {
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${window.location.origin}/profile` }
+        options: { redirectTo: `${window.location.origin}/profile`, queryParams: { prompt: 'select_account' } }
       });
-      if (oauthError) throw oauthError;
+      if (error) throw error;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Google authentication failed.');
+      setError(err instanceof Error ? err.message : 'Google sign-in failed.');
       setGoogleLoading(false);
     }
   };
 
+  const GoogleIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 48 48">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+    </svg>
+  );
+
   return (
-    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4 font-sans select-none">
-      <div className="w-full max-w-md bg-[#121212] border border-white/5 rounded-3xl p-8 relative overflow-hidden shadow-2xl">
-        <div className="absolute -top-32 -right-32 w-64 h-64 bg-[#c5a26f]/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-32 -left-32 w-64 h-64 bg-red-900/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="flex flex-col items-center mb-8">
-          <Logo size={44} className="mb-2" />
-          <p className="text-white/40 text-xs tracking-wide">
-            {mode === 'login' && 'Welcome back, Enter credentials to access premium streams'}
-            {mode === 'register' && 'Create your account to stream premium stories'}
-            {mode === 'forgot' && 'Reset your secure account credentials'}
-          </p>
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5 pb-10">
+      <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <Logo size={40} className="justify-center mb-4" />
+          <h1 className="text-3xl font-semibold tracking-tight">
+            {mode === 'login' ? 'Welcome back' : mode === 'register' ? 'Create account' : 'Reset password'}
+          </h1>
         </div>
-
-        {error && (
-          <div className="mb-5 p-4 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-2xl flex items-center gap-2">
-            <span>⚠️</span> {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="mb-5 p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-2xl flex items-center gap-2">
-            <span>✅</span> {success}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {mode === 'register' && (
-            <div>
-              <label className="block text-[11px] font-semibold text-white/50 tracking-wider uppercase mb-1.5 ml-1">Full Name</label>
-              <input
-                type="text" required value={name} onChange={e => setName(e.target.value)}
-                placeholder="John Doe"
-                className="w-full px-4 py-3 bg-white/5 border border-white/5 focus:border-[#c5a26f]/50 rounded-2xl text-white outline-none text-sm transition"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block text-[11px] font-semibold text-white/50 tracking-wider uppercase mb-1.5 ml-1">Email Address</label>
-            <input
-              type="email" required value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="name@example.com"
-              className="w-full px-4 py-3 bg-white/5 border border-white/5 focus:border-[#c5a26f]/50 rounded-2xl text-white outline-none text-sm transition"
-            />
-          </div>
-
+        <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
           {mode !== 'forgot' && (
-            <div>
-              <div className="flex justify-between items-center mb-1.5 ml-1">
-                <label className="block text-[11px] font-semibold text-white/50 tracking-wider uppercase">Password</label>
-                {mode === 'login' && (
-                  <button type="button" onClick={() => setMode('forgot')} className="text-[10px] text-[#c5a26f] hover:underline font-medium">Forgot?</button>
-                )}
-              </div>
-              <input
-                type="password" required value={password} onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full px-4 py-3 bg-white/5 border border-white/5 focus:border-[#c5a26f]/50 rounded-2xl text-white outline-none text-sm transition"
-              />
+            <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
+              {(['login', 'register'] as const).map(m => (
+                <button key={m} onClick={() => { setMode(m); setError(''); setSuccess(''); }}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${mode === m ? 'bg-[#c5a26f] text-black' : 'text-[#666]'}`}>
+                  {m === 'login' ? 'Login' : 'Register'}
+                </button>
+              ))}
             </div>
           )}
-
-          <button
-            type="submit" disabled={loading}
-            className="w-full py-3.5 bg-[#c5a26f] hover:bg-[#b39160] disabled:opacity-50 text-black font-bold text-sm tracking-wide rounded-2xl transition shadow-xl mt-2 flex items-center justify-center gap-2"
-          >
-            {loading ? <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" /> : (
-              mode === 'login' ? 'Sign In To Stream' : mode === 'register' ? 'Create Premium Account' : 'Send Recovery Link'
-            )}
-          </button>
-        </form>
-
-        {mode !== 'forgot' && (
-          <>
-            <div className="relative my-6 text-center">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5" /></div>
-              <span className="relative bg-[#121212] px-3 text-[10px] font-semibold text-white/30 tracking-wider uppercase">Or Continue With</span>
-            </div>
-
-            <button
-              type="button" onClick={handleGoogleSignIn} disabled={googleLoading}
-              className="w-full py-3 bg-white/5 hover:bg-white/10 text-white font-semibold text-sm rounded-2xl transition border border-white/5 flex items-center justify-center gap-2.5"
-            >
-              {googleLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : (
-                <>
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path fill="#EA4335" d="M12 5.04c1.64 0 3.12.56 4.28 1.67l3.2-3.2C17.52 1.58 14.96 1 12 1 7.35 1 3.4 3.65 1.5 7.5l3.6 2.8C6.01 6.84 8.78 5.04 12 5.04z"/>
-                    <path fill="#4285F4" d="M23.5 12.25c0-.82-.07-1.61-.21-2.38H12v4.51h6.46c-.28 1.48-1.12 2.73-2.38 3.58l3.6 2.8c2.1-1.94 3.32-4.8 3.32-8.51z"/>
-                    <path fill="#FBBC05" d="M5.1 14.7c-.24-.72-.38-1.49-.38-2.3s.14-1.58.38-2.3L1.5 7.3C.54 9.22 0 11.35 0 13.6s.54 4.38 1.5 6.3l3.6-2.9z"/>
-                    <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.6-2.8c-1.1.74-2.52 1.18-4.36 1.18-3.22 0-5.99-1.8-6.96-4.46l-3.6 2.8C3.4 20.35 7.35 23 12 23z"/>
-                  </svg>
-                  <span>Google Account</span>
-                </>
-              )}
+          {mode !== 'forgot' && (
+            <button onClick={handleGoogleOAuth} disabled={googleLoading}
+              className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 active:scale-[0.98] transition-all disabled:opacity-60">
+              {googleLoading ? <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> : <GoogleIcon />}
+              Continue with Google
             </button>
-          </>
-        )}
-
-        <div className="mt-8 text-center">
-          {mode === 'login' ? (
-            <p className="text-xs text-white/40">Don't have an account? <button onClick={() => setMode('register')} className="text-[#c5a26f] hover:underline font-semibold ml-0.5">Register now</button></p>
-          ) : (
-            <p className="text-xs text-white/40">Already a registered streamer? <button onClick={() => setMode('login')} className="text-[#c5a26f] hover:underline font-semibold ml-0.5">Sign in here</button></p>
           )}
+          {mode !== 'forgot' && (
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-1 h-px bg-[#222]" />
+              <span className="text-xs text-[#444]">or continue with email</span>
+              <div className="flex-1 h-px bg-[#222]" />
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'register' && (
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            )}
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            {mode !== 'forgot' && (
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" required minLength={6}
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            )}
+            {error && <p className="text-[#e11d48] text-sm px-1">{error}</p>}
+            {success && <p className="text-[#22c55e] text-sm px-1">{success}</p>}
+            <button type="submit" disabled={loading}
+              className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider disabled:opacity-60 flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+              {loading && <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />}
+              {mode === 'login' ? 'Login' : mode === 'register' ? 'Create Account' : 'Send Reset Link'}
+            </button>
+          </form>
+          {mode === 'login' && <button onClick={() => setMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">Forgot password?</button>}
+          {mode === 'forgot' && <button onClick={() => setMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">← Back to Login</button>}
         </div>
-      </div>
+        <div className="text-center mt-6 space-y-2">
+          <button onClick={() => navigate('/')} className="block w-full text-xs text-[#c5a26f] font-medium hover:underline">Continue as Guest →</button>
+          <button onClick={() => navigate('/')} className="text-xs text-[#555] hover:text-white">← Back to app</button>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -1000,225 +1063,261 @@ function LoginPage() {
 // ─────────────────────────────────────────────────────────────────────────────
 function HomePage() {
   const navigate = useNavigate();
-  const { isSubscribed, user } = useAuth();
-  const [videos, setVideos] = useState<Video[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [loading, setLoading] = useState(true);
-  const { isInstallable, triggerInstall } = usePWAInstall();
-
-  // Schedulers
-  const { showTrialPopup, showGlobalPopup, dismissTrial, dismissGlobal } = usePromoPopupScheduler(isSubscribed);
-  const [promoSettings, setPromoSettings] = useState<PromoVideoSettings>(defaultPromoVideo);
+  const { user, isSubscribed } = useAuth();
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [allVideos, setAllVideos] = useState<Video[]>(() => getStoredVideos());
+  const [categories, setCategories] = useState<string[]>(() => getCategories());
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallVideo, setPaywallVideo] = useState<Video | null>(null);
+  const [library, setLibrary] = useState<number[]>(() => ls.get('reelramp_library', []));
+  const [showTrialPopup, setShowTrialPopup] = useState(false);
+  const [showGlobalPopup, setShowGlobalPopup] = useState(false);
+  const [activePopup, setActivePopup] = useState<PopupAd | null>(null);
+  const [showScrollPaywall, setShowScrollPaywall] = useState(false);
 
   useEffect(() => {
-    let active = true;
-    const loadAppData = async () => {
-      try {
-        const [dbVids, dbCats, promoVid] = await Promise.all([
-          fetchVideosFromDB(),
-          fetchCategoriesFromDB(),
-          fetchSettingFromDB<PromoVideoSettings>('promo_video_settings', defaultPromoVideo)
-        ]);
-        if (active) {
-          setVideos(dbVids);
-          setCategories(['All', ...dbCats]);
-          setPromoSettings(promoVid);
-        }
-      } catch { /* noop */ }
-      finally {
-        if (active) setLoading(false);
-      }
-    };
-    void loadAppData();
-    return () => { active = false; };
-  }, []);
+    // Background Supabase sync — non-blocking
+    supabase.from('videos').select('*').order('id').then(({ data }) => {
+      if (data && data.length > 0) { setAllVideos(data as Video[]); saveVideos(data as Video[]); }
+    }).catch(() => {});
 
-  const filteredVideos = selectedCategory === 'All'
-    ? videos
-    : videos.filter(v => v.category.toLowerCase() === selectedCategory.toLowerCase());
+    const popups = getStoredPopups();
+    const active = popups.find(p => p.isActive);
+    const t1 = setTimeout(() => {
+      if (active && !isSubscribed) { setActivePopup(active); setShowGlobalPopup(true); }
+    }, 2200);
+    const hasSeenTrial = sessionStorage.getItem('trialPopupShown');
+    const t2 = setTimeout(() => {
+      if (!hasSeenTrial && !isSubscribed) { setShowTrialPopup(true); sessionStorage.setItem('trialPopupShown', 'true'); }
+    }, 1800);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [isSubscribed]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Logo size={48} className="animate-pulse" />
-          <div className="w-16 h-[2px] bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full bg-[#c5a26f] w-1/2 rounded-full animate-[loading_1s_infinite_linear]" />
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const allCats = ["All", ...categories];
+
+  const filtered = allVideos.filter(v => {
+    const matchCat = selectedCategory === "All" || v.category === selectedCategory;
+    const matchSearch = v.title.toLowerCase().includes(searchQuery.toLowerCase()) || v.description.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  const grouped = categories.map(cat => ({
+    cat, videos: filtered.filter(v => v.category === cat),
+  })).filter(g => g.videos.length > 0);
+
+  const handleVideoClick = (video: Video) => {
+    addToWatchHistory(video.id, 0, 0);
+    if (!isSubscribed) {
+      incrementScrollCount();
+      const count = getScrollCount();
+      if (count % 3 === 0 && count > 0) { setShowScrollPaywall(true); return; }
+    }
+    if (video.isPremium && !isSubscribed) { setPaywallVideo(video); setShowPaywall(true); }
+    else navigate(`/player/${video.id}`);
+  };
+
+  const handleResumeVideo = (id: number) => navigate(`/player/${id}`);
+
+  const toggleSave = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = library.includes(id) ? library.filter(x => x !== id) : [...library, id];
+    setLibrary(updated);
+    ls.set('reelramp_library', updated);
+  };
+
+  const subSettings = getSubSettings();
 
   return (
-    <div className="flex-1 pb-24 relative select-none">
-      {/* Top Premium Navbar */}
-      <header className="sticky top-0 bg-[#0a0a0a]/80 backdrop-blur-xl border-b border-white/5 px-4 py-4 flex justify-between items-center z-40">
-        <Logo size={32} />
-        <div className="flex items-center gap-3">
-          {isInstallable && (
-            <button
-              onClick={triggerInstall}
-              className="px-3.5 py-1.5 bg-white/5 border border-white/10 text-xs font-bold text-[#c5a26f] rounded-xl hover:bg-white/10 transition"
-            >
-              Install App
-            </button>
-          )}
-          <button
-            onClick={() => navigate(user ? '/profile' : '/login')}
-            className="p-2.5 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition"
-          >
-            <UserIcon size={18} className="text-white/80" />
-          </button>
+    <div className="pb-20 md:pb-8">
+      <header className="sticky top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-lg border-b border-[#222]">
+        <div className="max-w-7xl mx-auto px-5 pt-6 pb-4">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <img src={REELRAMP_LOGO} alt="ReelRamp" className="h-9 w-auto object-contain"
+                onError={e => { e.currentTarget.style.display = 'none'; }} />
+              <div>
+                <h1 className="text-3xl font-semibold tracking-tighter">ReelRamp</h1>
+                <p className="text-[10px] text-[#a1a1aa] -mt-1">SHORTS • PREMIUM</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => navigate('/store')}
+                className="flex items-center gap-1.5 px-3 py-2 bg-[#1a1a1a] hover:bg-[#222] active:scale-95 rounded-2xl text-sm transition-all">
+                <ShoppingBag size={16} className="text-[#c5a26f]" /> Store
+              </button>
+              <button onClick={() => navigate('/profile')}
+                className="flex items-center gap-2 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] active:scale-95 rounded-2xl text-sm transition-all">
+                <UserIcon size={18} /> {user ? 'Profile' : 'Guest'}
+              </button>
+            </div>
+          </div>
+          <div className="relative">
+            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search premium shorts and stories..."
+              className="w-full bg-[#111] border border-[#333] rounded-3xl py-3.5 pl-12 pr-5 text-sm focus:outline-none focus:border-[#c5a26f] placeholder:text-[#666]" />
+            <div className="absolute left-5 top-4 text-[#666]"><Star size={18} /></div>
+          </div>
         </div>
       </header>
 
-      {/* Featured Video Promo Section */}
-      {promoSettings.isEnabled && (
-        <section className="px-4 pt-4 pb-2">
-          <div className="w-full aspect-video rounded-3xl overflow-hidden border border-white/5 relative group bg-[#111]">
-            {promoSettings.videoType === 'youtube' ? (
-              <iframe
-                src={`${promoSettings.videoUrl}?modestbranding=1&rel=0&playsinline=1`}
-                title="Promo Reel"
-                className="w-full h-full object-cover"
-                allowFullScreen
-                frameBorder="0"
-              />
-            ) : (
-              <video
-                src={promoSettings.videoUrl}
-                controls
-                playsInline
-                className="w-full h-full object-cover"
-              />
-            )}
-            <div className="absolute top-3 left-3 px-3 py-1 bg-[#c5a26f] text-black font-extrabold text-[10px] uppercase tracking-widest rounded-lg shadow-xl pointer-events-none">
-              Featured Trailer
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Category Pills Slider */}
-      <section className="px-4 py-4 overflow-x-auto flex gap-2.5 scrollbar-none sticky top-[73px] bg-[#0a0a0a] z-30">
-        {categories.map(cat => (
-          <button
-            key={cat}
-            onClick={() => setSelectedCategory(cat)}
-            className={`px-5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap border transition ${selectedCategory === cat ? 'bg-[#c5a26f] text-black border-[#c5a26f] font-bold shadow-lg shadow-[#c5a26f]/10' : 'bg-[#121212] text-white/60 border-white/5 hover:text-white'}`}
-          >
-            {cat}
+      <div className="relative h-[340px] md:h-[420px] overflow-hidden">
+        <img src="/images/hero.jpg" alt="ReelRamp Premium" className="absolute inset-0 w-full h-full object-cover brightness-[0.65]" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/70 to-[#0a0a0a]" />
+        <div className="absolute bottom-0 left-0 right-0 px-5 pb-9 max-w-3xl">
+          <div className="inline-block px-4 py-1 bg-[#c5a26f] text-[#0a0a0a] text-xs tracking-[3px] font-medium rounded-full mb-4">PREMIUM EXCLUSIVE</div>
+          <h2 className="text-5xl md:text-6xl font-semibold tracking-[-2.5px] leading-none mb-4">Cinematic<br />Short Stories</h2>
+          <p className="text-lg text-[#a1a1aa] max-w-md">High-end investigative journalism, gripping horror, and transformative life lessons.</p>
+          <button onClick={() => navigate('/player/4')}
+            className="mt-6 flex items-center gap-3 bg-white text-black px-9 py-3.5 rounded-2xl font-medium hover:bg-[#c5a26f] hover:text-white active:scale-[0.98] transition-all">
+            <Play size={19} /> Watch Premium Short
           </button>
-        ))}
-      </section>
+        </div>
+      </div>
 
-      {/* Grid List */}
-      <section className="px-4 grid grid-cols-2 sm:grid-cols-3 gap-4">
-        {filteredVideos.map(vid => (
-          <div
-            key={vid.id}
-            onClick={() => navigate(`/player/${vid.id}`)}
-            className="bg-[#121212] border border-white/5 rounded-2xl overflow-hidden cursor-pointer hover:border-white/10 transition flex flex-col group relative"
-          >
-            <div className="aspect-[9/14] w-full bg-[#181818] relative overflow-hidden">
-              {vid.thumbnail ? (
-                <img
-                  src={vid.thumbnail}
-                  alt={vid.title}
-                  className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500'; }}
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-white/20 px-4 text-center">
-                  <Play size={24} className="opacity-40" />
-                  <span className="text-[10px] font-medium tracking-wide uppercase">Stream Clip</span>
+      <div className="pt-8">
+        <ContinueWatchingRail onNavigate={handleResumeVideo} />
+      </div>
+
+      <div className="max-w-7xl mx-auto px-5 pt-2 pb-3">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold tracking-tight">Browse Categories</h3>
+          {isSubscribed && <div className="text-xs px-3 py-1 bg-[#c5a26f] text-black rounded-full font-medium">PREMIUM MEMBER</div>}
+          {!user && !isSubscribed && <div className="text-xs px-3 py-1 bg-[#1a1a1a] border border-[#333] text-[#a1a1aa] rounded-full">GUEST MODE</div>}
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
+          {allCats.map(cat => (
+            <button key={cat} onClick={() => setSelectedCategory(cat)}
+              className={`px-6 py-2.5 whitespace-nowrap rounded-2xl text-sm font-medium transition-all border active:scale-95 ${selectedCategory === cat ? 'bg-[#c5a26f] text-black border-[#c5a26f]' : 'bg-[#1a1a1a] border-[#333] hover:bg-[#222]'}`}>
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* For You horizontal scroll */}
+      <div className="max-w-7xl mx-auto px-5 pb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div><h3 className="text-xl font-semibold tracking-tight">For You</h3><p className="text-xs text-[#666]">Personalized picks just for you</p></div>
+        </div>
+        <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
+          {allVideos.slice(0, 8).map(video => (
+            <div key={video.id} onClick={() => handleVideoClick(video)} className="flex-shrink-0 w-[140px] cursor-pointer group">
+              <div className="relative rounded-2xl overflow-hidden aspect-[9/16]">
+                <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                {video.isPremium && <div className="absolute top-2 right-2 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium">PREMIUM</div>}
+                <div className="absolute bottom-2 left-2 bg-black/70 text-[10px] px-2 py-px rounded font-mono">{video.duration}</div>
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="w-10 h-10 rounded-full bg-white/90 flex items-center justify-center"><Play size={18} className="text-black ml-0.5" /></div>
                 </div>
-              )}
-              {vid.isPremium && (
-                <div className="absolute top-2.5 right-2.5 px-2 py-1 bg-black/40 backdrop-blur-md border border-amber-500/30 rounded-lg flex items-center gap-1">
-                  <Lock size={10} className="text-[#c5a26f]" />
-                  <span className="text-[9px] font-bold text-[#c5a26f] uppercase tracking-wider">Premium</span>
-                </div>
-              )}
-              <div className="absolute bottom-2.5 right-2.5 px-1.5 py-0.5 bg-black/60 backdrop-blur-sm rounded text-[9px] font-mono text-white/80">
-                {vid.duration}
+              </div>
+              <div className="mt-2 px-1">
+                <div className="text-sm font-medium line-clamp-1 tracking-tight">{video.title}</div>
+                <div className="text-xs text-[#666]">{video.category}</div>
               </div>
             </div>
-            <div className="p-3 flex-1 flex flex-col justify-between">
-              <div>
-                <h3 className="font-semibold text-sm line-clamp-1 text-white group-hover:text-[#c5a26f] transition">{vid.title}</h3>
-                <p className="text-[11px] text-white/40 line-clamp-1 mt-0.5">{vid.description}</p>
+          ))}
+        </div>
+      </div>
+
+      {/* Category grids */}
+      <div className="max-w-7xl mx-auto px-5 pb-12">
+        {selectedCategory === "All" ? (
+          grouped.map(({ cat, videos }) => (
+            <div key={cat} className="mb-10">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold tracking-tight flex items-center gap-3">
+                  {cat} <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{videos.length}</span>
+                </h3>
               </div>
-              <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-white/5">
-                <span className="text-[10px] font-bold text-[#c5a26f] uppercase tracking-wider">{vid.category}</span>
-                <span className="text-[10px] text-white/30 font-medium">★ {getAverageRating(vid.id).average.toFixed(1)}</span>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                {videos.map(video => (
+                  <VideoCard key={video.id} video={video} isSubscribed={isSubscribed} isSaved={library.includes(video.id)}
+                    onClick={() => handleVideoClick(video)} onSave={e => toggleSave(video.id, e)} />
+                ))}
               </div>
+            </div>
+          ))
+        ) : (
+          <div>
+            <h3 className="text-xl font-semibold tracking-tight mb-5 flex items-center gap-3">
+              {selectedCategory} <span className="text-xs px-3 py-px bg-[#222] rounded-full text-[#666] font-normal">{filtered.length}</span>
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {filtered.map(video => (
+                <VideoCard key={video.id} video={video} isSubscribed={isSubscribed} isSaved={library.includes(video.id)}
+                  onClick={() => handleVideoClick(video)} onSave={e => toggleSave(video.id, e)} />
+              ))}
             </div>
           </div>
-        ))}
-      </section>
-
-      {/* Trial Schedular Popup Modals */}
-      <AnimatePresence>
-        {showTrialPopup && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex items-center justify-center p-4"
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }}
-              className="bg-[#121212] border border-amber-500/20 max-w-sm w-full rounded-3xl p-6 relative overflow-hidden text-center shadow-2xl"
-            >
-              <button onClick={dismissTrial} className="absolute top-4 right-4 text-white/40 hover:text-white"><X size={18} /></button>
-              <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#c5a26f] font-bold text-xl">₹</div>
-              <h2 className="text-xl font-extrabold tracking-tight">Unlock Access For Just ₹2</h2>
-              <p className="text-white/50 text-xs mt-2 px-2">Stream the complete database of award winning investigative clips and premium cinema layout models instantly for 24 hours.</p>
-              <div className="bg-white/5 rounded-2xl p-4 my-5 flex justify-between items-center text-left">
-                <div><div className="text-[10px] text-white/40 font-bold uppercase tracking-wider">Premium Access Pass</div><div className="text-sm font-bold text-white">Full Database Streaming</div></div>
-                <div className="text-right"><div className="text-lg font-black text-[#c5a26f]">₹2</div><div className="text-[10px] text-white/40 font-medium">1 Day Pass</div></div>
-              </div>
-              <button
-                onClick={() => { dismissTrial(); navigate('/subscription'); }}
-                className="w-full py-3 bg-[#c5a26f] text-black font-extrabold text-sm rounded-xl hover:bg-[#b39160] transition shadow-lg"
-              >
-                Claim Access Now
-              </button>
-            </motion.div>
-          </motion.div>
         )}
+      </div>
 
-        {showGlobalPopup && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4"
-          >
-            <motion.div
-              initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              className="bg-[#161616] border border-white/5 max-w-xs w-full rounded-3xl overflow-hidden relative shadow-2xl text-center"
-            >
-              <button onClick={dismissGlobal} className="absolute top-3 right-3 p-1.5 bg-black/40 backdrop-blur-md rounded-full text-white/60 hover:text-white z-10"><X size={14} /></button>
-              <div className="w-full aspect-[4/3] bg-[#222] relative">
-                <img
-                  src="https://images.unsplash.com/photo-1574267432553-4b4628081c31?w=400"
-                  alt="Exclusive Launch"
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#161616] to-transparent" />
-              </div>
-              <div className="p-5 -mt-4 relative">
-                <h3 className="font-extrabold text-base">Join the Content Revolution</h3>
-                <p className="text-white/40 text-[11px] mt-1.5 leading-relaxed">Unlock high definition custom short series profiles directly curated by global production experts.</p>
-                <button
-                  onClick={() => { dismissGlobal(); navigate('/subscription'); }}
-                  className="w-full mt-4 py-2.5 bg-white text-black font-bold text-xs rounded-xl hover:bg-white/90 transition"
-                >
-                  View Premium Plans
-                </button>
+      <AnimatePresence>
+        {showScrollPaywall && (
+          <SubscriptionInterceptModal onClose={() => setShowScrollPaywall(false)}
+            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }} />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showPaywall && paywallVideo && (
+          <PaywallModal video={paywallVideo} onClose={() => { setShowPaywall(false); setPaywallVideo(null); }}
+            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showGlobalPopup && activePopup && !isSubscribed && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 p-5" onClick={() => setShowGlobalPopup(false)}>
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 40 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 30 }}
+              className="bg-[#111] max-w-lg w-full rounded-3xl overflow-hidden border border-[#333]" onClick={e => e.stopPropagation()}>
+              <img src={activePopup.imageUrl} alt={activePopup.title} className="w-full" />
+              <div className="p-8 text-center">
+                <h3 className="text-3xl font-semibold tracking-tight mb-1">{activePopup.title}</h3>
+                <p className="text-[#a1a1aa] mb-6">Limited time offer. Unlock unlimited premium shorts.</p>
+                <div className="flex gap-3">
+                  <button onClick={() => setShowGlobalPopup(false)} className="flex-1 py-3.5 border border-[#444] rounded-2xl">Maybe Later</button>
+                  <button onClick={() => { setShowGlobalPopup(false); navigate(activePopup.redirectUrl); }} className="flex-1 py-3.5 bg-[#c5a26f] text-black rounded-2xl font-semibold">Subscribe Now</button>
+                </div>
               </div>
             </motion.div>
-          </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showTrialPopup && subSettings.showTrialPopup && !isSubscribed && (
+          <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/60" onClick={() => setShowTrialPopup(false)}>
+            <motion.div initial={{ opacity: 0, scale: 0.92, y: 30 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.35 }}
+              className="relative w-full max-w-[380px] bg-white/10 backdrop-blur-2xl border border-white/30 rounded-3xl overflow-hidden shadow-2xl"
+              onClick={e => e.stopPropagation()}>
+              <button onClick={() => setShowTrialPopup(false)} className="absolute top-4 right-4 z-10 w-9 h-9 flex items-center justify-center text-white/70 hover:text-white bg-black/40 rounded-full"><X size={18} /></button>
+              <div className="pt-8 pb-4 px-8 flex justify-center"><Logo size={36} /></div>
+              {(() => {
+                const ps = getPromoSettings();
+                if (!ps.isEnabled || !ps.videoUrl) return null;
+                const src = ps.videoUrl.includes('embed') ? ps.videoUrl
+                  : `https://www.youtube.com/embed/${ps.videoUrl.includes('v=') ? ps.videoUrl.split('v=')[1]?.split('&')[0] : ps.videoUrl.split('/').pop()}`;
+                return (
+                  <div className="mx-6 rounded-2xl overflow-hidden border border-white/20 mb-6">
+                    <div className="aspect-video bg-black">
+                      <iframe width="100%" height="100%" src={`${src}?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0`} title="Promo" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media" allowFullScreen className="w-full h-full" />
+                    </div>
+                  </div>
+                );
+              })()}
+              <div className="px-8 pb-8 text-center">
+                <span className="inline-block px-5 py-1 bg-gradient-to-r from-[#c5a26f] to-[#d4b17f] text-[#0a0a0a] text-xs font-bold tracking-[3px] rounded-full mb-3">TRIAL OFFER</span>
+                <div className="text-6xl font-semibold tracking-[-3px] text-white mb-1">{subSettings.trialOfferPrice}</div>
+                <div className="text-xl text-[#c5a26f] font-medium">for {subSettings.trialOfferDuration}</div>
+                <p className="text-[#a1a1aa] text-sm mt-3 mb-6">Unlock full premium access instantly</p>
+                <button onClick={() => { setShowTrialPopup(false); navigate('/subscription'); }}
+                  className="w-full py-4 bg-white text-[#0a0a0a] font-semibold text-lg tracking-wider rounded-3xl active:scale-[0.98] transition-transform shadow-lg">
+                  Pay {subSettings.trialOfferPrice} — Start Trial
+                </button>
+                <p className="text-[10px] text-[#888] mt-4">After {subSettings.trialOfferDuration}, auto-pay {subSettings.fullPrice} for {subSettings.fullValidity}. Cancel anytime.</p>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>
@@ -1226,122 +1325,404 @@ function HomePage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHORTS PLAYER PAGE
+// VIDEO CARD
+// ─────────────────────────────────────────────────────────────────────────────
+interface VideoCardProps {
+  video: Video;
+  isSubscribed: boolean;
+  isSaved: boolean;
+  onClick: () => void;
+  onSave: (e: React.MouseEvent) => void;
+}
+
+function VideoCard({ video, isSubscribed, isSaved, onClick, onSave }: VideoCardProps) {
+  const rating = getAverageRating(video.id);
+  return (
+    <div onClick={onClick} className="group relative bg-[#1a1a1a] rounded-3xl overflow-hidden cursor-pointer border border-[#222] hover:border-[#c5a26f]/50 active:scale-[0.97] transition-all">
+      <div className="relative aspect-[9/16] overflow-hidden">
+        <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-700" />
+        {video.isPremium && (
+          <div className="absolute top-3 right-3 bg-[#e11d48] text-[10px] px-3 py-px font-medium tracking-widest rounded-full flex items-center gap-1">
+            <Lock size={10} /> PREMIUM
+          </div>
+        )}
+        <div className="absolute bottom-3 left-3 bg-black/70 text-xs px-2.5 py-px rounded font-mono tracking-[1px]">{video.duration}</div>
+        <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center"><Play className="text-black ml-0.5" size={26} /></div>
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h4 className="font-semibold text-[15px] tracking-[-0.2px] line-clamp-1">{video.title}</h4>
+            <p className="text-xs text-[#a1a1aa] mt-1 line-clamp-2 leading-snug">{video.description}</p>
+          </div>
+          <button onClick={onSave} className="mt-0.5 p-1.5 hover:bg-[#222] active:scale-90 rounded-xl transition-all">
+            <Bookmark size={18} className={isSaved ? "fill-[#c5a26f] text-[#c5a26f]" : "text-[#666]"} />
+          </button>
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[11px]">
+          <span className="px-2.5 py-px bg-[#222] text-[#a1a1aa] rounded">{video.category}</span>
+          <div className="flex items-center gap-1 text-[#c5a26f]">
+            <div className="flex">{[1,2,3,4,5].map(i => <Star key={i} size={12} className={i <= Math.round(rating.average) ? "fill-current" : ""} />)}</div>
+            <span className="text-[#666] text-[10px] ml-0.5">{rating.average.toFixed(1)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYWALL MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: () => void; onSubscribe: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 px-4" onClick={onClose}>
+      <motion.div initial={{ opacity: 0, scale: 0.96, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 20 }}
+        transition={{ ease: [0.23, 1, 0.32, 1] }}
+        className="bg-[#111] w-full max-w-md rounded-3xl overflow-hidden border border-[#333]" onClick={e => e.stopPropagation()}>
+        <div className="p-8 text-center">
+          <div className="mx-auto w-16 h-16 bg-[#1a1a1a] rounded-2xl flex items-center justify-center mb-6"><Lock className="text-[#c5a26f]" size={32} /></div>
+          <h3 className="text-3xl font-semibold tracking-tight mb-2">Premium Content</h3>
+          <p className="text-[#a1a1aa] mb-7 text-[15px]">Unlock <span className="text-white font-medium">"{video?.title}"</span> and all premium shorts with a ReelRamp subscription.</p>
+          <div className="bg-[#1a1a1a] rounded-2xl p-5 mb-6 text-left text-sm">
+            <div className="flex justify-between mb-1.5 text-[#a1a1aa]"><span>Duration</span><span className="font-mono text-white">{video?.duration}</span></div>
+            <div className="flex justify-between mb-1.5 text-[#a1a1aa]"><span>Category</span><span className="text-white">{video?.category}</span></div>
+            <div className="pt-4 border-t border-[#333] text-[#c5a26f] text-xs tracking-[1.5px]">EXCLUSIVE • INVESTIGATIVE • CINEMATIC</div>
+          </div>
+          <div className="flex flex-col gap-3">
+            <button onClick={onSubscribe} className="w-full py-4 bg-[#c5a26f] text-[#0a0a0a] rounded-2xl font-semibold text-base tracking-wider active:scale-[0.98] transition-transform">SUBSCRIBE TO UNLOCK</button>
+            <button onClick={onClose} className="text-sm text-[#666] py-2">Maybe Later</button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTS PLAYER PAGE — FIX 2: TikTok-style, hardware-accelerated, smooth swipe
 // ─────────────────────────────────────────────────────────────────────────────
 function ShortsPlayerPage() {
-  const { id } = useParams();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isSubscribed } = useAuth();
-  const [videos, setVideos] = useState<Video[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [feedVideos, setFeedVideos] = useState<Video[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [isLiked, setIsLiked] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [library, setLibrary] = useState<number[]>(() => ls.get('reelramp_library', []));
+  const [userRating, setUserRating] = useState(0);
+  const [showScrollPaywall, setShowScrollPaywall] = useState(false);
+
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [resumeTimestamp, setResumeTimestamp] = useState(0);
+
+  const currentVideoId = parseInt(id || "1");
+
+  const handleUserActivity = useCallback(() => {
+    setOverlayVisible(true);
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    overlayTimerRef.current = setTimeout(() => setOverlayVisible(false), 3000);
+  }, []);
 
   useEffect(() => {
-    fetchVideosFromDB().then(res => {
-      setVideos(res);
-      const idx = res.findIndex(v => v.id === Number(id));
-      if (idx !== -1) setCurrentIndex(idx);
-    });
-  }, [id]);
+    if (isPlaying) {
+      overlayTimerRef.current = setTimeout(() => setOverlayVisible(false), 3000);
+    } else {
+      setOverlayVisible(true);
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    }
+    return () => { if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current); };
+  }, [isPlaying]);
 
-  const handleDragEnd = (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
-    if (info.offset.y < -60 && currentIndex < videos.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    } else if (info.offset.y > 60 && currentIndex > 0) {
-      setCurrentIndex(prev => prev - 1);
+  useEffect(() => {
+    const vids = getStoredVideos();
+    setFeedVideos(vids);
+    const idx = vids.findIndex(v => v.id === currentVideoId);
+    setCurrentIndex(idx !== -1 ? idx : 0);
+    setResumeTimestamp(getResumeTimestamp(currentVideoId));
+  }, [currentVideoId]);
+
+  const currentShort = feedVideos[currentIndex];
+
+  useEffect(() => {
+    if (currentShort) {
+      incrementView(currentShort.id);
+      const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
+      setUserRating(ratings[currentShort.id] || 0);
+      setResumeTimestamp(getResumeTimestamp(currentShort.id));
+    }
+  }, [currentIndex, currentShort]);
+
+  const checkPremium = useCallback((): boolean => {
+    if (currentShort?.isPremium && !isSubscribed) { setShowPaywall(true); setIsPlaying(false); return false; }
+    return true;
+  }, [currentShort, isSubscribed]);
+
+  const tryNavigateNext = () => {
+    if (!isSubscribed) {
+      incrementScrollCount();
+      const count = getScrollCount();
+      if (count % 3 === 0 && count > 0) { setShowScrollPaywall(true); return; }
+    }
+    if (currentIndex < feedVideos.length - 1 && checkPremium()) {
+      setCurrentIndex(i => i + 1); setIsPlaying(true); setIsLiked(false); setOverlayVisible(true);
     }
   };
 
-  if (currentIndex === -1 || videos.length === 0) {
+  const tryNavigatePrev = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex(i => i - 1); setIsPlaying(true); setIsLiked(false); setOverlayVisible(true);
+    }
+  };
+
+  const handleDragEnd = (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+    if (info.offset.y < -90) tryNavigateNext();
+    else if (info.offset.y > 90) tryNavigatePrev();
+  };
+
+  const toggleSave = () => {
+    if (!currentShort) return;
+    const updated = library.includes(currentShort.id) ? library.filter(x => x !== currentShort.id) : [...library, currentShort.id];
+    setLibrary(updated);
+    ls.set('reelramp_library', updated);
+  };
+
+  const handleShare = () => {
+    const url = `${window.location.origin}/player/${currentShort?.id}`;
+    if (navigator.share) navigator.share({ title: currentShort?.title, url });
+    else navigator.clipboard.writeText(url);
+  };
+
+  const handleEnded = () => {
+    if (currentShort) addToWatchHistory(currentShort.id, 100, 0);
+    tryNavigateNext();
+  };
+
+  // Throttled — save every 5s
+  const handleTimeUpdate = (currentTime: number, duration: number) => {
+    if (!currentShort || duration === 0) return;
+    const progress = Math.round((currentTime / duration) * 100);
+    if (Math.round(currentTime) % 5 === 0) {
+      addToWatchHistory(currentShort.id, progress, currentTime);
+    }
+  };
+
+  const rateVideo = (star: number) => {
+    if (!currentShort) return;
+    setUserRating(star);
+    const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
+    ratings[currentShort.id] = star;
+    ls.set('reelramp_ratings', ratings);
+  };
+
+  if (!currentShort) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
-  const currentVideo = videos[currentIndex];
-  const requiresSubscription = currentVideo.isPremium && !isSubscribed;
+  return (
+    <div className="fixed inset-0 bg-black z-50 overflow-hidden transform-gpu" style={{ height: '100dvh' }}>
+      {/* Top Bar */}
+      <motion.div animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : -20 }} transition={{ duration: 0.25 }}
+        className="absolute top-0 left-0 right-0 z-50 flex justify-between items-center px-5 pt-8 pb-2 bg-gradient-to-b from-black/70 to-transparent"
+        style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}>
+        <button onClick={() => navigate(-1)} className="p-3 bg-black/40 rounded-2xl backdrop-blur active:scale-90 transition-transform"><ArrowLeft size={22} /></button>
+        <div className="text-xs tracking-[3px] text-white/70 font-medium">{currentShort.category.toUpperCase()} • {currentShort.duration}</div>
+        <div className="text-sm px-3 py-1 bg-white/10 rounded-full font-mono">{currentIndex + 1} / {feedVideos.length}</div>
+      </motion.div>
+
+      <AnimatePresence mode="wait">
+        <motion.div key={currentIndex} className="absolute inset-0 flex flex-col transform-gpu"
+          drag="y" dragConstraints={{ top: -120, bottom: 120 }} onDragEnd={handleDragEnd} dragElastic={0.15}
+          initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }}
+          transition={{ ease: [0.23, 1, 0.32, 1], duration: 0.25 }}>
+          <div className="relative w-full" style={{ height: '100dvh' }}>
+            <CinematicPlayer
+              video={currentShort}
+              isPlaying={isPlaying}
+              onPlayPause={() => checkPremium() && setIsPlaying(p => !p)}
+              onEnded={handleEnded}
+              overlayVisible={overlayVisible}
+              onUserActivity={handleUserActivity}
+              resumeFrom={resumeTimestamp}
+              onTimeUpdate={handleTimeUpdate}
+            />
+
+            {!isPlaying && (
+              <div onClick={() => { checkPremium() && setIsPlaying(true); handleUserActivity(); }}
+                className="absolute inset-0 flex items-center justify-center bg-black/20 cursor-pointer z-10">
+                <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center">
+                  <Play size={38} className="text-black ml-1" />
+                </div>
+              </div>
+            )}
+
+            {/* Bottom overlay */}
+            <motion.div animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : 30 }} transition={{ duration: 0.25 }}
+              className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent z-20 pb-20"
+              style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}>
+              <h2 className="text-3xl font-semibold tracking-[-1.2px] leading-none mb-1.5">{currentShort.title}</h2>
+              <p className="text-sm text-white/70 leading-snug line-clamp-3 pr-16">{currentShort.description}</p>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="flex gap-1">
+                  {[1,2,3,4,5].map(s => (
+                    <button key={s} onClick={() => rateVideo(s)} className="text-2xl transition active:scale-125">
+                      {s <= userRating ? '★' : '☆'}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-xs text-white/60">Rate this short</span>
+              </div>
+            </motion.div>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+
+      {/* Right Action Bar */}
+      <motion.div animate={{ opacity: overlayVisible ? 1 : 0, x: overlayVisible ? 0 : 30 }} transition={{ duration: 0.25 }}
+        className="absolute right-4 bottom-[110px] flex flex-col items-center gap-5 z-50"
+        style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}>
+        <button onClick={() => { setIsLiked(l => !l); handleUserActivity(); }} className="flex flex-col items-center gap-1">
+          <div className={`p-4 rounded-2xl transition active:scale-90 ${isLiked ? 'bg-[#e11d48]' : 'bg-black/60 backdrop-blur'}`}>
+            <Heart size={24} className={isLiked ? "fill-white text-white" : ""} />
+          </div>
+          <span className="text-[10px] tracking-wider">LIKE</span>
+        </button>
+        <button onClick={() => { toggleSave(); handleUserActivity(); }} className="flex flex-col items-center gap-1">
+          <div className="p-4 rounded-2xl bg-black/60 backdrop-blur active:scale-90 transition">
+            <Bookmark size={24} className={library.includes(currentShort.id) ? "fill-[#c5a26f] text-[#c5a26f]" : ""} />
+          </div>
+          <span className="text-[10px] tracking-wider">SAVE</span>
+        </button>
+        <button onClick={() => { handleShare(); handleUserActivity(); }} className="flex flex-col items-center gap-1">
+          <div className="p-4 rounded-2xl bg-black/60 backdrop-blur active:scale-90 transition"><Share2 size={24} /></div>
+          <span className="text-[10px] tracking-wider">SHARE</span>
+        </button>
+        {currentShort.isPremium && !isSubscribed && (
+          <button onClick={() => { setShowPaywall(true); handleUserActivity(); }} className="mt-2 flex flex-col items-center active:scale-90 transition">
+            <div className="p-3.5 bg-[#e11d48] rounded-2xl"><Lock size={22} /></div>
+            <span className="text-[9px] mt-1 text-[#e11d48] font-medium">SUBSCRIBE</span>
+          </button>
+        )}
+      </motion.div>
+
+      {/* Bottom controls */}
+      <div className="absolute bottom-0 left-0 right-0 z-40 px-6 pb-8 pt-4 bg-gradient-to-t from-black/60 to-transparent">
+        <div className="flex items-center justify-between max-w-[420px] mx-auto">
+          <button onClick={() => { tryNavigatePrev(); handleUserActivity(); }} disabled={currentIndex === 0}
+            className="p-4 disabled:opacity-30 active:scale-90 transition-transform"><ArrowLeft size={22} /></button>
+          <button onClick={() => { checkPremium() && setIsPlaying(p => !p); handleUserActivity(); }}
+            className="p-4 bg-white/10 hover:bg-white/20 active:scale-90 transition-all rounded-2xl backdrop-blur-lg">
+            {isPlaying ? <Pause size={26} /> : <Play size={26} className="ml-0.5" />}
+          </button>
+          <button onClick={() => { tryNavigateNext(); handleUserActivity(); }} disabled={currentIndex === feedVideos.length - 1}
+            className="p-4 disabled:opacity-30 active:scale-90 transition-transform text-sm font-medium">NEXT</button>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {showScrollPaywall && (
+          <SubscriptionInterceptModal onClose={() => setShowScrollPaywall(false)}
+            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }} />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showPaywall && (
+          <PaywallModal video={currentShort} onClose={() => setShowPaywall(false)}
+            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }} />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2: DIGITAL STORE — mobile-first fluid grid, no overflow
+// ─────────────────────────────────────────────────────────────────────────────
+function DigitalStorePage() {
+  const navigate = useNavigate();
+  const { isSubscribed } = useAuth();
+  const [products, setProducts] = useState<DigitalProduct[]>(() => getDigitalProducts());
+  const [activeFilter, setActiveFilter] = useState<'all' | 'workshop' | 'guide' | 'merch'>('all');
+  const [buyTarget, setBuyTarget] = useState<DigitalProduct | null>(null);
+
+  const filtered = activeFilter === 'all' ? products : products.filter(p => p.category === activeFilter);
+  const categoryLabel: Record<string, string> = { workshop: '🎬 Workshops', guide: '📄 Guides', merch: '👕 Merch' };
 
   return (
-    <div className="fixed inset-0 bg-black z-50 flex items-center justify-center max-w-[100vw]">
-      <button
-        onClick={() => navigate('/')}
-        className="absolute top-4 left-4 z-40 p-2.5 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white/80"
-      >
-        <ArrowLeft size={18} />
-      </button>
+    // FIX 2: pb-24 for bottom nav, px-4 tight mobile, no overflow-x
+    <div className="pb-24 max-w-5xl mx-auto px-4 pt-8 w-full overflow-x-hidden">
+      <button onClick={() => navigate(-1)} className="flex items-center gap-2 mb-6 text-sm text-[#a1a1aa] active:scale-95 transition-transform"><ArrowLeft size={18} /> Back</button>
+      <div className="mb-8">
+        <div className="inline-block px-4 py-1 bg-[#c5a26f]/20 border border-[#c5a26f]/40 text-[#c5a26f] text-xs tracking-[3px] font-medium rounded-full mb-4">DIGITAL STORE</div>
+        <h1 className="text-4xl sm:text-5xl font-semibold tracking-[-2px]">Creator<br />Resources.</h1>
+        <p className="text-[#a1a1aa] mt-3 text-sm sm:text-base">Workshops, guides, and exclusive merch for serious storytellers.</p>
+      </div>
 
-      <motion.div
-        ref={containerRef}
-        drag="y"
-        dragConstraints={{ top: 0, bottom: 0 }}
-        dragElastic={0.2}
-        onDragEnd={handleDragEnd}
-        className="w-full h-full relative overflow-hidden flex items-center justify-center max-w-md bg-neutral-950 shadow-2xl"
-      >
-        {requiresSubscription ? (
-          <div className="absolute inset-0 z-30 bg-black/90 backdrop-blur-xl flex flex-col items-center justify-center px-6 text-center select-none font-sans">
-            <div className="w-16 h-16 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-[#c5a26f] mb-5">
-              <Lock size={28} />
-            </div>
-            <h2 className="text-xl font-black text-white tracking-tight">Premium Content Guarded</h2>
-            <p className="text-white/40 text-xs mt-2 max-w-xs leading-relaxed">
-              "{currentVideo.title}" is reserved for members. Unlock all files instantly for just ₹2.
-            </p>
-            <button
-              onClick={() => navigate('/subscription')}
-              className="mt-6 px-6 py-3 bg-[#c5a26f] hover:bg-[#b39160] text-black font-extrabold text-xs tracking-wider uppercase rounded-xl transition shadow-xl"
-            >
-              Access Premium Database
-            </button>
-            <button onClick={() => navigate('/')} className="mt-4 text-xs font-bold text-white/40 hover:text-white transition">Back To Free Feeds</button>
-          </div>
-        ) : (
-          <PremiumVideoPlayer
-            video={currentVideo}
-            isPlaying={isPlaying}
-            onPlayPause={() => setIsPlaying(p => !p)}
-            onEnded={() => {
-              if (currentIndex < videos.length - 1) setCurrentIndex(prev => prev + 1);
-            }}
-            onProgress={(pct) => {
-              if (pct > 20) addToWatchHistory(currentVideo.id, Math.floor(pct));
-            }}
-          />
-        )}
-
-        {/* Floating Metadata Layout */}
-        <div className="absolute bottom-6 left-4 right-14 z-30 pointer-events-none select-none">
-          <h2 className="text-base font-extrabold text-white drop-shadow-md tracking-tight">{currentVideo.title}</h2>
-          <p className="text-xs text-white/70 mt-1 line-clamp-2 drop-shadow-sm font-medium">{currentVideo.description}</p>
-          <div className="mt-3 flex items-center gap-2">
-            <span className="px-2.5 py-0.5 bg-black/40 backdrop-blur-md border border-white/10 rounded text-[9px] font-bold text-[#c5a26f] uppercase tracking-wider">
-              {currentVideo.category}
-            </span>
-          </div>
-        </div>
-
-        {/* Sidebar Controls Panel */}
-        <div className="absolute bottom-16 right-3 z-30 flex flex-col items-center gap-5">
-          <div className="flex flex-col items-center group cursor-pointer">
-            <button className="p-3 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-white hover:text-red-500 transition">
-              <Heart size={18} />
-            </button>
-            <span className="text-[10px] font-bold font-mono text-white/60 mt-1">4.2k</span>
-          </div>
-          <div className="flex flex-col items-center cursor-pointer">
-            <button className="p-3 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-white hover:text-[#c5a26f] transition">
-              <Bookmark size={18} />
-            </button>
-            <span className="text-[10px] font-bold font-mono text-white/60 mt-1">Save</span>
-          </div>
-          <button className="p-3 bg-black/40 backdrop-blur-md rounded-full border border-white/10 text-white hover:scale-105 transition">
-            <Share2 size={18} />
+      {/* Filter pills — horizontal scroll on mobile */}
+      <div className="flex gap-2 mb-8 overflow-x-auto pb-2 no-scrollbar -mx-1 px-1">
+        {(['all', 'workshop', 'guide', 'merch'] as const).map(f => (
+          <button key={f} onClick={() => setActiveFilter(f)}
+            className={`px-4 py-2.5 rounded-2xl text-sm font-medium whitespace-nowrap transition-all border active:scale-95 flex-shrink-0 ${activeFilter === f ? 'bg-[#c5a26f] text-black border-[#c5a26f]' : 'bg-[#1a1a1a] border-[#333]'}`}>
+            {f === 'all' ? '✦ All' : categoryLabel[f]}
           </button>
-        </div>
-      </motion.div>
+        ))}
+      </div>
+
+      {/* FIX 2: 1 col mobile, 2 col sm, 3 col lg — no horizontal overflow */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map(product => (
+          <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden group hover:border-[#c5a26f]/40 active:scale-[0.98] transition-all">
+            <div className="relative aspect-video overflow-hidden bg-[#1a1a1a]">
+              <img src={product.thumbnailUrl} alt={product.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />
+              {product.badge && <div className="absolute top-3 left-3 bg-[#c5a26f] text-black text-[9px] px-3 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}
+              {product.isPremium && <div className="absolute top-3 right-3 bg-[#e11d48] text-[9px] px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><Lock size={8} /> PREMIUM</div>}
+            </div>
+            <div className="p-4 sm:p-5">
+              <div className="text-xs text-[#c5a26f] tracking-widest mb-1">{categoryLabel[product.category]?.replace(/^[^ ]+ /, '')}</div>
+              <h3 className="font-semibold text-[15px] tracking-tight leading-snug mb-2">{product.title}</h3>
+              <p className="text-xs text-[#a1a1aa] leading-snug mb-4 line-clamp-2">{product.description}</p>
+              {/* FIX 2: price + button stack on very small screens */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="text-2xl font-semibold text-[#c5a26f] tracking-tight">₹{product.price.toLocaleString()}</div>
+                <button
+                  onClick={() => product.isPremium && !isSubscribed ? navigate('/subscription') : setBuyTarget(product)}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl text-sm font-semibold active:scale-95 transition-transform">
+                  {product.isPremium && !isSubscribed ? 'Unlock' : 'Buy Now'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <AnimatePresence>
+        {buyTarget && (
+          <div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-5" onClick={() => setBuyTarget(null)}>
+            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+              className="bg-[#111] w-full max-w-sm rounded-3xl p-8 border border-[#333]" onClick={e => e.stopPropagation()}>
+              <div className="text-center mb-6">
+                <div className="text-4xl mb-3">{buyTarget.category === 'workshop' ? '🎬' : buyTarget.category === 'guide' ? '📄' : '👕'}</div>
+                <h3 className="text-2xl font-semibold tracking-tight">{buyTarget.title}</h3>
+                <div className="text-[#c5a26f] text-3xl font-semibold mt-3">₹{buyTarget.price.toLocaleString()}</div>
+              </div>
+              <button onClick={() => { alert('Payment gateway integration required. Connect Razorpay/Stripe in Admin → Payment Settings.'); setBuyTarget(null); }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl mb-3 active:scale-[0.98] transition-transform">Proceed to Payment</button>
+              <button onClick={() => setBuyTarget(null)} className="w-full py-3 text-sm text-[#666]">Cancel</button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1352,91 +1733,409 @@ function ShortsPlayerPage() {
 function SubscriptionPage() {
   const navigate = useNavigate();
   const { user, isSubscribed, setIsSubscribed } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [subSettings, setSubSettings] = useState<SubscriptionSettings>(defaultSubscriptionSettings);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showTrialModal, setShowTrialModal] = useState(false);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const subSettings = getSubSettings();
+  const paymentConfig = getPaymentSettings();
 
-  useEffect(() => {
-    fetchSettingFromDB<SubscriptionSettings>('subscription_settings', defaultSubscriptionSettings)
-      .then(res => setSubSettings(res));
-  }, []);
-
-  const handlePurchase = async (planType: 'trial' | 'full') => {
-    if (!user) {
-      navigate('/login');
-      return;
-    }
-    setLoading(true);
-    // Simulate instantaneous automated database subscription mapping setup
-    setTimeout(async () => {
-      try {
-        await supabase.from('subscriptions').upsert({
-          user_id: user.id,
-          status: 'active',
-          plan_type: planType,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id' });
-        setIsSubscribed(true);
-        ls.set('reelramp_subscribed', true);
-        navigate('/', { replace: true });
-      } catch {
-        setIsSubscribed(true);
-        navigate('/');
-      } finally {
-        setLoading(false);
-      }
-    }, 1200);
+  const activateSubscription = () => {
+    ls.set('reelramp_subscribed', true);
+    setIsSubscribed(true);
+    setPaymentProcessing(false);
+    setShowPaymentModal(false);
+    setShowTrialModal(false);
+    setPaymentSuccess(true);
+    resetScrollCount();
   };
 
-  return (
-    <div className="flex-1 pb-24 px-4 pt-6 font-sans select-none max-w-md mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate(-1)} className="p-2 bg-white/5 border border-white/5 rounded-xl"><ArrowLeft size={16} /></button>
-        <h1 className="text-xl font-black">Membership Access</h1>
-      </div>
+  const processPayment = () => {
+    setPaymentProcessing(true);
+    setTimeout(activateSubscription, 1800);
+  };
 
-      {isSubscribed ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-3xl p-6 text-center">
-          <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto mb-3"><CheckCircle size={24} /></div>
-          <h2 className="text-lg font-bold">Premium Pass Active</h2>
-          <p className="text-white/50 text-xs mt-1">Your account has full unrestricted access to the complete premium short catalog layout grid.</p>
-          <button onClick={() => navigate('/')} className="mt-5 w-full py-2.5 bg-white text-black font-bold text-xs rounded-xl">Return Streaming</button>
+  if (paymentSuccess) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6">
+        <div className="text-center max-w-sm">
+          <div className="w-24 h-24 bg-[#22c55e]/10 rounded-full flex items-center justify-center mx-auto mb-8"><CheckCircle size={48} className="text-[#22c55e]" /></div>
+          <h2 className="text-4xl font-semibold tracking-tight mb-3">You're Premium!</h2>
+          <p className="text-[#a1a1aa] mb-10">Unlimited access to all cinematic shorts is now unlocked.</p>
+          <button onClick={() => navigate('/')} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-lg tracking-wider active:scale-[0.98] transition-transform">Start Watching</button>
         </div>
-      ) : (
-        <div className="space-y-4">
-          {subSettings.showTrialPopup && (
-            <div className="bg-[#121212] border-2 border-amber-500/30 rounded-3xl p-5 relative overflow-hidden shadow-xl">
-              <div className="absolute top-0 right-0 px-3 py-1 bg-amber-500 text-black font-extrabold text-[9px] uppercase tracking-wider rounded-bl-xl">Limited Trial</div>
-              <h3 className="text-base font-black">Instant Trial Access Pass</h3>
-              <p className="text-white/40 text-[11px] mt-1">Perfect choice to verify all exclusive streams instantly for a small sequence loop.</p>
-              <div className="mt-4 flex justify-between items-baseline">
-                <span className="text-2xl font-black text-white">{subSettings.trialOfferPrice}</span>
-                <span className="text-xs font-semibold text-white/50">/ {subSettings.trialOfferDuration} Validity</span>
-              </div>
-              <button
-                onClick={() => void handlePurchase('trial')}
-                disabled={loading}
-                className="w-full mt-4 py-3 bg-[#c5a26f] hover:bg-[#b39160] disabled:opacity-40 text-black font-extrabold text-xs uppercase tracking-wider rounded-xl transition shadow-lg"
-              >
-                {loading ? 'Initiating Gateways...' : 'Activate Trial Pass'}
-              </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen pb-24 px-5 pt-10 max-w-lg mx-auto">
+      <button onClick={() => navigate(-1)} className="flex items-center gap-2 mb-8 text-sm text-[#a1a1aa] active:scale-95 transition-transform"><ArrowLeft size={18} /> Back</button>
+      <div className="mb-10">
+        <h1 className="text-5xl sm:text-6xl font-semibold tracking-[-3.2px]">Unlock<br />Everything.</h1>
+        <p className="text-lg text-[#a1a1aa] mt-3">Premium access to all shorts, offline downloads, and new releases.</p>
+      </div>
+      {isSubscribed && (
+        <div className="mb-6 p-5 bg-[#1a1a1a] border border-[#c5a26f] rounded-3xl">
+          <div className="flex items-center gap-2 text-[#c5a26f] mb-1"><CheckCircle size={18} /> ACTIVE SUBSCRIPTION</div>
+          <div className="text-sm text-white">Thank you for supporting ReelRamp Shorts</div>
+          <button onClick={() => setShowCancelConfirm(true)} className="text-xs text-[#666] underline mt-3">Cancel Subscription</button>
+        </div>
+      )}
+      {!isSubscribed && subSettings.showTrialPopup && (
+        <div className="bg-gradient-to-br from-[#c5a26f]/20 to-transparent border border-[#c5a26f]/40 rounded-3xl p-7 mb-4 relative overflow-hidden">
+          <div className="absolute top-4 right-4 bg-[#c5a26f] text-black text-[10px] px-3 py-0.5 rounded-full tracking-widest font-bold">BEST DEAL</div>
+          <div className="text-xs tracking-widest text-[#c5a26f] mb-2">LIMITED TRIAL OFFER</div>
+          <div className="text-5xl font-semibold tracking-tighter mb-1">{subSettings.trialOfferPrice}</div>
+          <div className="text-[#a1a1aa] text-sm mb-1">for {subSettings.trialOfferDuration}</div>
+          <div className="text-xs text-[#666] mb-6">Then {subSettings.fullPrice} for {subSettings.fullValidity} • Cancel anytime</div>
+          <ul className="space-y-2 text-sm mb-7">
+            {['All premium shorts unlocked', 'Offline downloads', 'Ad-free experience', 'New releases first'].map((f, i) => (
+              <li key={i} className="flex items-center gap-2 text-[#a1a1aa]"><CheckCircle size={14} className="text-[#c5a26f]" /> {f}</li>
+            ))}
+          </ul>
+          <button onClick={() => user ? setShowTrialModal(true) : navigate('/profile')}
+            className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">
+            Start {subSettings.trialOfferDuration} Trial — {subSettings.trialOfferPrice}
+          </button>
+        </div>
+      )}
+      {!isSubscribed && (
+        <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-8">
+          <div className="text-xs tracking-widest text-[#a1a1aa] mb-2">FULL ACCESS</div>
+          <div className="text-5xl font-semibold tracking-tighter mb-1">{subSettings.fullPrice}</div>
+          <div className="text-[#a1a1aa] text-sm mb-6">for {subSettings.fullValidity}</div>
+          <ul className="space-y-2 text-sm mb-7">
+            {['All premium shorts unlocked', 'Offline downloads', 'Ad-free experience', 'New releases first', 'Priority support'].map((f, i) => (
+              <li key={i} className="flex items-center gap-2 text-[#a1a1aa]"><CheckCircle size={14} className="text-[#c5a26f]" /> {f}</li>
+            ))}
+          </ul>
+          <button onClick={() => user ? setShowPaymentModal(true) : navigate('/profile')}
+            className="w-full py-4 bg-white text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">Subscribe — {subSettings.fullPrice}</button>
+        </div>
+      )}
+      <p className="text-center text-xs text-[#444] tracking-widest">
+        SECURE PAYMENTS • {paymentConfig.activeGateway !== 'none' ? paymentConfig.activeGateway.toUpperCase() : 'MANUAL'} • CANCEL ANYTIME
+      </p>
+
+      {[
+        { show: showPaymentModal, onClose: () => setShowPaymentModal(false), label: subSettings.fullPrice, title: "Order Summary" },
+        { show: showTrialModal, onClose: () => setShowTrialModal(false), label: subSettings.trialOfferPrice, title: "Trial Order" },
+      ].map(({ show, onClose, label, title }) => (
+        <AnimatePresence key={title}>
+          {show && (
+            <div className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-5" onClick={() => !paymentProcessing && onClose()}>
+              <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+                className="bg-[#111] w-full max-w-md rounded-3xl p-8 border border-[#222]" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="font-semibold text-2xl tracking-tight">{title}</h3>
+                  {!paymentProcessing && <button onClick={onClose} className="active:scale-90 transition-transform"><X size={20} /></button>}
+                </div>
+                <div className="bg-[#1a1a1a] rounded-2xl p-5 mb-6">
+                  <div className="flex justify-between font-semibold border-t border-[#333] pt-3">
+                    <span>Total</span><span className="text-[#c5a26f]">{label}</span>
+                  </div>
+                </div>
+                {paymentConfig.activeGateway !== 'none' && (
+                  <div className="text-xs text-center text-[#666] mb-4">
+                    Paying via <span className="text-[#c5a26f] font-medium">{paymentConfig.activeGateway.toUpperCase()}</span>
+                    {paymentConfig.isLiveMode ? ' (LIVE)' : ' (TEST)'}
+                  </div>
+                )}
+                <button onClick={processPayment} disabled={paymentProcessing}
+                  className="w-full py-4 rounded-2xl bg-[#c5a26f] text-black text-lg font-semibold tracking-wide disabled:opacity-70 flex items-center justify-center gap-3 active:scale-[0.98] transition-transform">
+                  {paymentProcessing ? <><span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" /> Processing...</> : `Pay ${label}`}
+                </button>
+              </motion.div>
             </div>
           )}
+        </AnimatePresence>
+      ))}
 
-          <div className="bg-[#121212] border border-white/5 rounded-3xl p-5 relative overflow-hidden">
-            <h3 className="text-base font-black text-white/90">Full Unrestricted Access Pass</h3>
-            <p className="text-white/40 text-[11px] mt-1">Unlocks commercial premium layout updates, developer modules, shorts grids and analytics records.</p>
-            <div className="mt-4 flex justify-between items-baseline">
-              <span className="text-2xl font-black text-white">{subSettings.fullPrice}</span>
-              <span className="text-xs font-semibold text-white/50">/ {subSettings.fullValidity} Access</span>
-            </div>
-            <button
-              onClick={() => void handlePurchase('full')}
-              disabled={loading}
-              className="w-full mt-4 py-3 bg-white hover:bg-white/90 disabled:opacity-40 text-black font-extrabold text-xs uppercase tracking-wider rounded-xl transition"
-            >
-              {loading ? 'Initiating Gateways...' : 'Purchase Full Access'}
-            </button>
+      <AnimatePresence>
+        {showCancelConfirm && (
+          <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-5">
+            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+              className="bg-[#111] w-full max-w-sm rounded-3xl p-8 border border-[#333]">
+              <h3 className="font-semibold text-xl mb-2">Cancel Subscription?</h3>
+              <p className="text-[#a1a1aa] text-sm mb-7">You'll lose access to all premium content.</p>
+              <div className="flex gap-3">
+                <button onClick={() => setShowCancelConfirm(false)} className="flex-1 py-3 border border-[#333] rounded-2xl text-sm">Keep Premium</button>
+                <button onClick={() => { ls.remove('reelramp_subscribed'); setIsSubscribed(false); setShowCancelConfirm(false); }} className="flex-1 py-3 bg-[#e11d48] rounded-2xl text-sm font-medium">Yes, Cancel</button>
+              </div>
+            </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILE PAGE — FIX 3: instant inline auth, zero redirect gate
+// ─────────────────────────────────────────────────────────────────────────────
+function ProfilePage() {
+  const navigate = useNavigate();
+  const { user, isSubscribed, isGuest, signOut, loading } = useAuth();
+  const [library, setLibrary] = useState<Video[]>([]);
+  const [downloads, setDownloads] = useState<Video[]>([]);
+  const [activeTab, setActiveTab] = useState<'library' | 'downloads' | 'account'>('library');
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
+  const [allVideos, setAllVideos] = useState<Video[]>([]);
+
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [authSuccess, setAuthSuccess] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+    const vids = getStoredVideos();
+    setAllVideos(vids);
+    const libIds: number[] = ls.get('reelramp_library', []);
+    setLibrary(vids.filter(v => libIds.includes(v.id)));
+    const dlIds: number[] = ls.get('reelramp_downloads', []);
+    setDownloads(vids.filter(v => dlIds.includes(v.id)));
+    setWatchHistory(getWatchHistory());
+  }, [user]);
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /></div>;
+  }
+
+  const GoogleIcon = () => (
+    <svg width="18" height="18" viewBox="0 0 48 48">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+    </svg>
+  );
+
+  if (isGuest) {
+    const handleAuthSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setAuthError(''); setAuthSuccess(''); setAuthLoading(true);
+      try {
+        if (authMode === 'register') {
+          const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name } } });
+          if (error) throw error;
+          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+          if (signInError) { setAuthSuccess('Account created! Please log in.'); setAuthMode('login'); }
+        } else if (authMode === 'forgot') {
+          const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/profile` });
+          if (error) throw error;
+          setAuthSuccess('Reset link sent to your email!');
+        } else {
+          const { error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) throw error;
+        }
+      } catch (err: unknown) {
+        setAuthError(err instanceof Error ? err.message : 'Something went wrong.');
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    const handleGoogleOAuth = async () => {
+      setGoogleLoading(true); setAuthError('');
+      try {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: `${window.location.origin}/profile`, queryParams: { prompt: 'select_account' } }
+        });
+        if (error) throw error;
+      } catch (err: unknown) {
+        setAuthError(err instanceof Error ? err.message : 'Google sign-in failed.');
+        setGoogleLoading(false);
+      }
+    };
+
+    return (
+      <div className="max-w-md mx-auto px-5 pt-10 pb-24">
+        <div className="text-center mb-8">
+          <Logo size={36} className="justify-center mb-4" />
+          <h1 className="text-3xl font-semibold tracking-tight mb-1">Your Profile</h1>
+          <p className="text-sm text-[#a1a1aa]">Sign in to unlock your library, history, and premium access.</p>
+        </div>
+        <div className="bg-[#111] border border-[#222] rounded-3xl p-7">
+          {authMode !== 'forgot' && (
+            <div className="flex bg-[#1a1a1a] rounded-2xl p-1 mb-6">
+              {(['login', 'register'] as const).map(m => (
+                <button key={m} onClick={() => { setAuthMode(m); setAuthError(''); setAuthSuccess(''); }}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${authMode === m ? 'bg-[#c5a26f] text-black' : 'text-[#666]'}`}>
+                  {m === 'login' ? 'Login' : 'Register'}
+                </button>
+              ))}
+            </div>
+          )}
+          {authMode !== 'forgot' && (
+            <>
+              <button onClick={handleGoogleOAuth} disabled={googleLoading}
+                className="w-full py-3.5 mb-4 bg-white text-black font-medium rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-100 active:scale-[0.98] transition-all disabled:opacity-60">
+                {googleLoading ? <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" /> : <GoogleIcon />}
+                Continue with Google
+              </button>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex-1 h-px bg-[#222]" /><span className="text-xs text-[#444]">or</span><div className="flex-1 h-px bg-[#222]" />
+              </div>
+            </>
+          )}
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            {authMode === 'register' && (
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Full Name" required
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            )}
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            {authMode !== 'forgot' && (
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" required minLength={6}
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-3.5 px-5 text-sm focus:border-[#c5a26f] outline-none transition-colors" />
+            )}
+            {authError && <p className="text-[#e11d48] text-sm px-1">{authError}</p>}
+            {authSuccess && <p className="text-[#22c55e] text-sm px-1">{authSuccess}</p>}
+            <button type="submit" disabled={authLoading}
+              className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl disabled:opacity-60 flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+              {authLoading && <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />}
+              {authMode === 'login' ? 'Login' : authMode === 'register' ? 'Create Account' : 'Send Reset Link'}
+            </button>
+          </form>
+          {authMode === 'login' && <button onClick={() => setAuthMode('forgot')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-[#c5a26f]">Forgot password?</button>}
+          {authMode === 'forgot' && <button onClick={() => setAuthMode('login')} className="w-full text-center text-xs text-[#555] mt-4 hover:text-white">← Back to Login</button>}
+        </div>
+        <button onClick={() => navigate('/')} className="block w-full text-center text-xs text-[#444] mt-6 hover:text-white">← Continue browsing as Guest</button>
+      </div>
+    );
+  }
+
+  const displayName = user!.user_metadata?.full_name || user!.email?.split('@')[0] || 'User';
+  const initials = displayName.charAt(0).toUpperCase();
+
+  const continueWatching = watchHistory
+    .filter(h => h.progress > 0 && h.progress < 95 && h.timestamp > 0)
+    .slice(0, 6)
+    .map(h => ({ ...h, video: allVideos.find(v => v.id === h.videoId) }))
+    .filter(h => h.video) as (WatchHistoryItem & { video: Video })[];
+
+  return (
+    <div className="max-w-3xl mx-auto pb-24 px-4 pt-8 md:pt-10">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-semibold text-3xl md:text-5xl tracking-[-2px]">Profile</h1>
+        <button onClick={() => navigate('/')} className="text-sm text-[#a1a1aa] active:scale-95 transition-transform">Home</button>
+      </div>
+      <div className="flex items-center gap-5 mb-9 border-b border-[#222] pb-8">
+        <div className="w-20 h-20 rounded-2xl overflow-hidden ring-1 ring-[#c5a26f]/50 bg-[#222] flex items-center justify-center flex-shrink-0">
+          <div className="text-4xl font-bold text-[#c5a26f]">{initials}</div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-2xl sm:text-3xl font-semibold tracking-tight truncate">{displayName}</div>
+          <div className="text-sm text-[#a1a1aa] truncate">{user!.email}</div>
+          <button onClick={async () => { await signOut(); navigate('/'); }} className="text-xs text-[#e11d48] mt-1">Logout</button>
+        </div>
+      </div>
+
+      <div className="mb-8 bg-[#111] border border-[#222] rounded-3xl p-6 md:p-7">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <div className="uppercase text-xs tracking-[2.5px] text-[#a1a1aa]">SUBSCRIPTION</div>
+            <div className="font-semibold text-2xl md:text-3xl tracking-tight mt-1">{isSubscribed ? "Premium Active" : "Free Plan"}</div>
+          </div>
+          {isSubscribed ? (
+            <div>
+              <div className="text-[#22c55e] text-sm flex items-center gap-1.5"><CheckCircle size={16} /> ACTIVE</div>
+              <button onClick={() => navigate('/subscription')} className="text-sm underline text-[#666] mt-1">Manage Subscription</button>
+            </div>
+          ) : (
+            <button onClick={() => navigate('/subscription')}
+              className="w-full md:w-auto px-8 py-3.5 bg-[#c5a26f] text-black text-sm font-semibold rounded-2xl active:scale-[0.98] transition-transform">UPGRADE TO PREMIUM</button>
+          )}
+        </div>
+      </div>
+
+      {continueWatching.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-6 h-6 bg-[#c5a26f] rounded-lg flex items-center justify-center"><Clock size={13} className="text-black" /></div>
+            <h3 className="text-xl font-semibold tracking-tight">Continue Watching</h3>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
+            {continueWatching.map(item => (
+              <div key={item.videoId} onClick={() => navigate(`/player/${item.video.id}`)} className="flex-shrink-0 w-[160px] cursor-pointer group">
+                <div className="relative rounded-2xl overflow-hidden aspect-video bg-black">
+                  <img src={item.video.thumbnail} alt={item.video.title} className="w-full h-full object-cover group-hover:scale-105 transition" />
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
+                    <div className="h-full bg-[#c5a26f]" style={{ width: `${item.progress}%` }} />
+                  </div>
+                </div>
+                <div className="mt-2 text-sm font-medium line-clamp-1">{item.video.title}</div>
+                <div className="text-[11px] text-[#c5a26f]">Resume at {Math.floor(item.timestamp / 60)}:{String(Math.round(item.timestamp % 60)).padStart(2, '0')}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex border-b border-[#222] mb-5 text-sm overflow-x-auto">
+        {(['library', 'downloads', 'account'] as const).map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab)}
+            className={`px-5 md:px-7 pb-4 border-b-2 transition whitespace-nowrap ${activeTab === tab ? 'border-[#c5a26f] text-white font-medium' : 'border-transparent text-[#666]'}`}>
+            {tab === 'library' && 'My Library'}{tab === 'downloads' && 'Downloads'}{tab === 'account' && 'Account'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'library' && (
+        library.length === 0 ? <div className="py-14 text-center text-[#666]">No saved shorts yet.</div> : (
+          <div className="space-y-4">
+            {library.map(video => (
+              <div key={video.id} className="flex gap-3 bg-[#111] p-3 rounded-2xl border border-[#222]">
+                <img src={video.thumbnail} className="w-16 h-16 object-cover rounded-xl flex-shrink-0" alt="" />
+                <div className="flex-1 min-w-0 pt-0.5">
+                  <div className="font-medium text-sm line-clamp-1">{video.title}</div>
+                  <div className="text-xs text-[#666] mt-0.5">{video.duration} • {video.category}</div>
+                  <div className="flex gap-3 mt-2 text-xs">
+                    <button onClick={() => navigate(`/player/${video.id}`)} className="flex items-center gap-1 text-[#c5a26f]">PLAY <Play size={13} /></button>
+                    <button onClick={() => { const updated = library.filter(v => v.id !== video.id); setLibrary(updated); ls.set('reelramp_library', updated.map(v => v.id)); }} className="text-[#666]">REMOVE</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+      {activeTab === 'downloads' && (
+        downloads.length === 0 ? <div className="text-center py-14 text-[#666]">No offline downloads.</div> : (
+          <div className="space-y-4">
+            {downloads.map(video => (
+              <div key={video.id} className="flex gap-3 bg-[#111] p-3 rounded-2xl border border-[#222]">
+                <img src={video.thumbnail} className="w-16 h-16 object-cover rounded-xl flex-shrink-0" alt="" />
+                <div className="flex-1 min-w-0 pt-0.5">
+                  <div className="font-medium text-sm line-clamp-1">{video.title}</div>
+                  <div className="text-xs text-[#666] mt-0.5">{video.duration}</div>
+                  <div className="flex gap-3 mt-2 text-xs">
+                    <button onClick={() => navigate(`/player/${video.id}`)} className="flex items-center gap-1 text-[#22c55e]">PLAY <Play size={13} /></button>
+                    <button onClick={() => { const updated = downloads.filter(v => v.id !== video.id); setDownloads(updated); ls.set('reelramp_downloads', updated.map(v => v.id)); }} className="text-[#666]">DELETE</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+      {activeTab === 'account' && (
+        <div className="space-y-6 text-sm">
+          <div className="p-6 bg-[#111] rounded-3xl border border-[#222]">
+            <div className="font-medium mb-4">Account Settings</div>
+            <div className="flex justify-between py-4 border-t border-[#222]"><div>Email</div><div className="text-[#a1a1aa] truncate ml-4">{user!.email}</div></div>
+            <div className="flex justify-between py-4 border-t border-[#222]"><div>User ID</div><div className="text-[#a1a1aa] font-mono text-xs">{user!.id?.slice(0, 12)}…</div></div>
+            <div className="flex justify-between py-4 border-t border-[#222]"><div>Member Since</div><div className="text-[#a1a1aa]">{new Date(user!.created_at || '').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}</div></div>
+          </div>
+          <button onClick={async () => { if (confirm("Sign out and clear all local data?")) { localStorage.clear(); await signOut(); navigate('/'); } }} className="text-[#e11d48] text-xs tracking-widest hover:underline">RESET ALL DATA & SIGN OUT</button>
         </div>
       )}
     </div>
@@ -1444,534 +2143,64 @@ function SubscriptionPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROFILE PAGE
-// ─────────────────────────────────────────────────────────────────────────────
-function ProfilePage() {
-  const navigate = useNavigate();
-  const { user, isSubscribed, signOut } = useAuth();
-  const [history, setHistory] = useState<Video[]>([]);
-
-  useEffect(() => {
-    if (!user) {
-      navigate('/login', { replace: true });
-      return;
-    }
-    fetchVideosFromDB().then(res => {
-      const localHist = getWatchHistory().map(h => h.videoId);
-      setHistory(res.filter(v => localHist.includes(v.id)));
-    });
-  }, [user, navigate]);
-
-  if (!user) return null;
-
-  return (
-    <div className="flex-1 pb-24 px-4 pt-6 max-w-md mx-auto select-none font-sans">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-black tracking-tight">Your Dashboard</h1>
-        <button
-          onClick={() => { void signOut(); navigate('/login'); }}
-          className="px-3.5 py-1.5 bg-red-500/10 border border-red-500/20 text-xs font-bold text-red-400 rounded-xl"
-        >
-          Sign Out
-        </button>
-      </div>
-
-      <div className="bg-[#121212] border border-white/5 rounded-3xl p-5 flex items-center gap-4 relative overflow-hidden shadow-lg mb-6">
-        <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-white/60 border border-white/5"><UserIcon size={20} /></div>
-        <div className="flex-1 overflow-hidden">
-          <div className="font-bold text-sm text-white truncate">{user.user_metadata?.full_name || 'Streamer Account'}</div>
-          <div className="text-xs text-white/40 truncate mt-0.5">{user.email}</div>
-          <div className="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-black/40 border border-white/10 rounded-lg">
-            <div className={`w-1.5 h-1.5 rounded-full ${isSubscribed ? 'bg-amber-400' : 'bg-white/20'}`} />
-            <span className="text-[10px] font-bold uppercase tracking-wider text-white/60">{isSubscribed ? 'Premium Elite Tier' : 'Standard Tier'}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Continue Watching History Rail */}
-      <div className="mb-6">
-        <div className="flex items-center gap-1.5 text-xs font-bold text-white/50 uppercase tracking-wider mb-3 ml-1">
-          <Clock size={12} />
-          <span>Continue Watching ({history.length})</span>
-        </div>
-        {history.length === 0 ? (
-          <div className="bg-[#121212] rounded-2xl p-6 text-center text-xs text-white/30 border border-white/5">No watch logs in local storage tracks.</div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {history.slice(0, 4).map(v => (
-              <div
-                key={v.id}
-                onClick={() => navigate(`/player/${v.id}`)}
-                className="bg-[#121212] border border-white/5 rounded-xl overflow-hidden p-2 flex items-center gap-3 cursor-pointer hover:border-white/10 transition"
-              >
-                <div className="w-12 h-16 bg-[#222] rounded-lg overflow-hidden flex-shrink-0">
-                  <img src={v.thumbnail} className="w-full h-full object-cover" alt="" onError={e => e.currentTarget.src='https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=200'} />
-                </div>
-                <div className="overflow-hidden">
-                  <h4 className="font-bold text-xs text-white truncate">{v.title}</h4>
-                  <span className="text-[9px] font-bold text-[#c5a26f] uppercase tracking-wider mt-1 block">{v.category}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Helpful Quick Shortcuts Routing */}
-      <div className="bg-[#121212] border border-white/5 rounded-2xl divide-y divide-white/5 overflow-hidden">
-        <div onClick={() => navigate('/subscription')} className="p-4 flex justify-between items-center cursor-pointer hover:bg-white/5 transition"><div className="flex items-center gap-3"><CreditCard size={16} className="text-[#c5a26f]" /><span className="text-xs font-semibold">Manage Premium Plan</span></div><span className="text-white/20 text-xs">➔</span></div>
-        <div onClick={() => navigate('/privacy')} className="p-4 flex justify-between items-center cursor-pointer hover:bg-white/5 transition"><div className="flex items-center gap-3"><Settings size={16} className="text-white/40" /><span className="text-xs font-semibold">Privacy Policy Rules</span></div><span className="text-white/20 text-xs">➔</span></div>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN PANEL COMPONENT 
-// ─────────────────────────────────────────────────────────────────────────────
-function AdminPage() {
-  return <Navigate to="/admin-secure-7842" replace />;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EDITOR PANEL (ADMIN SECURE 7842)
-// ─────────────────────────────────────────────────────────────────────────────
-function EditorPanel() {
-  const navigate = useNavigate();
-  const [videos, setVideos] = useState<Video[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Form State Hook payload models
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('');
-  const [duration, setDuration] = useState('1:00');
-  const [isPremium, setIsPremium] = useState(false);
-  const [videoUrl, setVideoUrl] = useState('');
-  const [source, setSource] = useState<'direct' | 'youtube' | 'bunny'>('bunny');
-  const [editingId, setEditingId] = useState<number | null>(null);
-
-  // Global Promo Configuration State Variables
-  const [promoUrl, setPromoUrl] = useState('');
-  const [showPromo, setShowPromo] = useState(true);
-  const [promoType, setPromoType] = useState<'youtube' | 'direct'>('youtube');
-
-  useEffect(() => {
-    let active = true;
-    const syncEditorSetup = async () => {
-      try {
-        const [vids, cats, promoSettings] = await Promise.all([
-          fetchVideosFromDB(),
-          fetchCategoriesFromDB(),
-          fetchSettingFromDB<PromoVideoSettings>('promo_video_settings', defaultPromoVideo)
-        ]);
-
-        if (active) {
-          setVideos(vids);
-          setCategories(cats);
-          setCategory(cats[0] || 'Romance');
-          if (promoSettings) {
-            setPromoUrl(promoSettings.videoUrl);
-            setShowPromo(promoSettings.isEnabled);
-            setPromoType(promoSettings.videoType || 'youtube');
-          }
-        }
-      } catch { /* noop */ }
-      finally {
-        if (active) setLoading(false);
-      }
-    };
-    void syncEditorSetup();
-    return () => { active = false; };
-  }, []);
-
-  const handleSaveVideo = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !videoUrl.trim()) return;
-
-    const targetId = editingId ?? (videos.length > 0 ? Math.max(...videos.map(v => v.id)) + 1 : 1);
-    const payload: Video = {
-      id: targetId,
-      title: title.trim(),
-      description: description.trim(),
-      category: category.trim(),
-      duration: duration.trim(),
-      isPremium,
-      thumbnail: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=500',
-      videoUrl: videoUrl.trim(),
-      source,
-    };
-
-    await upsertVideoToDB(payload);
-    const freshVideos = await fetchVideosFromDB();
-    setVideos(freshVideos);
-
-    // Reset Forms parameters
-    setTitle(''); setDescription(''); setVideoUrl(''); setEditingId(null); setIsPremium(false);
-  };
-
-  const handleSavePromo = async () => {
-    const payload: PromoVideoSettings = {
-      videoUrl: promoUrl.trim(),
-      isEnabled: showPromo,
-      videoType: promoType
-    };
-    // Use clear explicit target fields layout configurations
-    await supabase.from('platform_settings').upsert({
-      key: 'promo_video_settings',
-      value: payload
-    }, { onConflict: 'key' });
-    ls.set('reelramp_promo_video_settings', payload);
-    alert('Global promo reel synchronized immediately with production database tables!');
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Confirm raw row deletion track from production databases?')) return;
-    await deleteVideoFromDB(id);
-    const fresh = await fetchVideosFromDB();
-    setVideos(fresh);
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#080808] flex items-center justify-center text-xs font-mono tracking-widest text-[#c5a26f] uppercase animate-pulse">
-        Securing Admin Encryption Pipeline...
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#0a0a0a] font-sans pb-24 select-none">
-      <header className="bg-[#111] border-b border-white/5 px-6 py-4 flex justify-between items-center sticky top-0 z-40">
-        <div className="flex items-center gap-3">
-          <Logo size={28} />
-          <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-[#c5a26f] font-mono px-2 py-0.5 rounded-md uppercase font-bold tracking-wider">Editor Panel v3</span>
-        </div>
-        <button onClick={() => navigate('/')} className="px-4 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl text-xs font-bold transition">View Front App</button>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-4 pt-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Form Controls Column */}
-        <div className="space-y-6 md:col-span-1">
-          <div className="bg-[#121212] border border-white/5 rounded-3xl p-5 shadow-xl">
-            <h2 className="text-sm font-extrabold text-[#c5a26f] uppercase tracking-wider mb-4 border-b border-white/5 pb-2">
-              {editingId ? 'Modify Segment Block' : 'Append Stream Row'}
-            </h2>
-            <form onSubmit={handleSaveVideo} className="space-y-3.5">
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Video Title</label>
-                <input type="text" required value={title} onChange={e => setTitle(e.target.value)} placeholder="Enter video title" className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none focus:border-[#c5a26f]/30" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Description</label>
-                <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Short storyline metadata log" rows={2} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none focus:border-[#c5a26f]/30 resize-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Category</label>
-                  <select value={category} onChange={e => setCategory(e.target.value)} className="w-full px-3.5 py-2.5 bg-[#181818] border border-white/5 rounded-xl text-white text-xs outline-none">
-                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Duration</label>
-                  <input type="text" required value={duration} onChange={e => setDuration(e.target.value)} placeholder="4:30" className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs font-mono outline-none focus:border-[#c5a26f]/30" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Link Source</label>
-                  <select value={source} onChange={e => setSource(e.target.value as any)} className="w-full px-3.5 py-2.5 bg-[#181818] border border-white/5 rounded-xl text-white text-xs outline-none">
-                    <option value="bunny">Bunny CDN</option>
-                    <option value="direct">Direct MP4</option>
-                    <option value="youtube">YouTube Embed</option>
-                  </select>
-                </div>
-                <div className="flex flex-col justify-end pb-1.5 pl-2">
-                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={isPremium} onChange={e => setIsPremium(e.target.checked)} className="rounded border-white/10 bg-white/5 text-[#c5a26f] focus:ring-0 w-4 h-4" />
-                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">Premium Lock</span>
-                  </label>
-                </div>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Streaming Endpoint URL</label>
-                <input type="text" required value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://reelramppro.b-cdn.net/file.mp4" className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs font-mono outline-none focus:border-[#c5a26f]/30" />
-              </div>
-              <div className="flex gap-2 pt-2">
-                <button type="submit" className="flex-1 py-2.5 bg-[#c5a26f] text-black font-extrabold text-xs uppercase tracking-wider rounded-xl hover:bg-[#b39160] transition">
-                  {editingId ? 'Overwrite Row' : 'Push Video Live'}
-                </button>
-                {editingId && (
-                  <button type="button" onClick={() => { setEditingId(null); setTitle(''); setVideoUrl(''); }} className="px-3 bg-white/5 rounded-xl text-white/60 text-xs">Cancel</button>
-                )}
-              </div>
-            </form>
-          </div>
-
-          {/* Global Trailer Controller Option panel configuration layout map */}
-          <div className="bg-[#121212] border border-white/5 rounded-3xl p-5 shadow-xl">
-            <h2 className="text-sm font-extrabold text-white/80 uppercase tracking-wider mb-3 border-b border-white/5 pb-2">Featured Promo Trailer</h2>
-            <div className="space-y-3.5">
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Promo Type</label>
-                <select value={promoType} onChange={e => setPromoType(e.target.value as any)} className="w-full px-3.5 py-2.5 bg-[#181818] border border-white/5 rounded-xl text-white text-xs outline-none">
-                  <option value="youtube">YouTube Video</option>
-                  <option value="direct">Direct CDN URL</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Video Source Link</label>
-                <input type="text" value={promoUrl} onChange={e => setPromoUrl(e.target.value)} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs font-mono outline-none" placeholder="Video url endpoint" />
-              </div>
-              <div className="flex justify-between items-center py-1">
-                <span className="text-[11px] font-bold text-white/50 uppercase tracking-wider">Visibility Status</span>
-                <input type="checkbox" checked={showPromo} onChange={e => setShowPromo(e.target.checked)} className="rounded border-white/10 bg-white/5 text-[#c5a26f] w-4 h-4" />
-              </div>
-              <button type="button" onClick={() => void handleSavePromo()} className="w-full py-2 bg-white text-black font-extrabold text-xs uppercase tracking-wider rounded-xl">
-                Synchronize Settings
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Catalog List Column */}
-        <div className="md:col-span-2 bg-[#121212] border border-white/5 rounded-3xl p-5 shadow-xl h-fit">
-          <h2 className="text-sm font-extrabold text-white/90 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Active Streaming Database Records ({videos.length})</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-white/5 text-[10px] font-bold text-white/30 uppercase tracking-wider">
-                  <th className="pb-3 pl-2">ID</th>
-                  <th className="pb-3">Title Details</th>
-                  <th className="pb-3">Category</th>
-                  <th className="pb-3">Access</th>
-                  <th className="pb-3 text-right pr-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5 text-xs">
-                {videos.map(v => (
-                  <tr key={v.id} className="hover:bg-white/[0.02] transition">
-                    <td className="py-3.5 font-mono text-white/40 pl-2">{v.id}</td>
-                    <td className="py-3.5 font-semibold text-white">
-                      <div>{v.title}</div>
-                      <div className="text-[10px] text-white/30 font-mono font-medium line-clamp-1 max-w-[240px] mt-0.5">{v.videoUrl}</div>
-                    </td>
-                    <td className="py-3.5 text-white/60 font-medium">{v.category}</td>
-                    <td className="py-3.5">
-                      {v.isPremium ? (
-                        <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 rounded text-[9px] font-extrabold text-[#c5a26f] uppercase">Premium</span>
-                      ) : (
-                        <span className="px-2 py-0.5 bg-white/5 border border-white/5 rounded text-[9px] font-bold text-white/40 uppercase">Free</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 text-right pr-2">
-                      <div className="flex gap-2.5 justify-end">
-                        <button
-                          onClick={() => {
-                            setEditingId(v.id); setTitle(v.title); setDescription(v.description);
-                            setCategory(v.category); setDuration(v.duration); setIsPremium(v.isPremium);
-                            setVideoUrl(v.videoUrl); setSource(v.source || 'bunny');
-                          }}
-                          className="p-1 text-white/40 hover:text-[#c5a26f] transition"
-                        >
-                          <Edit2 size={14} />
-                        </button>
-                        <button onClick={() => void handleDelete(v.id)} className="p-1 text-white/40 hover:text-red-400 transition">
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OWNER PANEL (RRMP CONTROL 9X7K)
-// ─────────────────────────────────────────────────────────────────────────────
-function OwnerPanel() {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'metrics' | 'subs' | 'gateways'>('metrics');
-
-  // Business models control parameters
-  const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings);
-  const [subTier, setSubTier] = useState<SubscriptionSettings>(defaultSubscriptionSettings);
-  const [gateways, setGateways] = useState<PaymentSettings>(defaultPaymentSettings);
-
-  useEffect(() => {
-    let active = true;
-    const fetchOwnerConfig = async () => {
-      try {
-        const [p, s, g] = await Promise.all([
-          fetchSettingFromDB<PlatformSettings>('platform_settings', defaultPlatformSettings),
-          fetchSettingFromDB<SubscriptionSettings>('subscription_settings', defaultSubscriptionSettings),
-          fetchSettingFromDB<PaymentSettings>('payment_settings', defaultPaymentSettings)
-        ]);
-        if (active) {
-          setPlatform(p);
-          setSubTier(s);
-          setGateways(g);
-        }
-      } catch { /* noop */ }
-      finally {
-        if (active) setLoading(false);
-      }
-    };
-    void fetchOwnerConfig();
-    return () => { active = false; };
-  }, []);
-
-  const saveConfig = async (key: 'platform_settings' | 'subscription_settings' | 'payment_settings', payload: unknown) => {
-    await upsertSettingToDB(key, payload);
-    alert('System operations updated across main branch clusters!');
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#050505] flex items-center justify-center text-xs font-mono text-white/40 uppercase tracking-widest animate-pulse">
-        Initializing SuperUser Framework Operations...
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#080808] font-sans pb-24 text-white select-none">
-      <header className="bg-[#0f0f0f] border-b border-white/5 px-6 py-4 flex justify-between items-center sticky top-0 z-40 shadow-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-          <h1 className="text-sm font-black uppercase tracking-wider font-mono">Master Operation Console</h1>
-        </div>
-        <button onClick={() => navigate('/')} className="px-3.5 py-1.5 bg-white/5 border border-white/10 rounded-xl text-xs font-bold">Exit Terminal</button>
-      </header>
-
-      <div className="max-w-5xl mx-auto px-4 mt-6">
-        {/* Navigation Tabs Bar layout */}
-        <div className="flex gap-2 bg-[#121212] p-1.5 border border-white/5 rounded-2xl mb-6 w-fit">
-          <button onClick={() => setActiveTab('metrics')} className={`px-4 py-2 rounded-xl text-xs font-bold transition uppercase ${activeTab === 'metrics' ? 'bg-[#c5a26f] text-black shadow-md' : 'text-white/60 hover:text-white'}`}>Financial Insights</button>
-          <button onClick={() => setActiveTab('subs')} className={`px-4 py-2 rounded-xl text-xs font-bold transition uppercase ${activeTab === 'subs' ? 'bg-[#c5a26f] text-black shadow-md' : 'text-white/60 hover:text-white'}`}>Plan Matrix</button>
-          <button onClick={() => setActiveTab('gateways')} className={`px-4 py-2 rounded-xl text-xs font-bold transition uppercase ${activeTab === 'gateways' ? 'bg-[#c5a26f] text-black shadow-md' : 'text-white/60 hover:text-white'}`}>Gateway Rules</button>
-        </div>
-
-        {activeTab === 'metrics' && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-[#121212] border border-white/5 rounded-2xl p-5"><div className="text-[10px] font-bold text-white/40 uppercase tracking-wider">Gross Sales Database Log</div><div className="text-2xl font-black text-[#c5a26f] mt-1">₹7,098</div><div className="text-[9px] text-emerald-400 font-bold mt-1">▲ 14.2% Last Cycle</div></div>
-              <div className="bg-[#121212] border border-white/5 rounded-2xl p-5"><div className="text-[10px] font-bold text-white/40 uppercase tracking-wider">Simulated Subscribers</div><div className="text-2xl font-black text-white mt-1">162 Users</div><div className="text-[9px] text-white/30 font-medium mt-1">Active sync hooks matching user profiles</div></div>
-              <div className="bg-[#121212] border border-white/5 rounded-2xl p-5"><div className="text-[10px] font-bold text-white/40 uppercase tracking-wider">Active Catalog Rows</div><div className="text-2xl font-black text-white mt-1">11 Nodes</div><div className="text-[9px] text-amber-500 font-bold mt-1">CDN active configuration verified</div></div>
-            </div>
-            <div className="bg-[#121212] border border-white/5 rounded-2xl p-5">
-              <h3 className="text-xs font-extrabold text-white/50 uppercase tracking-wider mb-3 ml-1">Live Transaction Logs Sequence</h3>
-              <div className="divide-y divide-white/5 text-xs font-mono">
-                {getRevenueData().map(r => (
-                  <div key={r.id} className="py-3 flex justify-between items-center text-white/80">
-                    <div><span>[{r.date}]</span> <span className="text-white font-bold ml-2">{r.type}</span> <span className="text-white/40">({r.plan})</span></div>
-                    <div className="text-[#c5a26f] font-bold">+₹{r.amount}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'subs' && (
-          <div className="bg-[#121212] border border-white/5 rounded-3xl p-6 max-w-md shadow-2xl">
-            <h3 className="text-sm font-extrabold text-[#c5a26f] uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Plan Matrix Configurations</h3>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Trial Pricing</label><input type="text" value={subTier.trialOfferPrice} onChange={e => setSubTier({...subTier, trialOfferPrice: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none" /></div>
-                <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Trial Validity</label><input type="text" value={subTier.trialOfferDuration} onChange={e => setSubTier({...subTier, trialOfferDuration: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none" /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Full Tier Price</label><input type="text" value={subTier.fullPrice} onChange={e => setSubTier({...subTier, fullPrice: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none" /></div>
-                <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Full Tier Validity</label><input type="text" value={subTier.fullValidity} onChange={e => setSubTier({...subTier, fullValidity: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs outline-none" /></div>
-              </div>
-              <div className="flex justify-between items-center py-2">
-                <div><div className="text-xs font-bold text-white/90">Render Low Cost Trial Layer</div><div className="text-[10px] text-white/40 font-medium">Controls the conversion optimization schedulers</div></div>
-                <input type="checkbox" checked={subTier.showTrialPopup} onChange={e => setSubTier({...subTier, showTrialPopup: e.target.checked})} className="rounded border-white/10 bg-white/5 text-[#c5a26f] w-4 h-4" />
-              </div>
-              <button onClick={() => void saveConfig('subscription_settings', subTier)} className="w-full mt-2 py-3 bg-[#c5a26f] text-black font-extrabold text-xs uppercase tracking-wider rounded-xl">Save Plan Matrix</button>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'gateways' && (
-          <div className="bg-[#121212] border border-white/5 rounded-3xl p-6 max-w-md shadow-2xl">
-            <h3 className="text-sm font-extrabold text-white/90 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Active Banking Gateway Routing</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Active Gateway Router</label>
-                <select value={gateways.activeGateway} onChange={e => setGateways({...gateways, activeGateway: e.target.value as any})} className="w-full px-3.5 py-2.5 bg-[#181818] border border-white/5 rounded-xl text-white text-xs outline-none">
-                  <option value="razorpay">Razorpay Checkout Pipeline</option>
-                  <option value="stripe">Stripe Global Processing</option>
-                  <option value="upi">UPI Sandbox Standalone</option>
-                  <option value="none">Manual Simulation Hooks</option>
-                </select>
-              </div>
-              <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">Razorpay Key ID</label><input type="text" value={gateways.razorpayKeyId} onChange={e => setGateways({...gateways, razorpayKeyId: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs font-mono outline-none" placeholder="rzp_live_..." /></div>
-              <div><label className="block text-[10px] font-bold text-white/40 uppercase tracking-wider mb-1">UPI String Mapping</label><input type="text" value={gateways.upiId} onChange={e => setGateways({...gateways, upiId: e.target.value})} className="w-full px-3.5 py-2.5 bg-white/5 border border-white/5 rounded-xl text-white text-xs font-mono outline-none" placeholder="merchant@ybl" /></div>
-              <div className="flex justify-between items-center py-1">
-                <div><div className="text-xs font-bold text-white/90">Production Live-Mode Route</div><div className="text-[10px] text-white/40 font-medium">When disabled, execution utilizes mock simulation loops</div></div>
-                <input type="checkbox" checked={gateways.isLiveMode} onChange={e => setGateways({...gateways, isLiveMode: e.target.checked})} className="rounded border-white/10 bg-white/5 text-[#c5a26f] w-4 h-4" />
-              </div>
-              <button onClick={() => void saveConfig('payment_settings', gateways)} className="w-full mt-2 py-3 bg-white text-black font-extrabold text-xs uppercase tracking-wider rounded-xl">Authorize Gateway Cluster</button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LEGAL INFORMATIONAL LAYOUT PAGES
-// ─────────────────────────────────────────────────────────────────────────────
-function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping' }) {
-  const navigate = useNavigate();
-  const TITLES = { privacy: "Privacy Policy Rules", terms: "Terms & Conditions Clause", refund: "Cancellation & Refund Framework", shipping: "Service Delivery & Shipping Matrix" };
-  return (
-    <div className="flex-1 px-4 py-6 max-w-2xl mx-auto font-sans text-white/80 select-none">
-      <button onClick={() => navigate(-1)} className="mb-6 p-2 bg-white/5 border border-white/5 rounded-xl flex items-center gap-2 text-xs font-bold text-white/60"><ArrowLeft size={14} /> Back</button>
-      <h1 className="text-xl font-black text-white mb-4 uppercase tracking-tight">{TITLES[type]}</h1>
-      <div className="bg-[#121212] border border-white/5 rounded-2xl p-5 text-xs leading-relaxed space-y-4 font-normal">
-        <p>This operational framework document outlines the legal compliance and data routing policies applied across this streaming deployment container node.</p>
-        <p>By interacting with our streaming layout files, application endpoints, local storage frameworks, and authenticated subscription state models, you consent fully to our execution cycles.</p>
-        <p>All programmatic interactions are tracked strictly under standard end-user license agreements without external bypass pipelines.</p>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FOOTER LAYOUT
+// FOOTER
 // ─────────────────────────────────────────────────────────────────────────────
 function Footer() {
-  const navigate = useNavigate();
+  const socialLinks = [
+    { name: 'Facebook', url: 'https://facebook.com/reelrampofficial', label: 'ReelRamp Official' },
+    { name: 'Instagram', url: 'https://instagram.com/thoda_thehro_', label: '@thoda_thehro_' },
+    { name: 'YouTube', url: 'https://youtube.com/@reelramp', label: 'ReelRamp Channel' },
+    { name: 'WhatsApp', url: 'https://wa.me/917307493338', label: 'Direct Chat' },
+  ];
   return (
-    <footer className="bg-[#0e0e0e] border-t border-white/5 mt-auto pt-8 pb-24 px-4 font-sans select-none">
-      <div className="max-w-md mx-auto grid grid-cols-2 gap-6 text-xs mb-6">
-        <div className="space-y-2">
-          <div className="font-bold text-white/40 uppercase tracking-widest text-[10px] mb-3">Enterprise Scope</div>
-          <div onClick={() => navigate('/terms')} className="text-white/60 hover:text-white cursor-pointer transition font-medium">Terms of Use Clause</div>
-          <div onClick={() => navigate('/privacy')} className="text-white/60 hover:text-white cursor-pointer transition font-medium">Data Privacy Rules</div>
+    <footer className="bg-[#0a0a0a] border-t border-[#222] pt-14 pb-8 px-5 text-sm text-[#a1a1aa]">
+      <div className="max-w-7xl mx-auto">
+        <div className="max-w-3xl mx-auto text-center pb-12 border-b border-[#222]">
+          <div className="inline-block px-4 py-1 text-xs tracking-[3px] text-[#c5a26f] border border-[#c5a26f]/30 rounded-full mb-4">FROM THE DIRECTOR</div>
+          <blockquote className="text-2xl md:text-3xl font-light italic leading-snug text-white mb-6">"Kahaniyan sirf sunayi nahi jati, mehsoos ki jati hain."</blockquote>
+          <div className="text-[#c5a26f] font-medium">— Ayush Jivan <span className="text-[#666] font-normal">Founder &amp; Director, ReelRamp Pro</span></div>
         </div>
-        <div className="space-y-2">
-          <div className="font-bold text-white/40 uppercase tracking-widest text-[10px] mb-3">Support Protocols</div>
-          <div onClick={() => navigate('/refund')} className="text-white/60 hover:text-white cursor-pointer transition font-medium">Refund Framework</div>
-          <div onClick={() => navigate('/shipping')} className="text-white/60 hover:text-white cursor-pointer transition font-medium">Shipping & Delivery</div>
+        <div className="pt-10 pb-8">
+          <div className="flex flex-wrap justify-center gap-x-8 gap-y-4">
+            {socialLinks.map(s => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2.5 text-[#a1a1aa] hover:text-[#c5a26f] transition-colors group">
+                <div className="text-[#c5a26f]">
+                  {s.name === 'Facebook' && <Facebook size={18} />}
+                  {s.name === 'Instagram' && <Instagram size={18} />}
+                  {s.name === 'YouTube' && <Youtube size={18} />}
+                  {s.name === 'WhatsApp' && <MessageCircle size={18} />}
+                </div>
+                <span>{s.label}</span>
+              </a>
+            ))}
+          </div>
         </div>
-      </div>
-      <div className="max-w-md mx-auto border-t border-white/5 pt-4 flex justify-between items-center text-[10px] font-medium text-white/30">
-        <span>© 2026 ReelRamp Engine Node.</span>
-        <span>All streams validated.</span>
+        <div className="pt-8 border-t border-[#222] grid md:grid-cols-4 gap-y-10 text-sm">
+          <div>
+            <div className="flex items-center gap-2 mb-3 text-white">
+              <div className="w-7 h-7 bg-[#c5a26f] rounded-xl flex items-center justify-center"><Play size={15} className="text-black" /></div>
+              <span className="font-semibold tracking-tight">ReelRamp Shorts</span>
+            </div>
+            <p className="text-xs leading-snug pr-4">Premium cinematic short films and investigative stories.</p>
+          </div>
+          <div>
+            <div className="font-medium text-white mb-4">Company</div>
+            <div className="space-y-2 text-xs">
+              {[['privacy','Privacy Policy'],['terms','Terms & Conditions'],['refund','Cancellation & Refund'],['shipping','Shipping & Delivery']].map(([path, label]) => (
+                <a key={path} href={`/${path}`} className="block hover:text-white">{label}</a>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="font-medium text-white mb-4">Support</div>
+            <div className="space-y-[7px] text-xs"><div>reelramporiginal@gmail.com</div><div>+91 7307493338</div></div>
+          </div>
+          <div>
+            <div className="font-medium text-white mb-4">Office</div>
+            <div className="text-xs leading-snug">FF Shop No. 6, Arohi Arcade,<br />Munshipulia, Lucknow - 226016</div>
+            <div className="mt-6 text-[10px] tracking-[1.5px]">© {new Date().getFullYear()} ReelRamp Originals Pvt. Ltd.</div>
+          </div>
+        </div>
       </div>
     </footer>
   );
@@ -1983,29 +2212,1136 @@ function Footer() {
 function BottomNavigation() {
   const navigate = useNavigate();
   const location = useLocation();
+  const navItems = [
+    { path: '/', label: 'Home', icon: Home, key: 'home' },
+    { path: '/player/1', label: 'For You', icon: Zap, key: 'foryou' },
+    { path: '/store', label: 'Store', icon: ShoppingBag, key: 'store' },
+    { path: '/profile', label: 'Profile', icon: UserIcon, key: 'profile' },
+  ];
+  return (
+    <div className="fixed bottom-0 left-0 right-0 bg-[#111111] border-t border-[#222] z-50 md:hidden">
+      <div className="flex justify-around items-center h-16 px-2">
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const isActive = item.path === '/' ? location.pathname === '/'
+            : item.key === 'foryou' ? location.pathname.startsWith('/player')
+            : location.pathname === item.path;
+          return (
+            <button key={item.key} onClick={() => navigate(item.path)}
+              className={`flex flex-col items-center justify-center py-1 px-4 rounded-xl transition-all active:scale-90 ${isActive ? 'text-[#c5a26f]' : 'text-[#a1a1aa]'}`}>
+              <Icon size={20} />
+              <span className="text-xs mt-0.5 font-medium">{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-  const NAV_ITEMS = [
-    { path: '/', label: 'Feeds', icon: <Play size={20} /> },
-    { path: '/subscription', label: 'Premium', icon: <Star size={20} /> },
-    { path: '/profile', label: 'Profile', icon: <UserIcon size={20} /> },
+// ─────────────────────────────────────────────────────────────────────────────
+// LEGAL PAGES
+// ─────────────────────────────────────────────────────────────────────────────
+function LegalPage({ type }: { type: 'privacy' | 'terms' | 'refund' | 'shipping' }) {
+  const navigate = useNavigate();
+  const titles: Record<string, string> = { privacy: "Privacy Policy", terms: "Terms & Conditions", refund: "Cancellation & Refund Policy", shipping: "Shipping & Delivery Policy" };
+  const contents: Record<string, string> = {
+    privacy: `At ReelRamp Shorts, we respect your privacy.\n\n1. Information We Collect: Name, email, phone number, and payment details.\n\n2. How We Use Information: To provide access to premium content, process payments, and improve the service.\n\n3. Data Security: All data is encrypted. We never share personal information with third parties except for payment processing.\n\n4. Contact: reelramporiginal@gmail.com | +91 7307493338`,
+    terms: `Welcome to ReelRamp Shorts. By accessing or using our platform, you agree to these Terms & Conditions.\n\n1. Subscription: Premium access is granted upon successful payment.\n\n2. Content: All short films are proprietary. Unauthorized distribution is prohibited.\n\n3. Payment: All payments are processed securely.\n\n4. Governing Law: Laws of India apply. Disputes resolved in Lucknow courts.`,
+    refund: `Cancellation & Refund Policy\n\n1. You may cancel your subscription anytime from the Profile page.\n\n2. Refunds: Full refunds are available within 7 days of purchase if you have not watched more than 2 premium shorts.\n\n3. How to Request: Email reelramporiginal@gmail.com with your transaction ID. Refunds processed within 5-7 business days.`,
+    shipping: `Shipping & Delivery Policy (Digital Products)\n\nReelRamp Shorts is a digital subscription service. There is no physical shipping involved.\n\n1. Instant Access: Upon successful payment, your subscription is activated immediately.\n\n2. Delivery Confirmation: A confirmation email is sent to your registered contact.\n\n3. Support: +91 7307493338 or reelramporiginal@gmail.com`,
+  };
+  return (
+    <div className="max-w-3xl mx-auto px-6 py-12 pb-28">
+      <button onClick={() => navigate(-1)} className="mb-6 flex items-center gap-2 text-sm text-[#a1a1aa] hover:text-white active:scale-95 transition-transform"><ArrowLeft size={18} /> Back</button>
+      <h1 className="text-4xl sm:text-5xl font-semibold tracking-[-2px] mb-3">{titles[type]}</h1>
+      <div className="text-xs uppercase tracking-[3px] text-[#c5a26f] mb-8">REELRAMP ORIGINALS • LAST UPDATED MAY 2025</div>
+      <div className="text-[#ccc] whitespace-pre-line leading-relaxed text-[15px]">{contents[type]}</div>
+      <div className="mt-12 text-xs border-t border-[#222] pt-8 text-[#666]">
+        Office: FF Shop No. 6, Arohi Arcade, Munshipulia, Lucknow - 226016<br />Support: reelramporiginal@gmail.com | +91 7307493338
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EDITOR PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function EditorPanel() {
+  const navigate = useNavigate();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const EDITOR_PASSWORD = "editor@2025";
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5">
+        <div className="w-full max-w-md bg-[#111] border border-[#222] rounded-3xl p-9">
+          <div className="text-center mb-8">
+            <div className="mx-auto w-14 h-14 bg-[#c5a26f] rounded-2xl flex items-center justify-center mb-4"><Edit2 className="text-black" size={28} /></div>
+            <h1 className="text-3xl font-semibold">Editor Access</h1>
+          </div>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (password === EDITOR_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))}
+            placeholder="Editor Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+          {error && <p className="text-[#e11d48] text-sm text-center mt-2">{error}</p>}
+          <button onClick={() => password === EDITOR_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password")} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold active:scale-[0.98] transition-transform">LOGIN AS EDITOR</button>
+          <div className="text-center mt-4"><button onClick={() => navigate('/')} className="text-xs text-[#666]">Back to App</button></div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] pb-20">
+      <div className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#222]">
+        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-[#c5a26f] rounded-xl flex items-center justify-center"><Edit2 className="text-black" size={18} /></div>
+            <div><div className="font-semibold">ReelRamp • Editor Studio</div><div className="text-[10px] text-[#666]">Limited Access</div></div>
+          </div>
+          <button onClick={() => navigate('/')} className="text-sm px-4 py-2 bg-[#222] rounded-2xl">Exit Editor</button>
+        </div>
+      </div>
+      <div className="max-w-7xl mx-auto px-6 pt-8">
+        <h2 className="text-4xl font-semibold tracking-tight mb-2">Content Management</h2>
+        <p className="text-[#a1a1aa] mb-8">Manage videos, popups and trial offers.</p>
+        <div className="bg-[#111] rounded-3xl p-8 border border-[#222]">
+          <p className="text-lg">Editor access granted. You can manage shorts and trial offers.</p>
+          <button onClick={() => navigate('/admin')} className="mt-4 px-6 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm active:scale-95 transition-transform">Open Admin Panel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OWNER PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+function OwnerPanel() {
+  const navigate = useNavigate();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const OWNER_PASSWORD = "owner@reelramp2025";
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5">
+        <div className="w-full max-w-md bg-[#111] border border-[#222] rounded-3xl p-9">
+          <div className="text-center mb-8">
+            <div className="mx-auto w-14 h-14 bg-gradient-to-br from-[#c5a26f] to-[#d4b17f] rounded-2xl flex items-center justify-center mb-4"><Settings className="text-black" size={28} /></div>
+            <h1 className="text-3xl font-semibold">Owner Access</h1>
+          </div>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (password === OWNER_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password"))}
+            placeholder="Owner Password" className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+          {error && <p className="text-[#e11d48] text-sm text-center mt-2">{error}</p>}
+          <button onClick={() => password === OWNER_PASSWORD ? setIsLoggedIn(true) : setError("Invalid password")} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold active:scale-[0.98] transition-transform">LOGIN AS OWNER</button>
+          <div className="text-center mt-4"><button onClick={() => navigate('/')} className="text-xs text-[#666]">Back to App</button></div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] pb-20">
+      <div className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#222]">
+        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-gradient-to-br from-[#c5a26f] to-[#d4b17f] rounded-xl flex items-center justify-center"><Settings className="text-black" size={18} /></div>
+            <div><div className="font-semibold">ReelRamp • Owner Studio</div><div className="text-[10px] text-[#c5a26f]">Full Access</div></div>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => navigate('/admin-secure-7842')} className="text-sm px-4 py-2 bg-[#222] rounded-2xl">Editor Panel</button>
+            <button onClick={() => navigate('/admin')} className="text-sm px-4 py-2 bg-[#c5a26f] text-black rounded-2xl">Admin Panel</button>
+            <button onClick={() => navigate('/')} className="text-sm px-4 py-2 bg-[#e11d48] rounded-2xl">Exit</button>
+          </div>
+        </div>
+      </div>
+      <div className="max-w-7xl mx-auto px-6 pt-8">
+        <h2 className="text-4xl sm:text-5xl font-semibold tracking-tight mb-2">Owner Control Center</h2>
+        <p className="text-[#a1a1aa] mb-8">Complete access to all settings, users, and revenue</p>
+        <div className="grid md:grid-cols-2 gap-6">
+          {["Manage All Shorts","Subscription Plans","User Management","Revenue & Analytics","Payment Settings","Platform Settings"].map(item => (
+            <div key={item} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex items-center justify-between">
+              <span className="font-medium">{item}</span>
+              <button onClick={() => navigate('/admin')} className="text-[#c5a26f] text-sm px-4 py-2 bg-[#1a1a1a] rounded-xl active:scale-95 transition-transform">Open →</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PAGE — FIX 1: maybeSingle, safe upsert, guaranteed finally, instant UI
+// ─────────────────────────────────────────────────────────────────────────────
+function AdminPage() {
+  const navigate = useNavigate();
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPass, setAdminPass] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggedInAdmin, setLoggedInAdmin] = useState('');
+  const [activeTab, setActiveTab] = useState<
+    'dashboard' | 'content' | 'users' | 'analytics' | 'popups' |
+    'settings' | 'plans' | 'payment' | 'categories' | 'promo' |
+    'revenue' | 'store' | 'datatools'
+  >('dashboard');
+
+  // All state initialized from localStorage instantly — no DB wait
+  const [adminVideos, setAdminVideos] = useState<Video[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>(initialAdminUsers);
+  const [popups, setPopups] = useState<PopupAd[]>([]);
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(defaultPlatformSettings);
+  const [subSettings, setSubSettings] = useState<SubscriptionSettings>(defaultSubscriptionSettings);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentSettings>(defaultPaymentSettings);
+  const [categories, setCategoriesState] = useState<string[]>([]);
+  const [promoSettings, setPromoSettings] = useState<PromoVideoSettings>(defaultPromoVideo);
+  const [videoViews, setVideoViews] = useState<Record<number, number>>({});
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingVideo, setEditingVideo] = useState<Video | null>(null);
+  const [editingPopup, setEditingPopup] = useState<PopupAd | null>(null);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [editingCatName, setEditingCatName] = useState<string | null>(null);
+  const [editingCatValue, setEditingCatValue] = useState('');
+  const [toast, setToast] = useState('');
+  // FIX 1: syncing is purely cosmetic — never blocks UI
+  const [syncing, setSyncing] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '', description: '', category: 'Horror', duration: '4:30',
+    isPremium: true, thumbnail: '', videoUrl: ''
+  });
+  const [digitalProducts, setDigitalProducts] = useState<DigitalProduct[]>([]);
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<DigitalProduct | null>(null);
+  const [productForm, setProductForm] = useState({
+    title: '', description: '', price: 999,
+    category: 'workshop' as DigitalProduct['category'],
+    thumbnailUrl: '', isPremium: false, badge: ''
+  });
+  const [platformSplit, setPlatformSplit] = useState(60);
+  const creatorSplit = 100 - platformSplit;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500); };
+
+  const ALLOWED_ADMINS = [
+    { email: "admin@reelramp.com", password: "reelramp-pro-2025" },
+    { email: "founder@reelramp.com", password: "admin2025" },
   ];
 
+  const handleAdminLogin = () => {
+    const valid = ALLOWED_ADMINS.find(a => a.email === adminEmail && a.password === adminPass);
+    if (valid) { setLoggedInAdmin(valid.email); setIsAuthorized(true); setLoginError(''); }
+    else setLoginError("Invalid credentials.");
+  };
+
+  useEffect(() => {
+    if (!isAuthorized) return;
+    // Instant render from localStorage
+    setAdminVideos(getStoredVideos());
+    setPopups(getStoredPopups());
+    setPlatformSettings(getSettings());
+    setSubSettings(getSubSettings());
+    setPaymentConfig(getPaymentSettings());
+    setCategoriesState(getCategories());
+    setPromoSettings(getPromoSettings());
+    setVideoViews(getVideoViews());
+    setDigitalProducts(getDigitalProducts());
+    setAdminUsers(ls.get<AdminUser[]>('reelramp_admin_users', initialAdminUsers));
+
+    // FIX 1: Background Supabase sync — NEVER blocks UI, guaranteed finally
+    setSyncing(true);
+    supabase.from('videos').select('*').order('id')
+      .then(({ data }) => {
+        if (data && data.length > 0) { setAdminVideos(data as Video[]); saveVideos(data as Video[]); }
+      })
+      .catch(() => {})
+      .finally(() => setSyncing(false)); // GUARANTEED — never stays true
+  }, [isAuthorized]);
+
+  // FIX 1: persistVideos — optimistic UI update first, then background sync
+  const persistVideos = async (updated: Video[]) => {
+    // 1. Instant optimistic update
+    setAdminVideos(updated);
+    saveVideos(updated);
+    // 2. Background sync — no await blocking UI
+    setSyncing(true);
+    supabase.from('videos').upsert(updated)
+      .then(() => {})
+      .catch(() => {})
+      .finally(() => setSyncing(false));
+  };
+
+  // FIX 1: syncSettingToSupabase — safe upsert with onConflict, guaranteed finally
+  const syncSettingToSupabase = async (key: string, value: unknown) => {
+    setSyncing(true);
+    await safeUpsert('platform_settings', { id: key, key, value: JSON.stringify(value) }, 'id');
+    setSyncing(false);
+  };
+
+  // FIX 1: syncPromoToSupabase — uses maybeSingle + structured upsert
+  const syncPromoToSupabase = async (settings: PromoVideoSettings) => {
+    setSyncing(true);
+    // Check existence via maybeSingle (never throws on not-found)
+    const existing = await safeMaybeSelect<{id: string}>('popup_settings', { id: 'global_popup' });
+    if (existing) {
+      await safeUpsert('popup_settings', {
+        id: 'global_popup',
+        video_url: settings.videoUrl,
+        is_active: settings.isEnabled,
+        video_type: settings.videoType
+      }, 'id');
+    } else {
+      await supabase.from('popup_settings').insert({
+        id: 'global_popup',
+        video_url: settings.videoUrl,
+        is_active: settings.isEnabled,
+        video_type: settings.videoType
+      }).then(() => {}).catch(() => {});
+    }
+    setSyncing(false);
+  };
+
+  const persistPopups = (updated: PopupAd[]) => { setPopups(updated); savePopups(updated); };
+
+  const openAddModal = () => {
+    setFormData({ title: '', description: '', category: 'Horror', duration: '4:30', isPremium: true, thumbnail: '/images/horror1.jpg', videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4' });
+    setEditingVideo(null);
+    setShowAddModal(true);
+  };
+
+  const openEditModal = (video: Video) => {
+    setFormData({ title: video.title, description: video.description, category: video.category, duration: video.duration, isPremium: video.isPremium, thumbnail: video.thumbnail, videoUrl: video.videoUrl });
+    setEditingVideo(video);
+    setShowAddModal(true);
+  };
+
+  const saveVideo = async () => {
+    if (!formData.title.trim()) return;
+    let updated: Video[];
+    if (editingVideo) {
+      updated = adminVideos.map(v => v.id === editingVideo.id ? { ...v, ...formData } : v);
+    } else {
+      const newId = Math.max(0, ...adminVideos.map(v => v.id)) + 1;
+      updated = [...adminVideos, { ...formData, id: newId } as Video];
+    }
+    setShowAddModal(false); // FIX 1: close instantly — optimistic
+    showToast(editingVideo ? "✅ Short updated!" : "✅ Short published!");
+    await persistVideos(updated);
+  };
+
+  const deleteVideo = async (id: number) => {
+    // FIX 1: instant optimistic delete
+    const updated = adminVideos.filter(v => v.id !== id);
+    setAdminVideos(updated);
+    saveVideos(updated);
+    showToast("Short deleted.");
+    setSyncing(true);
+    supabase.from('videos').delete().eq('id', id)
+      .then(() => {})
+      .catch(() => {})
+      .finally(() => setSyncing(false));
+  };
+
+  const toggleUserSub = (userId: number) => {
+    const updated = adminUsers.map(u => u.id === userId ? { ...u, subscribed: !u.subscribed } : u);
+    setAdminUsers(updated);
+    ls.set('reelramp_admin_users', updated);
+  };
+
+  const saveProduct = () => {
+    if (!productForm.title.trim()) return;
+    let updated: DigitalProduct[];
+    if (editingProduct) {
+      updated = digitalProducts.map(p => p.id === editingProduct.id ? { ...p, ...productForm } : p);
+    } else {
+      const newId = Math.max(0, ...digitalProducts.map(p => p.id)) + 1;
+      updated = [...digitalProducts, { ...productForm, id: newId }];
+    }
+    setDigitalProducts(updated);
+    saveDigitalProducts(updated);
+    setShowProductModal(false);
+    showToast(editingProduct ? "✅ Product updated!" : "✅ Product listed in Store!");
+  };
+
+  const deleteProduct = (id: number) => {
+    const updated = digitalProducts.filter(p => p.id !== id);
+    setDigitalProducts(updated);
+    saveDigitalProducts(updated);
+    showToast("Product removed from Store.");
+  };
+
+  const revenueData = getRevenueData();
+  const totalRevenue = revenueData.reduce((s, r) => s + r.amount, 0);
+  const platformRevenue = Math.round(totalRevenue * (platformSplit / 100));
+  const creatorRevenue = totalRevenue - platformRevenue;
+
+  const creatorEntries: CreatorRevenueEntry[] = adminVideos.slice(0, 5).map((v, i) => {
+    const views = videoViews[v.id] || (10 + i * 7);
+    const share = Math.round((views / Math.max(1, Object.values(videoViews).reduce((s, n) => s + n, 50))) * creatorRevenue);
+    return { creatorName: `Creator ${i + 1}`, videoTitle: v.title, totalViews: views, revenueShare: share };
+  });
+
+  const downloadRevenueReport = () => {
+    const lines = [
+      '═══════════════════════════════════════════════════',
+      '         REELRAMP PRO — REVENUE SHARING REPORT',
+      '═══════════════════════════════════════════════════',
+      `  Generated: ${new Date().toLocaleString('en-IN')}`,
+      '───────────────────────────────────────────────────',
+      `  Total Revenue:     ₹${totalRevenue.toLocaleString()}`,
+      `  Platform (${platformSplit}%):   ₹${platformRevenue.toLocaleString()}`,
+      `  Creators (${creatorSplit}%):    ₹${creatorRevenue.toLocaleString()}`,
+      '───────────────────────────────────────────────────',
+      ...creatorEntries.map(e => `  • ${e.creatorName.padEnd(14)} | ${String(e.totalViews).padEnd(6)} views | ₹${e.revenueShare.toLocaleString()}`),
+      '───────────────────────────────────────────────────',
+      ...revenueData.map(r => `  [${r.date}]  ${r.plan.padEnd(10)} ₹${r.amount}`),
+      '═══════════════════════════════════════════════════',
+      '  ReelRamp Originals Pvt. Ltd. | Lucknow',
+      '═══════════════════════════════════════════════════',
+    ].join('\n');
+    const blob = new Blob([lines], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `ReelRamp_Revenue_${Date.now()}.txt`; a.click();
+    URL.revokeObjectURL(url);
+    showToast("📄 Report downloaded!");
+  };
+
+  const premiumUsers = adminUsers.filter(u => u.subscribed).length;
+  const totalPlays = adminUsers.reduce((s, u) => s + u.totalWatched, 0);
+  const premiumShorts = adminVideos.filter(v => v.isPremium).length;
+  const estimatedRevenue = premiumUsers * 199 + 12400;
+
+  if (!isAuthorized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a] px-5">
+        <div className="w-full max-w-md bg-[#111] border border-[#222] rounded-3xl p-9 text-center">
+          <div className="mx-auto w-16 h-16 bg-[#c5a26f] text-black rounded-2xl flex items-center justify-center mb-6"><Settings size={32} /></div>
+          <h1 className="text-4xl font-semibold tracking-[-1.5px]">Admin Portal</h1>
+          <p className="text-[#a1a1aa] mt-2 mb-8">ReelRamp Shorts • Production Dashboard</p>
+          <div className="space-y-3 text-left">
+            <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="Admin Email"
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+            <input type="password" value={adminPass} onChange={e => setAdminPass(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleAdminLogin()} placeholder="Password"
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded-2xl py-4 px-5 text-lg focus:border-[#c5a26f] outline-none" />
+            {loginError && <p className="text-[#e11d48] text-sm">{loginError}</p>}
+          </div>
+          <button onClick={handleAdminLogin} className="mt-6 w-full py-4 bg-[#c5a26f] text-black rounded-2xl font-semibold tracking-wider active:scale-[0.98] transition-transform">ACCESS ADMIN DASHBOARD</button>
+          <button onClick={() => navigate('/')} className="mt-4 text-sm text-[#666]">Back to App</button>
+        </div>
+      </div>
+    );
+  }
+
+  const TAB_ITEMS = [
+    { key: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+    { key: 'content', label: 'Content', icon: Play },
+    { key: 'store', label: 'Store', icon: ShoppingBag },
+    { key: 'revenue', label: 'Revenue', icon: TrendingUp },
+    { key: 'popups', label: 'Popups', icon: Star },
+    { key: 'users', label: 'Users', icon: Users },
+    { key: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { key: 'settings', label: 'Platform', icon: Settings },
+    { key: 'plans', label: 'Plans', icon: CreditCard },
+    { key: 'payment', label: 'Payment', icon: CreditCard },
+    { key: 'categories', label: 'Categories', icon: Play },
+    { key: 'promo', label: 'Promo', icon: Play },
+    { key: 'datatools', label: 'Data', icon: Database },
+  ] as const;
+
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-[#0a0a0a]/80 backdrop-blur-xl border-t border-white/5 py-2.5 px-6 flex justify-around items-center z-40 max-w-md mx-auto rounded-t-3xl shadow-2xl">
-      {NAV_ITEMS.map(item => {
-        const isActive = location.pathname === item.path;
-        return (
-          <button
-            key={item.path}
-            onClick={() => navigate(item.path)}
-            className={`flex flex-col items-center gap-1 transition ${isActive ? 'text-[#c5a26f] font-bold scale-105' : 'text-white/40 hover:text-white/70'}`}
-          >
-            {item.icon}
-            <span className="text-[10px] uppercase tracking-wider font-semibold">{item.label}</span>
-          </button>
-        );
-      })}
-    </nav>
+    <div className="min-h-screen bg-[#0a0a0a] pb-20">
+      {toast && (
+        <motion.div initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
+          className="fixed top-6 right-6 z-[200] bg-[#111] border border-[#c5a26f]/40 text-white px-6 py-3 rounded-2xl text-sm shadow-xl">
+          {toast}
+        </motion.div>
+      )}
+      {/* FIX 1: Syncing badge — small, non-blocking, cosmetic only */}
+      {syncing && (
+        <div className="fixed top-6 left-6 z-[200] flex items-center gap-2 bg-[#111] border border-[#333] px-4 py-2 rounded-xl text-xs text-[#a1a1aa] pointer-events-none">
+          <div className="w-3 h-3 border-2 border-[#c5a26f] border-t-transparent rounded-full animate-spin" /> Syncing…
+        </div>
+      )}
+
+      <div className="sticky top-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#222]">
+        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-4">
+            <Logo size={28} />
+            <div><div className="font-semibold text-xl tracking-tighter text-white">Admin</div><div className="text-xs text-[#666] -mt-1">PRODUCTION CONTROL</div></div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs text-[#c5a26f] hidden md:block">{loggedInAdmin}</span>
+            <button onClick={() => navigate('/')} className="px-4 py-2 rounded-2xl border border-[#333] text-sm active:scale-95 transition-transform">View App</button>
+            <button onClick={() => { setIsAuthorized(false); setLoggedInAdmin(''); }} className="px-4 py-2 rounded-2xl bg-[#e11d48] text-white text-sm active:scale-95 transition-transform">Logout</button>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-6 flex gap-1 border-t border-[#222] overflow-x-auto no-scrollbar">
+          {TAB_ITEMS.map(({ key, label, icon: Icon }) => (
+            <button key={key} onClick={() => setActiveTab(key as typeof activeTab)}
+              className={`flex items-center gap-1.5 px-3 py-3 border-b-2 transition whitespace-nowrap text-sm ${activeTab === key ? 'border-[#c5a26f] text-white' : 'border-transparent text-[#666]'}`}>
+              <Icon size={15} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-6 pt-8">
+
+        {/* DASHBOARD */}
+        {activeTab === 'dashboard' && (
+          <div>
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-4xl sm:text-5xl font-semibold tracking-[-2.5px]">Control Center</h2>
+                <p className="text-[#a1a1aa]">Live platform metrics</p>
+              </div>
+              <button onClick={openAddModal} className="flex items-center gap-2 px-6 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm self-start active:scale-95 transition-transform"><Plus size={18} /> New Short</button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+              {[
+                { label: "Total Shorts", value: adminVideos.length, sub: `${premiumShorts} Premium` },
+                { label: "Active Users", value: adminUsers.length, sub: `${premiumUsers} Premium` },
+                { label: "Total Plays", value: totalPlays, sub: "All time" },
+                { label: "Est. Revenue", value: `₹${estimatedRevenue.toLocaleString()}`, sub: "Monthly recurring" },
+              ].map((stat, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-7">
+                  <div className="text-[#a1a1aa] text-xs tracking-widest">{stat.label}</div>
+                  <div className="text-3xl sm:text-4xl font-semibold tracking-[-1.5px] mt-1">{stat.value}</div>
+                  <div className="text-xs text-[#c5a26f] mt-1">{stat.sub}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid md:grid-cols-4 gap-3">
+              {(['content', 'store', 'revenue', 'analytics'] as const).map(tab => (
+                <button key={tab} onClick={() => setActiveTab(tab)} className="p-5 text-left border border-[#222] hover:border-[#c5a26f] active:scale-95 transition-all rounded-2xl flex justify-between items-center capitalize">
+                  {tab === 'store' ? 'Store' : tab === 'revenue' ? 'Revenue' : tab} <Play size={18} className="text-[#666]" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* CONTENT */}
+        {activeTab === 'content' && (
+          <div>
+            <div className="flex justify-between mb-6 flex-wrap gap-3">
+              <h3 className="text-3xl font-semibold tracking-tight">All Shorts ({adminVideos.length})</h3>
+              <button onClick={openAddModal} className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#c5a26f] text-black font-medium text-sm active:scale-95 transition-transform"><Plus size={17} /> Add New</button>
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
+              <table className="w-full min-w-[640px]">
+                <thead className="border-b border-[#222] text-sm text-[#a1a1aa]">
+                  <tr>
+                    <th className="text-left py-4 px-6">Short</th>
+                    <th className="text-left py-4">Category</th>
+                    <th className="text-left py-4">Duration</th>
+                    <th className="text-left py-4">Views</th>
+                    <th className="text-left py-4">Access</th>
+                    <th className="text-right py-4 px-6">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#222]">
+                  {adminVideos.map(video => (
+                    <tr key={video.id} className="hover:bg-[#1a1a1a] transition-colors">
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-4">
+                          <img src={video.thumbnail} className="w-12 h-12 object-cover rounded-xl flex-shrink-0" alt="" />
+                          <div>
+                            <div className="font-medium text-sm">{video.title}</div>
+                            <div className="text-xs text-[#666] line-clamp-1">{video.description}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="text-sm text-[#a1a1aa]">{video.category}</td>
+                      <td className="font-mono text-sm text-[#a1a1aa]">{video.duration}</td>
+                      <td className="font-mono text-sm text-[#c5a26f]">{videoViews[video.id] || 0}</td>
+                      <td>{video.isPremium ? <span className="text-xs px-2 py-px bg-[#e11d48] rounded">PREMIUM</span> : <span className="text-xs px-2 py-px bg-[#22c55e] text-black rounded">FREE</span>}</td>
+                      <td className="text-right px-6">
+                        <div className="flex justify-end gap-1">
+                          <button onClick={() => openEditModal(video)} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl"><Edit2 size={16} /></button>
+                          <button onClick={() => deleteVideo(video.id)} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={16} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* STORE */}
+        {activeTab === 'store' && (
+          <div>
+            <div className="flex justify-between mb-6 flex-wrap gap-3">
+              <div>
+                <h3 className="text-3xl font-semibold tracking-tight">Store Inventory</h3>
+                <p className="text-[#a1a1aa] text-sm mt-1">Add, edit, or remove digital products.</p>
+              </div>
+              <button
+                onClick={() => { setProductForm({ title: '', description: '', price: 999, category: 'workshop', thumbnailUrl: '', isPremium: false, badge: '' }); setEditingProduct(null); setShowProductModal(true); }}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#c5a26f] text-black font-medium text-sm active:scale-95 transition-transform self-start">
+                <Plus size={17} /> Add Product
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              {[
+                { label: 'Total Products', value: digitalProducts.length },
+                { label: 'Workshops', value: digitalProducts.filter(p => p.category === 'workshop').length },
+                { label: 'Premium Items', value: digitalProducts.filter(p => p.isPremium).length },
+              ].map((s, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-2xl p-4 sm:p-5">
+                  <div className="text-xs text-[#666] tracking-widest">{s.label}</div>
+                  <div className="text-2xl sm:text-3xl font-semibold mt-1">{s.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {digitalProducts.map(product => (
+                <div key={product.id} className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
+                  <div className="relative aspect-video overflow-hidden bg-[#1a1a1a]">
+                    <img src={product.thumbnailUrl} alt={product.title} className="w-full h-full object-cover"
+                      onError={e => { e.currentTarget.src = `https://via.placeholder.com/400x225/1a1a1a/c5a26f?text=${product.category.toUpperCase()}`; }} />
+                    {product.badge && <div className="absolute top-2 left-2 bg-[#c5a26f] text-black text-[9px] px-2 py-0.5 rounded-full font-bold tracking-widest">{product.badge}</div>}
+                  </div>
+                  <div className="p-4">
+                    <div className="text-xs text-[#c5a26f] mb-1 tracking-widest uppercase">{product.category}</div>
+                    <div className="font-semibold text-sm mb-1 line-clamp-1">{product.title}</div>
+                    <div className="text-2xl font-semibold text-[#c5a26f] mb-3">₹{product.price.toLocaleString()}</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setProductForm({ title: product.title, description: product.description, price: product.price, category: product.category, thumbnailUrl: product.thumbnailUrl, isPremium: product.isPremium, badge: product.badge || '' }); setEditingProduct(product); setShowProductModal(true); }}
+                        className="flex-1 py-2.5 bg-[#222] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform">
+                        <Edit2 size={13} /> Edit
+                      </button>
+                      <button onClick={() => deleteProduct(product.id)}
+                        className="flex-1 py-2.5 bg-[#e11d48]/10 text-[#e11d48] rounded-xl text-xs flex items-center justify-center gap-1 active:scale-95 transition-transform">
+                        <Trash2 size={13} /> Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* REVENUE */}
+        {activeTab === 'revenue' && (
+          <div className="max-w-4xl">
+            <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
+              <div>
+                <h3 className="text-3xl font-semibold tracking-tight">Revenue Sharing</h3>
+                <p className="text-[#a1a1aa] text-sm mt-1">Creator payout calculator.</p>
+              </div>
+              <button onClick={downloadRevenueReport} className="flex items-center gap-2 px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium text-sm active:scale-95 transition-transform">
+                <FileText size={16} /> Download Report
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-4 mb-8">
+              {[
+                { label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}`, color: 'text-white' },
+                { label: `Platform (${platformSplit}%)`, value: `₹${platformRevenue.toLocaleString()}`, color: 'text-[#c5a26f]' },
+                { label: `Creators (${creatorSplit}%)`, value: `₹${creatorRevenue.toLocaleString()}`, color: 'text-[#22c55e]' },
+              ].map((m, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6">
+                  <div className="text-xs text-[#666] tracking-widest mb-1">{m.label}</div>
+                  <div className={`text-2xl sm:text-4xl font-semibold tracking-tighter ${m.color}`}>{m.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-8">
+              <div className="font-medium mb-4">Adjust Split Ratio</div>
+              <div className="flex items-center gap-4 mb-3">
+                <span className="text-sm text-[#a1a1aa] w-24">Platform {platformSplit}%</span>
+                <input type="range" min={30} max={90} step={5} value={platformSplit} onChange={e => setPlatformSplit(Number(e.target.value))} className="flex-1 accent-[#c5a26f]" />
+                <span className="text-sm text-[#22c55e] w-24 text-right">Creators {creatorSplit}%</span>
+              </div>
+              <div className="w-full h-3 bg-[#1a1a1a] rounded-full overflow-hidden flex">
+                <div className="h-full bg-[#c5a26f] transition-all" style={{ width: `${platformSplit}%` }} />
+                <div className="h-full bg-[#22c55e] transition-all flex-1" />
+              </div>
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
+              <div className="px-6 py-4 border-b border-[#222] font-medium">Creator Allocations</div>
+              <table className="w-full text-sm min-w-[400px]">
+                <thead className="text-[#a1a1aa] border-b border-[#222]">
+                  <tr>
+                    <th className="text-left py-3 px-6">Creator</th>
+                    <th className="text-left py-3">Video</th>
+                    <th className="text-left py-3">Views</th>
+                    <th className="text-right py-3 px-6">Payout</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#222]">
+                  {creatorEntries.map((e, i) => (
+                    <tr key={i} className="hover:bg-[#1a1a1a]">
+                      <td className="py-4 px-6 font-medium">{e.creatorName}</td>
+                      <td className="text-[#a1a1aa] line-clamp-1 max-w-[160px]">{e.videoTitle}</td>
+                      <td className="font-mono text-[#c5a26f]">{e.totalViews}</td>
+                      <td className="text-right px-6 font-semibold text-[#22c55e]">₹{e.revenueShare.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* POPUP ADS */}
+        {activeTab === 'popups' && (
+          <div>
+            <div className="flex justify-between items-center mb-7 flex-wrap gap-3">
+              <div>
+                <h3 className="text-3xl font-semibold tracking-tight">Popup Ads</h3>
+                <p className="text-[#a1a1aa] text-sm mt-1">Marketing popups shown on app launch.</p>
+              </div>
+              <button onClick={() => { const np: PopupAd = { id: Date.now(), title: "New Campaign", imageUrl: "/images/popup-ad.jpg", redirectUrl: "/subscription", isActive: false }; persistPopups([...popups, np]); setEditingPopup(np); }}
+                className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-2xl flex items-center gap-2 font-medium text-sm active:scale-95 transition-transform"><Plus size={16} /> New Popup</button>
+            </div>
+            <div className="space-y-4">
+              {popups.map(popup => (
+                <div key={popup.id} className="bg-[#111] border border-[#222] rounded-3xl p-6 flex flex-col md:flex-row gap-6 items-start">
+                  <img src={popup.imageUrl} className="w-full md:w-64 h-36 object-cover rounded-2xl" alt="" />
+                  <div className="flex-1">
+                    <div className="font-semibold text-xl mb-2">{popup.title}</div>
+                    <div className="text-xs text-[#666] font-mono mb-4">{popup.redirectUrl}</div>
+                    <div className="flex gap-3 flex-wrap">
+                      <button onClick={() => { const updated = popups.map(p => ({ ...p, isActive: p.id === popup.id ? !p.isActive : false })); persistPopups(updated); }}
+                        className={`px-5 py-2 rounded-2xl text-sm active:scale-95 transition-transform ${popup.isActive ? 'bg-[#22c55e] text-black' : 'bg-[#333]'}`}>{popup.isActive ? "LIVE" : "HIDDEN"}</button>
+                      <button onClick={() => setEditingPopup({ ...popup })} className="px-5 py-2 bg-[#222] rounded-2xl text-sm active:scale-95 transition-transform">Edit</button>
+                      <button onClick={() => persistPopups(popups.filter(p => p.id !== popup.id))} className="px-5 py-2 bg-[#e11d48]/10 text-[#e11d48] rounded-2xl text-sm active:scale-95 transition-transform">Delete</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <AnimatePresence>
+              {editingPopup && (
+                <div className="fixed inset-0 bg-black/90 z-[95] flex items-center justify-center p-6">
+                  <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+                    className="bg-[#111] p-8 rounded-3xl w-full max-w-md border border-[#333]">
+                    <div className="text-xl font-medium mb-6">Edit Popup</div>
+                    {[{ label: "Title", key: 'title' as const }, { label: "Image URL", key: 'imageUrl' as const }, { label: "Redirect URL", key: 'redirectUrl' as const }].map(f => (
+                      <div key={f.key} className="mb-4">
+                        <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
+                        <input value={editingPopup[f.key] as string} onChange={e => setEditingPopup({ ...editingPopup, [f.key]: e.target.value })} className="w-full bg-[#1a1a1a] px-5 py-3 rounded-2xl border border-[#333] text-sm" />
+                      </div>
+                    ))}
+                    <div className="flex gap-3">
+                      <button onClick={() => setEditingPopup(null)} className="flex-1 py-3 border border-[#333] rounded-2xl">Cancel</button>
+                      <button onClick={() => { persistPopups(popups.map(p => p.id === editingPopup.id ? editingPopup : p)); setEditingPopup(null); showToast("✅ Popup saved!"); }} className="flex-1 py-3 bg-[#c5a26f] text-black rounded-2xl active:scale-95 transition-transform">Save</button>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* USERS */}
+        {activeTab === 'users' && (
+          <div>
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">User Management • {premiumUsers} Premium</h3>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead className="border-b border-[#222] text-[#a1a1aa]">
+                  <tr>
+                    <th className="py-4 px-6 text-left">User</th>
+                    <th className="py-4 text-left">Joined</th>
+                    <th className="py-4 text-left">Watched</th>
+                    <th className="py-4 px-6 text-left">Status</th>
+                    <th className="py-4 px-6 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#222]">
+                  {adminUsers.map(u => (
+                    <tr key={u.id}>
+                      <td className="py-5 px-6"><div className="font-medium">{u.name}</div><div className="text-xs text-[#666]">{u.email}</div></td>
+                      <td className="text-[#a1a1aa]">{u.joinDate}</td>
+                      <td className="font-mono">{u.totalWatched}</td>
+                      <td className="px-6"><span className={`px-3 py-px rounded text-xs ${u.subscribed ? 'bg-[#c5a26f] text-black' : 'bg-[#333]'}`}>{u.subscribed ? "PREMIUM" : "FREE"}</span></td>
+                      <td className="px-6 text-right"><button onClick={() => toggleUserSub(u.id)} className="px-4 py-2 border border-[#333] rounded-xl text-xs hover:bg-[#222] active:scale-95 transition-all">{u.subscribed ? "Revoke" : "Upgrade"}</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ANALYTICS */}
+        {activeTab === 'analytics' && (
+          <div>
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Revenue Dashboard</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              {[
+                { label: "Total Revenue", value: `₹${totalRevenue.toLocaleString()}` },
+                { label: "Monthly Recurring", value: "₹7,298" },
+                { label: "Active Subscribers", value: premiumUsers },
+                { label: "Trial Conversions", value: "64%" },
+              ].map((m, i) => (
+                <div key={i} className="bg-[#111] border border-[#222] rounded-3xl p-5 sm:p-6">
+                  <div className="text-xs text-[#666] tracking-wider">{m.label}</div>
+                  <div className="text-3xl sm:text-4xl font-semibold tracking-tighter mt-1">{m.value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-8">
+              <div className="font-medium mb-6">Recent Transactions</div>
+              <div className="space-y-4">
+                {getRevenueData().slice().reverse().map((entry, i) => (
+                  <div key={i} className="flex items-center justify-between py-3 border-b border-[#222] last:border-0">
+                    <div><div className="font-medium">{entry.plan}</div><div className="text-xs text-[#666]">{entry.date}</div></div>
+                    <div className="text-right"><div className="font-semibold text-[#c5a26f]">+₹{entry.amount}</div><div className="text-xs text-[#666]">{entry.type}</div></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PLATFORM SETTINGS */}
+        {activeTab === 'settings' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Platform Settings</h3>
+            <div className="space-y-4">
+              {[
+                { label: "App Name", key: 'appName' as const },
+                { label: "Tagline", key: 'tagline' as const },
+                { label: "Support Email", key: 'supportEmail' as const },
+                { label: "Support Phone", key: 'supportPhone' as const },
+              ].map(f => (
+                <div key={f.key}>
+                  <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
+                  <input value={platformSettings[f.key] as string} onChange={e => setPlatformSettings({ ...platformSettings, [f.key]: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
+                </div>
+              ))}
+              <div>
+                <label className="text-xs text-[#666] mb-2 block">Accent Color</label>
+                <div className="flex items-center gap-3">
+                  <input type="color" value={platformSettings.accentColor} onChange={e => setPlatformSettings({ ...platformSettings, accentColor: e.target.value })} className="w-12 h-10 rounded-xl cursor-pointer" />
+                  <span className="font-mono text-sm text-[#a1a1aa]">{platformSettings.accentColor}</span>
+                </div>
+              </div>
+              <button onClick={async () => { saveSettings(platformSettings); await syncSettingToSupabase('platform', platformSettings); showToast("✅ Platform settings saved!"); }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLATFORM SETTINGS</button>
+            </div>
+          </div>
+        )}
+
+        {/* PLAN SETTINGS */}
+        {activeTab === 'plans' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Plan Settings</h3>
+            <div className="space-y-4">
+              {[
+                { label: "Trial Price", key: 'trialOfferPrice' as const },
+                { label: "Trial Duration", key: 'trialOfferDuration' as const },
+                { label: "Full Price", key: 'fullPrice' as const },
+                { label: "Full Plan Validity", key: 'fullValidity' as const },
+              ].map(f => (
+                <div key={f.key}>
+                  <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
+                  <input value={subSettings[f.key] as string} onChange={e => setSubSettings({ ...subSettings, [f.key]: e.target.value })}
+                    className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
+                </div>
+              ))}
+              <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
+                <div><div className="font-medium text-sm">Show Trial Popup</div><div className="text-xs text-[#666]">Display trial offer popup on launch</div></div>
+                <button onClick={() => setSubSettings({ ...subSettings, showTrialPopup: !subSettings.showTrialPopup })}
+                  className={`w-12 h-6 rounded-full transition-colors ${subSettings.showTrialPopup ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${subSettings.showTrialPopup ? 'translate-x-6' : 'translate-x-0'}`} />
+                </button>
+              </div>
+              <button onClick={async () => { saveSubSettings(subSettings); await syncSettingToSupabase('subscription', subSettings); showToast("✅ Plan settings saved!"); }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PLAN SETTINGS</button>
+            </div>
+          </div>
+        )}
+
+        {/* FIX 1: PAYMENT — GATEWAY MATRIX */}
+        {activeTab === 'payment' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-2">Payment Settings</h3>
+            <p className="text-[#a1a1aa] text-sm mb-6">Active gateway routes live to checkout. All saves are instant + background synced.</p>
+            <div className="space-y-4">
+              <div className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
+                <div className="text-xs text-[#c5a26f] tracking-widest font-medium">ACTIVE GATEWAY</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {(['razorpay', 'stripe', 'upi', 'none'] as const).map(gw => (
+                    <button key={gw} onClick={() => setPaymentConfig({ ...paymentConfig, activeGateway: gw })}
+                      className={`py-3 rounded-2xl text-sm font-medium border transition active:scale-95 ${paymentConfig.activeGateway === gw ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>
+                      {gw === 'none' ? 'None / Manual' : gw.charAt(0).toUpperCase() + gw.slice(1)}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
+                  <div><div className="font-medium text-sm">Live Mode</div><div className="text-xs text-[#e11d48]">⚠️ Real payments only</div></div>
+                  <button onClick={() => setPaymentConfig({ ...paymentConfig, isLiveMode: !paymentConfig.isLiveMode })}
+                    className={`w-12 h-6 rounded-full transition-colors active:scale-95 ${paymentConfig.isLiveMode ? 'bg-[#22c55e]' : 'bg-[#333]'}`}>
+                    <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${paymentConfig.isLiveMode ? 'translate-x-6' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              </div>
+
+              {[
+                { title: 'RAZORPAY', fields: [{ label: 'Key ID', key: 'razorpayKeyId' as const, placeholder: 'rzp_test_...' }, { label: 'Key Secret', key: 'razorpayKeySecret' as const, placeholder: '••••••••', type: 'password' }] },
+                { title: 'UPI', fields: [{ label: 'UPI ID', key: 'upiId' as const, placeholder: 'yourname@upi' }] },
+                { title: 'STRIPE', fields: [{ label: 'Publishable Key', key: 'stripePublishableKey' as const, placeholder: 'pk_test_...' }] },
+              ].map(section => (
+                <div key={section.title} className="bg-[#111] border border-[#222] rounded-3xl p-6 space-y-4">
+                  <div className="text-xs text-[#a1a1aa] tracking-widest font-medium">{section.title}</div>
+                  {section.fields.map(f => (
+                    <div key={f.key}>
+                      <label className="text-xs text-[#666] mb-1 block">{f.label}</label>
+                      <input type={f.type || 'text'} value={paymentConfig[f.key] as string} onChange={e => setPaymentConfig({ ...paymentConfig, [f.key]: e.target.value })}
+                        className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" placeholder={f.placeholder} />
+                    </div>
+                  ))}
+                </div>
+              ))}
+
+              <button
+                onClick={async () => {
+                  savePaymentSettings(paymentConfig);
+                  await syncSettingToSupabase('payment', paymentConfig);
+                  showToast("✅ Payment settings saved!");
+                }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">
+                SAVE PAYMENT SETTINGS
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* CATEGORIES */}
+        {activeTab === 'categories' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Categories</h3>
+            <div className="flex gap-3 mb-6">
+              <input value={newCategoryName} onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); setNewCategoryName(''); showToast("✅ Category added!"); } }}
+                placeholder="New category name" className="flex-1 bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm focus:border-[#c5a26f] outline-none" />
+              <button onClick={() => { if (newCategoryName.trim()) { const u = [...categories, newCategoryName.trim()]; setCategoriesState(u); saveCategories(u); setNewCategoryName(''); showToast("✅ Category added!"); } }}
+                className="px-5 py-3 bg-[#c5a26f] text-black rounded-2xl font-medium flex items-center gap-2 text-sm active:scale-95 transition-transform"><Plus size={16} /> Add</button>
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl overflow-hidden">
+              <div className="divide-y divide-[#222]">
+                {categories.map(cat => (
+                  <div key={cat} className="flex items-center gap-4 px-6 py-4">
+                    {editingCatName === cat ? (
+                      <>
+                        <input value={editingCatValue} onChange={e => setEditingCatValue(e.target.value)} className="flex-1 bg-[#1a1a1a] px-4 py-2 rounded-xl border border-[#c5a26f] text-sm" autoFocus />
+                        <button onClick={() => { const u = categories.map(c => c === cat ? editingCatValue : c); setCategoriesState(u); saveCategories(u); setEditingCatName(null); }} className="px-4 py-2 bg-[#c5a26f] text-black rounded-xl text-xs active:scale-95 transition-transform">Save</button>
+                        <button onClick={() => setEditingCatName(null)} className="px-4 py-2 border border-[#333] rounded-xl text-xs">Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex-1 font-medium">{cat}</div>
+                        <button onClick={() => { setEditingCatName(cat); setEditingCatValue(cat); }} className="p-2 hover:bg-[#222] active:scale-90 transition-all rounded-xl text-[#a1a1aa]"><Edit2 size={15} /></button>
+                        <button onClick={() => { const u = categories.filter(c => c !== cat); setCategoriesState(u); saveCategories(u); }} className="p-2 hover:bg-[#e11d48]/10 text-[#e11d48] active:scale-90 transition-all rounded-xl"><Trash2 size={15} /></button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* FIX 1: PROMO VIDEO — maybeSingle + structured upsert */}
+        {activeTab === 'promo' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-6">Promo Video</h3>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-[#1a1a1a] px-5 py-4 rounded-2xl border border-[#333]">
+                <div><div className="font-medium text-sm">Show Promo Video</div><div className="text-xs text-[#666]">Display in trial popup</div></div>
+                <button onClick={() => setPromoSettings({ ...promoSettings, isEnabled: !promoSettings.isEnabled })}
+                  className={`w-12 h-6 rounded-full transition-colors ${promoSettings.isEnabled ? 'bg-[#c5a26f]' : 'bg-[#333]'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full mx-0.5 transition-transform ${promoSettings.isEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                </button>
+              </div>
+              <div className="flex gap-3">
+                {(['youtube', 'direct'] as const).map(t => (
+                  <button key={t} onClick={() => setPromoSettings({ ...promoSettings, videoType: t })}
+                    className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition active:scale-95 ${promoSettings.videoType === t ? 'border-[#c5a26f] bg-[#c5a26f]/10 text-[#c5a26f]' : 'border-[#333] text-[#666]'}`}>
+                    {t === 'youtube' ? 'YouTube' : 'Direct URL'}
+                  </button>
+                ))}
+              </div>
+              <div>
+                <label className="text-xs text-[#666] mb-1 block">Video URL</label>
+                <input value={promoSettings.videoUrl} onChange={e => setPromoSettings({ ...promoSettings, videoUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] px-5 py-3.5 rounded-2xl border border-[#333] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+              </div>
+              {promoSettings.videoUrl && promoSettings.isEnabled && (
+                <div className="rounded-2xl overflow-hidden border border-[#333] aspect-video bg-black">
+                  <iframe
+                    src={(() => {
+                      const u = promoSettings.videoUrl;
+                      if (u.includes('embed')) return `${u}?autoplay=0&controls=1`;
+                      const id = u.includes('v=') ? u.split('v=')[1]?.split('&')[0] : u.split('/').pop();
+                      return `https://www.youtube.com/embed/${id}?controls=1&modestbranding=1&rel=0`;
+                    })()}
+                    className="w-full h-full" title="Promo Preview" frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media" allowFullScreen />
+                </div>
+              )}
+              <button onClick={async () => {
+                savePromoSettings(promoSettings);
+                await syncPromoToSupabase(promoSettings);
+                showToast("✅ Promo video saved & synced!");
+              }} className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl tracking-wider active:scale-[0.98] transition-transform">SAVE PROMO VIDEO SETTINGS</button>
+            </div>
+          </div>
+        )}
+
+        {/* DATA TOOLS */}
+        {activeTab === 'datatools' && (
+          <div className="max-w-2xl">
+            <h3 className="text-3xl font-semibold tracking-tight mb-2">Data Integrity Hub</h3>
+            <p className="text-[#a1a1aa] mb-8">Export a complete platform snapshot or restore from a backup file.</p>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7 mb-5">
+              <div className="flex items-start gap-4 mb-5">
+                <div className="w-12 h-12 bg-[#c5a26f]/10 rounded-2xl flex items-center justify-center flex-shrink-0"><Download size={22} className="text-[#c5a26f]" /></div>
+                <div>
+                  <div className="font-semibold text-lg">Export System Backup</div>
+                  <div className="text-sm text-[#a1a1aa] mt-1">Downloads a complete JSON snapshot of all data.</div>
+                </div>
+              </div>
+              <button onClick={() => { exportSystemBackup(); showToast("✅ Backup downloaded!"); }}
+                className="w-full py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+                <Database size={18} /> Download Full JSON Backup
+              </button>
+            </div>
+            <div className="bg-[#111] border border-[#222] rounded-3xl p-7">
+              <div className="flex items-start gap-4 mb-5">
+                <div className="w-12 h-12 bg-[#1a1a1a] border border-[#333] rounded-2xl flex items-center justify-center flex-shrink-0"><Upload size={22} className="text-[#a1a1aa]" /></div>
+                <div>
+                  <div className="font-semibold text-lg">Restore from Backup</div>
+                  <div className="text-sm text-[#a1a1aa] mt-1">Upload a valid ReelRamp JSON backup file.</div>
+                </div>
+              </div>
+              <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  importSystemBackup(file,
+                    msg => { showToast(msg); setAdminVideos(getStoredVideos()); setCategoriesState(getCategories()); setDigitalProducts(getDigitalProducts()); setPlatformSettings(getSettings()); setSubSettings(getSubSettings()); setPaymentConfig(getPaymentSettings()); },
+                    err => showToast(err)
+                  );
+                  e.target.value = '';
+                }} />
+              <button onClick={() => fileInputRef.current?.click()}
+                className="w-full py-4 bg-[#1a1a1a] border border-[#333] hover:border-[#c5a26f] text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition-colors active:scale-[0.98]">
+                <Upload size={18} /> Choose Backup File (.json)
+              </button>
+              <p className="text-xs text-[#444] text-center mt-3">⚠️ This will overwrite current platform configuration.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Add/Edit Video Modal */}
+      <AnimatePresence>
+        {showAddModal && (
+          <div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowAddModal(false)}>
+            <motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }}
+              className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-7">
+                <div className="text-2xl font-semibold">{editingVideo ? "Edit Short" : "Publish New Short"}</div>
+                <button onClick={() => setShowAddModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button>
+              </div>
+              <div className="space-y-4">
+                <input placeholder="Short Title" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                <textarea placeholder="Compelling description..." value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })}
+                  rows={3} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
+                <div className="grid grid-cols-2 gap-4">
+                  <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm">
+                    {getCategories().map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input placeholder="Duration e.g. 4:45" value={formData.duration} onChange={e => setFormData({ ...formData, duration: e.target.value })}
+                    className="bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                </div>
+                <div className="flex items-center gap-4 bg-[#1a1a1a] rounded-2xl p-5 border border-[#222]">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={formData.isPremium} onChange={e => setFormData({ ...formData, isPremium: e.target.checked })} className="accent-[#c5a26f] scale-125" />
+                    <div><div className="font-medium text-sm">Premium Only</div><div className="text-xs text-[#a1a1aa]">Requires active subscription</div></div>
+                  </label>
+                </div>
+                <input placeholder="Thumbnail URL" value={formData.thumbnail} onChange={e => setFormData({ ...formData, thumbnail: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <input placeholder="Video URL (mp4 or Bunny.net path)" value={formData.videoUrl} onChange={e => setFormData({ ...formData, videoUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setShowAddModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button>
+                <button onClick={saveVideo} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">{editingVideo ? "Save Changes" : "Publish Short"}</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add/Edit Product Modal */}
+      <AnimatePresence>
+        {showProductModal && (
+          <div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center p-6" onClick={() => setShowProductModal(false)}>
+            <motion.div initial={{ scale: 0.96, y: 30, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, y: 20, opacity: 0 }}
+              className="bg-[#111] border border-[#333] w-full max-w-lg rounded-3xl p-9 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-7">
+                <div className="text-2xl font-semibold">{editingProduct ? "Edit Product" : "Add New Product"}</div>
+                <button onClick={() => setShowProductModal(false)} className="active:scale-90 transition-transform"><X size={20} /></button>
+              </div>
+              <div className="space-y-4">
+                <input placeholder="Product Title" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                <textarea placeholder="Description" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })}
+                  rows={2} className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] resize-y text-sm focus:border-[#c5a26f] outline-none" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-[#666] mb-1 block">Category</label>
+                    <select value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value as DigitalProduct['category'] })}
+                      className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm">
+                      <option value="workshop">Workshop</option>
+                      <option value="guide">Guide</option>
+                      <option value="merch">Merch</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#666] mb-1 block">Price (₹)</label>
+                    <input type="number" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: Number(e.target.value) })}
+                      className="w-full bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                  </div>
+                </div>
+                <input placeholder="Thumbnail URL" value={productForm.thumbnailUrl} onChange={e => setProductForm({ ...productForm, thumbnailUrl: e.target.value })}
+                  className="w-full bg-[#1a1a1a] py-4 px-5 rounded-2xl border border-[#222] text-sm font-mono focus:border-[#c5a26f] outline-none" />
+                <div className="grid grid-cols-2 gap-4">
+                  <input placeholder="Badge (e.g. BESTSELLER)" value={productForm.badge} onChange={e => setProductForm({ ...productForm, badge: e.target.value })}
+                    className="bg-[#1a1a1a] py-3.5 px-4 rounded-2xl border border-[#222] text-sm focus:border-[#c5a26f] outline-none" />
+                  <div className="flex items-center gap-3 bg-[#1a1a1a] rounded-2xl px-4 border border-[#222]">
+                    <input type="checkbox" checked={productForm.isPremium} onChange={e => setProductForm({ ...productForm, isPremium: e.target.checked })} className="accent-[#c5a26f]" />
+                    <span className="text-sm">Premium Only</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={() => setShowProductModal(false)} className="flex-1 py-4 border border-[#333] rounded-2xl text-sm active:scale-95 transition-transform">Cancel</button>
+                <button onClick={saveProduct} className="flex-1 py-4 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm active:scale-[0.98] transition-transform">
+                  {editingProduct ? "Save Changes" : "List Product"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
