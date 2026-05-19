@@ -599,7 +599,7 @@ interface CinematicPlayerProps {
 
 function CinematicPlayer({
   video, isPlaying, onPlayPause, onEnded,
-  overlayVisible, onUserActivity, resumeFrom = 0, onTimeUpdate
+  onUserActivity, resumeFrom = 0, onTimeUpdate
 }: CinematicPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -608,40 +608,100 @@ function CinematicPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const [showHUD, setShowHUD] = useState(false);
   const [hearts, setHearts] = useState<{ id: number; x: number; y: number }[]>([]);
   const lastTapRef = useRef(0);
   const heartIdRef = useRef(0);
   const hasResumed = useRef(false);
   const timeUpdateThrottle = useRef(0);
+  const loadTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // FIX 2: Immediate play/pause — no debounce
+  const handleCanPlay = () => {
+    setIsLoaded(true);
+    setIsBuffering(false);
+    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    
+    if (isPlaying && videoRef.current) {
+      videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const handleWaiting = () => {
+    setIsBuffering(true);
+  };
+
+  const handlePlaying = () => {
+    setIsBuffering(false);
+    setIsLoaded(true);
+    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+  };
+
+  const handleError = () => {
+    setHasError(true);
+    setIsLoaded(false);
+    setIsBuffering(false);
+    
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.load();
+        setHasError(false);
+      }
+    }, 3000);
+  };
+
   useEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
-    if (isPlaying) { v.play().catch(() => {}); }
-    else { v.pause(); }
-  }, [isPlaying]);
+    if (!v || !isLoaded) return;
+
+    if (isPlaying) {
+      v.play().catch(() => {
+        setIsBuffering(true);
+        setTimeout(() => {
+          if (videoRef.current && isPlaying) {
+            videoRef.current.play().catch(() => {});
+          }
+        }, 500);
+      });
+    } else {
+      v.pause();
+      setIsBuffering(false);
+    }
+  }, [isPlaying, isLoaded]);
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.muted = isMuted;
-  }, [isMuted]);
+    const v = videoRef.current;
+    if (v && resumeFrom > 0 && !hasResumed.current && isLoaded) {
+      v.currentTime = resumeFrom;
+      hasResumed.current = true;
+    }
+  }, [resumeFrom, isLoaded]);
 
   useEffect(() => {
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-  }, [speed]);
+    loadTimeoutRef.current = setTimeout(() => {
+      if (!isLoaded && !hasError) {
+        if (videoRef.current) {
+          videoRef.current.load();
+        }
+      }
+    }, 10000);
+
+    return () => {
+      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    };
+  }, [video.videoUrl]);
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       setDuration(videoRef.current.duration || 0);
-      if (!hasResumed.current && resumeFrom > 0) {
+      if (resumeFrom > 0 && !hasResumed.current) {
         videoRef.current.currentTime = resumeFrom;
         hasResumed.current = true;
       }
     }
   };
 
-  // Throttled timeUpdate — max 4 calls/sec for perf
   const handleTimeUpdate = () => {
     const now = Date.now();
     if (now - timeUpdateThrottle.current < 250) return;
@@ -651,7 +711,6 @@ function CinematicPlayer({
     onTimeUpdate?.(t, duration);
   };
 
-  // Desktop scroll seek
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -721,6 +780,110 @@ function CinematicPlayer({
       </div>
     );
   }
+
+  const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-black select-none transform-gpu"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onClick={(e) => { onUserActivity(); handleDoubleTap(e); }}
+      onMouseDown={e => { if (e.detail === 2) handleDoubleTap(e); }}
+    >
+      <video
+        ref={videoRef}
+        src={resolvedUrl}
+        className="w-full h-full object-cover transform-gpu"
+        autoPlay={isPlaying}
+        playsInline
+        preload="auto"
+        onEnded={onEnded}
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onCanPlay={handleCanPlay}
+        onPlaying={handlePlaying}
+        onWaiting={handleWaiting}
+        onError={handleError}
+        onClickCapture={e => {
+          if (e.detail === 1) setTimeout(() => {
+            if (Date.now() - lastTapRef.current > 320) onPlayPause();
+          }, 320);
+        }}
+      />
+
+      {(!isLoaded || isBuffering) && !hasError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-20">
+          <div className="w-9 h-9 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+
+      {hasError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-20">
+          <div className="text-center">
+            <div className="text-[#e11d48] text-4xl mb-3">⚠️</div>
+            <div className="text-white text-sm mb-4">Unable to load video</div>
+            <button 
+              onClick={() => {
+                setHasError(false);
+                setIsLoaded(false);
+                if (videoRef.current) videoRef.current.load();
+              }}
+              className="px-5 py-2.5 bg-[#c5a26f] text-black rounded-xl text-sm font-medium"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
+      {hearts.map(h => (
+        <motion.div key={h.id} initial={{ opacity: 1, scale: 0.5, y: 0 }} animate={{ opacity: 0, scale: 1.8, y: -80 }}
+          transition={{ duration: 1.1, ease: 'easeOut' }}
+          className="absolute pointer-events-none text-4xl z-50" style={{ left: h.x - 20, top: h.y - 20 }}>
+          ❤️
+        </motion.div>
+      ))}
+
+      <div className="absolute top-4 right-4 z-50 flex flex-col gap-2">
+        <button
+          onPointerDown={e => { e.stopPropagation(); setIsMuted(m => !m); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center active:scale-95 transition-transform">
+          {isMuted ? <VolumeX size={18} className="text-white" /> : <Volume2 size={18} className="text-white" />}
+        </button>
+        <button
+          onPointerDown={e => { e.stopPropagation(); setShowHUD(h => !h); onUserActivity(); }}
+          className="w-11 h-11 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center active:scale-95 transition-transform">
+          <span className="text-[11px] font-bold text-[#c5a26f]">{speed}x</span>
+        </button>
+        <AnimatePresence>
+          {showHUD && (
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: -10 }}
+              className="absolute top-24 right-0 bg-black/80 backdrop-blur-xl border border-white/10 rounded-2xl overflow-hidden"
+              onPointerDown={e => e.stopPropagation()}>
+              {speeds.map(s => (
+                <button key={s}
+                  onPointerDown={() => { setSpeed(s); setShowHUD(false); onUserActivity(); }}
+                  className={`block w-16 px-3 py-2.5 text-xs font-medium text-left transition ${speed === s ? 'bg-[#c5a26f] text-black' : 'text-white hover:bg-white/10'}`}>
+                  {s}x
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20 z-50 cursor-pointer group"
+        onClick={e => { e.stopPropagation(); handleProgressClick(e); onUserActivity(); }}>
+        <div className="h-full bg-[#c5a26f] relative" style={{ width: `${progressPercent}%` }}>
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#c5a26f] rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
   const resolvedUrl = video.source === 'bunny' ? getBunnyCdnUrl(video.videoUrl) : video.videoUrl;
 
