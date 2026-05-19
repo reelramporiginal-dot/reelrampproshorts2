@@ -1,0 +1,25 @@
+{
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/((?!api/.*).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://yjkdqrzkdnxfedofsqet.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_XsqQeDivqF3X0BXPpn45Sg_O19PXeZ4",
+    "SUPABASE_SERVICE_ROLE_KEY": "sb_secret_e0d99o6y8FtPT324m2n2nw_GFMrzWFe",
+    "VITE_SUPABASE_URL": "https://yjkdqrzkdnxfedofsqet.supabase.co",
+    "VITE_SUPABASE_ANON_KEY": "sb_publishable_XsqQeDivqF3X0BXPpn45Sg_O19PXeZ4",
+    "VITE_GOOGLE_CLIENT_ID": "1065078894672-rmp5kp8vfjns5rn9kp5psfp16g691043.apps.googleusercontent.com",
+    "VITE_GOOGLE_AUTH_PROXY": "https://designarena.ai/auth/google/callback",
+    "BUNNY_STORAGE_URL": "https://storage.bunnycdn.com/trrlramp2",
+    "BUNNY_CDN_URL": "https://trrlramp2.b-cdn.net",
+    "BUNNY_ACCESS_KEY": "e270b325-f24b-41dd-bb4deaeca7fc-5d54-47eb",
+    "FULLSTACK_PROJECT_REF": "yjkdqrzkdnxfedofsqet",
+    "FULLSTACK_RESTORE_API_URL": "https://designarena.ai/api/fullstack-restore"
+  }
+}
