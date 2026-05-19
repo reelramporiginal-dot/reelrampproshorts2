@@ -945,39 +945,7 @@ function AppContent() {
     location.pathname === '/login';
 
   return (
-    // SYSTEM 5: Tight mobile shell — locked, anti-zoom, overscroll-contained
-    <div
-      className="min-h-screen bg-[#0a0a0a] text-white flex flex-col"
-      style={{ touchAction: 'pan-y', WebkitUserSelect: 'none', userSelect: 'none' }}
-    >
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/player/:id" element={<ShortsPlayerPage />} />
-        <Route path="/subscription" element={<SubscriptionPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/store" element={<DigitalStorePage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin-secure-7842" element={<EditorPanel />} />
-        <Route path="/rrmp-control-9x7k" element={<OwnerPanel />} />
-        <Route path="/privacy" element={<LegalPage type="privacy" />} />
-        <Route path="/terms" element={<LegalPage type="terms" />} />
-        <Route path="/refund" element={<LegalPage type="refund" />} />
-        <Route path="/shipping" element={<LegalPage type="shipping" />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      {!isFullscreen && (
-        <>
-          <Footer />
-          <BottomNavigation />
-        </>
-      )}
-      <PWAInstallBanner />
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
 // LOGIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function LoginPage() {
@@ -1455,1108 +1423,6 @@ function PaywallModal({ video, onClose, onSubscribe }: { video: Video; onClose: 
 // Tap anywhere = reveal + reset 3s timer
 // Speed HUD + scrubber = ALWAYS visible
 // SYSTEM 2: saves timestamp on timeUpdate for resume
-// ─────────────────────────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════
-// ULTRA-PREMIUM KUKU TV STYLE PLAYER — DROP-IN REPLACEMENT
-// Replace CinematicPlayer + ShortsPlayerPage in your App.tsx with this code
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// FEATURES:
-// ✅ True 100dvh full-bleed vertical player
-// ✅ Auto-hide overlays after 3s (Kuku TV style)
-// ✅ Tap anywhere = reveal + reset timer
-// ✅ Double-tap LEFT = rewind 10s (with animated ripple)
-// ✅ Double-tap RIGHT = forward 10s (with animated ripple)
-// ✅ Swipe up/down = next/prev video with spring physics
-// ✅ Drag-to-seek scrubber with thumb + buffered track
-// ✅ Animated gradient top/bottom chrome
-// ✅ Speed selector (0.5x→2x) floating pill
-// ✅ Mute toggle with animated icon swap
-// ✅ Center play/pause with morph animation
-// ✅ Like button with heart burst particle explosion
-// ✅ Video progress saved to localStorage for resume
-// ✅ Gesture velocity-aware swipe detection
-// ✅ Long-press scrubber for frame-accurate seeking
-// ✅ Loading skeleton with shimmer
-// ✅ Error state with retry
-// ═══════════════════════════════════════════════════════════════════════════
-
-import React, {
-  useState, useEffect, useRef, useCallback, useLayoutEffect
-} from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence, useMotionValue, useTransform, PanInfo } from 'framer-motion';
-import {
-  ArrowLeft, Heart, Bookmark, Share2, Lock,
-  Volume2, VolumeX, Play, Pause, RotateCcw, RotateCw,
-  ChevronUp, ChevronDown, Star
-} from 'lucide-react';
-
-// ─── paste your existing imports from App.tsx ───
-// These are referenced below — make sure they exist in scope:
-// - Video, WatchHistoryItem interfaces
-// - getStoredVideos, getWatchHistory, addToWatchHistory, incrementView, getResumeTimestamp
-// - ls (localStorage helper)
-// - SubscriptionInterceptModal, PaywallModal
-// - incrementScrollCount, getScrollCount, resetScrollCount
-// - useAuth hook
-
-
-// ════════════════════════════════════════════════════════════════
-// TYPES (local to this file)
-// ════════════════════════════════════════════════════════════════
-interface RippleEffect {
-  id: number;
-  x: number;
-  y: number;
-  side: 'left' | 'right';
-  label: string;
-}
-
-interface HeartParticle {
-  id: number;
-  x: number;
-  y: number;
-  angle: number;
-  distance: number;
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// ULTRA CINEMATIC PLAYER CORE
-// ════════════════════════════════════════════════════════════════
-interface UltraPlayerProps {
-  video: Video;
-  isPlaying: boolean;
-  isMuted: boolean;
-  speed: number;
-  resumeFrom: number;
-  onPlayPause: () => void;
-  onEnded: () => void;
-  onTimeUpdate: (current: number, duration: number, buffered: number) => void;
-  onLoaded: () => void;
-  onError: () => void;
-  videoRef: React.RefObject<HTMLVideoElement>;
-}
-
-function UltraPlayerCore({
-  video, isPlaying, isMuted, speed, resumeFrom,
-  onPlayPause, onEnded, onTimeUpdate, onLoaded, onError, videoRef
-}: UltraPlayerProps) {
-  const hasResumed = useRef(false);
-
-  useEffect(() => {
-    if (!videoRef.current) return;
-    if (isPlaying) videoRef.current.play().catch(() => {});
-    else videoRef.current.pause();
-  }, [isPlaying]);
-
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.muted = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-  }, [speed]);
-
-  const handleMeta = () => {
-    if (!videoRef.current) return;
-    if (!hasResumed.current && resumeFrom > 2) {
-      videoRef.current.currentTime = resumeFrom;
-      hasResumed.current = true;
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    if (!videoRef.current) return;
-    const vid = videoRef.current;
-    let buffered = 0;
-    if (vid.buffered.length > 0) {
-      buffered = vid.buffered.end(vid.buffered.length - 1);
-    }
-    onTimeUpdate(vid.currentTime, vid.duration || 0, buffered);
-  };
-
-  if (video.source === 'youtube') {
-    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
-    return (
-      <iframe
-        className="absolute inset-0 w-full h-full"
-        src={`https://www.youtube.com/embed/${videoId}?autoplay=1&controls=0&modestbranding=1&rel=0&playsinline=1&enablejsapi=1`}
-        title={video.title}
-        frameBorder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
-        onLoad={onLoaded}
-      />
-    );
-  }
-
-  const resolvedUrl = video.source === 'bunny'
-    ? `https://reelrampproshorts1.b-cdn.net/${video.videoUrl.replace(/^\//, '')}`
-    : video.videoUrl;
-
-  return (
-    <video
-      ref={videoRef}
-      src={resolvedUrl}
-      className="absolute inset-0 w-full h-full object-cover"
-      autoPlay
-      playsInline
-      loop={false}
-      onEnded={onEnded}
-      onTimeUpdate={handleTimeUpdate}
-      onLoadedMetadata={handleMeta}
-      onLoadedData={onLoaded}
-      onError={onError}
-      style={{ backgroundColor: '#000' }}
-    />
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// SCRUBBER — drag-to-seek with buffered track
-// ════════════════════════════════════════════════════════════════
-interface ScrubberProps {
-  currentTime: number;
-  duration: number;
-  buffered: number;
-  onSeek: (t: number) => void;
-}
-
-function UltraScrubber({ currentTime, duration, buffered, onSeek }: ScrubberProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [dragging, setDragging] = useState(false);
-  const [dragPct, setDragPct] = useState(0);
-
-  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const bufPct = duration > 0 ? (buffered / duration) * 100 : 0;
-  const displayPct = dragging ? dragPct : pct;
-
-  const getPctFromEvent = (clientX: number) => {
-    if (!trackRef.current) return 0;
-    const rect = trackRef.current.getBoundingClientRect();
-    return Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
-  };
-
-  const handlePointerDown = (e: React.PointerEvent) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const p = getPctFromEvent(e.clientX);
-    setDragging(true);
-    setDragPct(p);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!dragging) return;
-    setDragPct(getPctFromEvent(e.clientX));
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (!dragging) return;
-    const p = getPctFromEvent(e.clientX);
-    setDragging(false);
-    onSeek((p / 100) * duration);
-  };
-
-  const formatTime = (s: number) => {
-    if (!s || isNaN(s)) return '0:00';
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
-  return (
-    <div className="w-full px-4 pb-2 select-none">
-      {/* Time labels */}
-      <div className="flex justify-between text-[10px] text-white/50 font-mono mb-2 px-0.5">
-        <span>{formatTime(currentTime)}</span>
-        <span>{formatTime(duration)}</span>
-      </div>
-
-      {/* Track */}
-      <div
-        ref={trackRef}
-        className="relative w-full cursor-pointer"
-        style={{ height: dragging ? 20 : 14, transition: 'height 0.15s' }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-      >
-        {/* Base track */}
-        <div className="absolute inset-x-0 rounded-full bg-white/15" style={{ top: '50%', transform: 'translateY(-50%)', height: dragging ? 4 : 3 }} />
-
-        {/* Buffered */}
-        <div className="absolute rounded-full bg-white/30 transition-all"
-          style={{ top: '50%', transform: 'translateY(-50%)', height: dragging ? 4 : 3, left: 0, width: `${bufPct}%` }} />
-
-        {/* Played */}
-        <div className="absolute rounded-full transition-none"
-          style={{
-            top: '50%', transform: 'translateY(-50%)',
-            height: dragging ? 4 : 3,
-            left: 0, width: `${displayPct}%`,
-            background: 'linear-gradient(90deg, #c5a26f, #e8c98a)',
-            boxShadow: '0 0 8px #c5a26f88'
-          }} />
-
-        {/* Thumb */}
-        <motion.div
-          className="absolute rounded-full bg-white shadow-lg shadow-black/50"
-          style={{
-            top: '50%',
-            left: `${displayPct}%`,
-            transform: 'translate(-50%, -50%)',
-            width: dragging ? 18 : 12,
-            height: dragging ? 18 : 12,
-            border: '2px solid #c5a26f',
-            transition: 'width 0.15s, height 0.15s',
-            boxShadow: dragging ? '0 0 0 6px rgba(197,162,111,0.25)' : undefined,
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// SPEED PILL SELECTOR
-// ════════════════════════════════════════════════════════════════
-function SpeedSelector({ speed, onSelect }: { speed: number; onSelect: (s: number) => void }) {
-  const [open, setOpen] = useState(false);
-  const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center justify-center"
-        style={{
-          width: 44, height: 44,
-          background: 'rgba(0,0,0,0.55)',
-          backdropFilter: 'blur(12px)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 14,
-        }}
-      >
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#c5a26f', letterSpacing: -0.5 }}>{speed}x</span>
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.85, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.85, y: 8 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            className="absolute bottom-full mb-2 right-0 overflow-hidden"
-            style={{
-              background: 'rgba(10,10,10,0.92)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 16,
-              minWidth: 72,
-            }}
-          >
-            {speeds.map(s => (
-              <button
-                key={s}
-                onClick={() => { onSelect(s); setOpen(false); }}
-                className="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors"
-                style={{
-                  color: speed === s ? '#c5a26f' : 'rgba(255,255,255,0.7)',
-                  background: speed === s ? 'rgba(197,162,111,0.15)' : 'transparent',
-                  borderBottom: '1px solid rgba(255,255,255,0.05)',
-                }}
-              >
-                <span>{s}x</span>
-                {speed === s && <span style={{ width: 6, height: 6, borderRadius: 3, background: '#c5a26f', display: 'inline-block' }} />}
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// DOUBLE-TAP RIPPLE
-// ════════════════════════════════════════════════════════════════
-function TapRipple({ ripple }: { ripple: RippleEffect }) {
-  return (
-    <motion.div
-      key={ripple.id}
-      className="absolute pointer-events-none flex flex-col items-center justify-center"
-      style={{ left: ripple.x - 60, top: ripple.y - 60, width: 120, height: 120 }}
-      initial={{ opacity: 0, scale: 0.4 }}
-      animate={{ opacity: [0, 1, 1, 0], scale: [0.4, 1.1, 1, 0.8] }}
-      transition={{ duration: 0.65, times: [0, 0.2, 0.7, 1] }}
-    >
-      {/* Circular ripple rings */}
-      {[0, 1, 2].map(i => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full border border-white/40"
-          style={{ width: 60 + i * 24, height: 60 + i * 24 }}
-          initial={{ opacity: 0.8, scale: 0.5 }}
-          animate={{ opacity: 0, scale: 1.4 }}
-          transition={{ duration: 0.5, delay: i * 0.07 }}
-        />
-      ))}
-      <div className="flex items-center gap-1 z-10">
-        {ripple.side === 'left'
-          ? <RotateCcw size={22} className="text-white" />
-          : <RotateCw size={22} className="text-white" />
-        }
-      </div>
-      <div className="z-10 mt-1" style={{ fontSize: 11, color: 'rgba(255,255,255,0.9)', fontWeight: 600 }}>
-        {ripple.label}
-      </div>
-    </motion.div>
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// HEART BURST PARTICLES
-// ════════════════════════════════════════════════════════════════
-function HeartBurst({ particles }: { particles: HeartParticle[] }) {
-  return (
-    <>
-      {particles.map(p => (
-        <motion.div
-          key={p.id}
-          className="absolute pointer-events-none text-lg"
-          style={{ left: p.x, top: p.y }}
-          initial={{ opacity: 1, scale: 0, x: 0, y: 0 }}
-          animate={{
-            opacity: [1, 1, 0],
-            scale: [0, 1.4, 0.8],
-            x: Math.cos(p.angle) * p.distance,
-            y: Math.sin(p.angle) * p.distance - 30,
-          }}
-          transition={{ duration: 0.9, ease: 'easeOut' }}
-        >
-          ❤️
-        </motion.div>
-      ))}
-    </>
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// LOADING SKELETON
-// ════════════════════════════════════════════════════════════════
-function PlayerSkeleton() {
-  return (
-    <div className="absolute inset-0 bg-[#0a0a0a] flex items-center justify-center z-20">
-      <div className="flex flex-col items-center gap-5">
-        {/* Spinner ring */}
-        <div className="relative w-16 h-16">
-          <div className="absolute inset-0 rounded-full border-2 border-white/10" />
-          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#c5a26f] animate-spin" />
-          <div className="absolute inset-2 rounded-full border border-transparent border-t-[#c5a26f]/40 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '0.8s' }} />
-        </div>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 600 }}>LOADING</div>
-      </div>
-    </div>
-  );
-}
-
-
-// ════════════════════════════════════════════════════════════════
-// MAIN SHORTS PLAYER PAGE — KUKU TV ULTRA LEVEL
-// ════════════════════════════════════════════════════════════════
-export function ShortsPlayerPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-
-  // ── Video feed state ──
-  const [feedVideos, setFeedVideos] = useState<Video[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-
-  // ── Playback state ──
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
-  const [speed, setSpeed] = useState(1);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [buffered, setBuffered] = useState(0);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const [resumeFrom, setResumeFrom] = useState(0);
-
-  // ── UI overlay state ──
-  const [overlayVisible, setOverlayVisible] = useState(true);
-  const overlayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Interaction state ──
-  const [isLiked, setIsLiked] = useState(false);
-  const [library, setLibrary] = useState<number[]>([]);
-  const [userRating, setUserRating] = useState(0);
-  const [ripples, setRipples] = useState<RippleEffect[]>([]);
-  const [heartParticles, setHeartParticles] = useState<HeartParticle[]>([]);
-  const rippleId = useRef(0);
-  const heartId = useRef(0);
-
-  // ── Double tap detection ──
-  const lastTapTime = useRef(0);
-  const lastTapSide = useRef<'left' | 'right' | null>(null);
-
-  // ── Paywall ──
-  const [showPaywall, setShowPaywall] = useState(false);
-  const [showScrollPaywall, setShowScrollPaywall] = useState(false);
-
-  // ── Refs ──
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const saveInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const currentVideoId = parseInt(id || '1');
-
-  // ─────────── Load feed ───────────
-  useEffect(() => {
-    const vids = getStoredVideos();
-    setFeedVideos(vids);
-    const idx = vids.findIndex(v => v.id === currentVideoId);
-    setCurrentIndex(idx !== -1 ? idx : 0);
-    setLibrary(ls.get('reelramp_library', []));
-  }, [currentVideoId]);
-
-  const currentVideo = feedVideos[currentIndex];
-
-  // ─────────── Per-video setup ───────────
-  useEffect(() => {
-    if (!currentVideo) return;
-    setIsLoaded(false);
-    setHasError(false);
-    setCurrentTime(0);
-    setDuration(0);
-    setBuffered(0);
-    setIsPlaying(true);
-    setIsLiked(false);
-
-    // Load resume timestamp
-    const h = getWatchHistory();
-    const item = h.find(i => i.videoId === currentVideo.id);
-    setResumeFrom(item?.timestamp || 0);
-
-    incrementView(currentVideo.id);
-    const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
-    setUserRating(ratings[currentVideo.id] || 0);
-
-    // Save progress every 5s
-    if (saveInterval.current) clearInterval(saveInterval.current);
-    saveInterval.current = setInterval(() => {
-      if (!videoRef.current || videoRef.current.duration === 0) return;
-      const pct = Math.round((videoRef.current.currentTime / videoRef.current.duration) * 100);
-      addToWatchHistory(currentVideo.id, pct, videoRef.current.currentTime);
-    }, 5000);
-
-    return () => { if (saveInterval.current) clearInterval(saveInterval.current); };
-  }, [currentIndex, currentVideo?.id]);
-
-  // ─────────── Overlay auto-hide ───────────
-  const resetOverlayTimer = useCallback(() => {
-    setOverlayVisible(true);
-    if (overlayTimer.current) clearTimeout(overlayTimer.current);
-    overlayTimer.current = setTimeout(() => {
-      if (isPlaying) setOverlayVisible(false);
-    }, 3000);
-  }, [isPlaying]);
-
-  useEffect(() => {
-    if (isPlaying) {
-      overlayTimer.current = setTimeout(() => setOverlayVisible(false), 3000);
-    } else {
-      setOverlayVisible(true);
-      if (overlayTimer.current) clearTimeout(overlayTimer.current);
-    }
-    return () => { if (overlayTimer.current) clearTimeout(overlayTimer.current); };
-  }, [isPlaying]);
-
-  // ─────────── Navigation ───────────
-  const navigateNext = useCallback(() => {
-    if (currentIndex >= feedVideos.length - 1) return;
-    setCurrentIndex(i => i + 1);
-  }, [currentIndex, feedVideos.length]);
-
-  const navigatePrev = useCallback(() => {
-    if (currentIndex <= 0) return;
-    setCurrentIndex(i => i - 1);
-  }, [currentIndex]);
-
-  const handleEnded = () => {
-    if (currentVideo) addToWatchHistory(currentVideo.id, 100, duration);
-    navigateNext();
-  };
-
-  // ─────────── Time update ───────────
-  const handleTimeUpdate = (t: number, d: number, buf: number) => {
-    setCurrentTime(t);
-    setDuration(d);
-    setBuffered(buf);
-  };
-
-  // ─────────── Seek ───────────
-  const seekTo = (t: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = Math.max(0, Math.min(t, duration));
-      setCurrentTime(videoRef.current.currentTime);
-    }
-  };
-
-  // ─────────── Drag swipe ───────────
-  const handleDragEnd = (_: any, info: PanInfo) => {
-    const vel = info.velocity.y;
-    const offset = info.offset.y;
-    // Velocity-aware threshold
-    if (vel < -300 || offset < -80) navigateNext();
-    else if (vel > 300 || offset > 80) navigatePrev();
-  };
-
-  // ─────────── Tap zones (double tap seek) ───────────
-  const handleContainerTap = (e: React.MouseEvent<HTMLDivElement>) => {
-    resetOverlayTimer();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const w = rect.width;
-    const side = x < w * 0.4 ? 'left' : x > w * 0.6 ? 'right' : 'center';
-
-    const now = Date.now();
-    const isDoubleTap = now - lastTapTime.current < 300 && lastTapSide.current === side;
-    lastTapTime.current = now;
-    lastTapSide.current = side as any;
-
-    if (isDoubleTap && side !== 'center') {
-      // Double tap seek
-      const delta = side === 'right' ? 10 : -10;
-      seekTo(currentTime + delta);
-
-      const id = ++rippleId.current;
-      setRipples(prev => [...prev, { id, x, y, side: side as 'left' | 'right', label: side === 'right' ? '+10s' : '-10s' }]);
-      setTimeout(() => setRipples(prev => prev.filter(r => r.id !== id)), 700);
-    } else if (side === 'center' && !isDoubleTap) {
-      // Single tap center = play/pause
-      setTimeout(() => {
-        if (Date.now() - lastTapTime.current >= 290) {
-          setIsPlaying(p => !p);
-        }
-      }, 310);
-    }
-  };
-
-  // ─────────── Like with heart burst ───────────
-  const handleLike = (e: React.MouseEvent) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-
-    if (!isLiked) {
-      const count = 8;
-      const newParticles: HeartParticle[] = Array.from({ length: count }, (_, i) => ({
-        id: ++heartId.current,
-        x: cx,
-        y: cy,
-        angle: (i / count) * Math.PI * 2,
-        distance: 50 + Math.random() * 40,
-      }));
-      setHeartParticles(prev => [...prev, ...newParticles]);
-      setTimeout(() => setHeartParticles(prev => prev.filter(p => !newParticles.find(n => n.id === p.id))), 1000);
-    }
-    setIsLiked(l => !l);
-  };
-
-  // ─────────── Library toggle ───────────
-  const toggleSave = () => {
-    if (!currentVideo) return;
-    const updated = library.includes(currentVideo.id)
-      ? library.filter(x => x !== currentVideo.id)
-      : [...library, currentVideo.id];
-    setLibrary(updated);
-    ls.set('reelramp_library', updated);
-  };
-
-  // ─────────── Share ───────────
-  const handleShare = () => {
-    const url = `${window.location.origin}/player/${currentVideo?.id}`;
-    if (navigator.share) navigator.share({ title: currentVideo?.title, url });
-    else navigator.clipboard.writeText(url);
-  };
-
-  // ─────────── Rate ───────────
-  const rateVideo = (star: number) => {
-    if (!currentVideo) return;
-    setUserRating(star);
-    const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
-    ratings[currentVideo.id] = star;
-    ls.set('reelramp_ratings', ratings);
-  };
-
-  if (!currentVideo) {
-    return (
-      <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
-        <div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  const isSaved = library.includes(currentVideo.id);
-
-  return (
-    <div
-      className="fixed inset-0 bg-black overflow-hidden z-50 touch-none"
-      style={{ height: '100dvh', fontFamily: "'SF Pro Display', -apple-system, sans-serif" }}
-    >
-      {/* ──── DRAG CONTAINER ──── */}
-      <motion.div
-        key={currentIndex}
-        className="absolute inset-0"
-        drag="y"
-        dragConstraints={{ top: 0, bottom: 0 }}
-        dragElastic={{ top: 0.15, bottom: 0.15 }}
-        onDragEnd={handleDragEnd}
-        dragMomentum={false}
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.96 }}
-        transition={{ duration: 0.22, ease: [0.25, 1, 0.5, 1] }}
-      >
-        {/* ──── VIDEO ──── */}
-        <div ref={containerRef} className="absolute inset-0" onClick={handleContainerTap}>
-          <UltraPlayerCore
-            video={currentVideo}
-            isPlaying={isPlaying}
-            isMuted={isMuted}
-            speed={speed}
-            resumeFrom={resumeFrom}
-            onPlayPause={() => setIsPlaying(p => !p)}
-            onEnded={handleEnded}
-            onTimeUpdate={handleTimeUpdate}
-            onLoaded={() => setIsLoaded(true)}
-            onError={() => setHasError(true)}
-            videoRef={videoRef}
-          />
-
-          {/* Loading */}
-          {!isLoaded && !hasError && <PlayerSkeleton />}
-
-          {/* Error */}
-          {hasError && (
-            <div className="absolute inset-0 bg-[#0a0a0a] flex flex-col items-center justify-center z-20 gap-4">
-              <div style={{ fontSize: 40 }}>⚠️</div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14 }}>Video failed to load</div>
-              <button onClick={() => { setHasError(false); setIsLoaded(false); }}
-                className="px-6 py-3 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm">
-                Retry
-              </button>
-            </div>
-          )}
-
-          {/* Double-tap ripples */}
-          {ripples.map(r => <TapRipple key={r.id} ripple={r} />)}
-
-          {/* Heart burst particles */}
-          <HeartBurst particles={heartParticles} />
-
-          {/* ──── TOP GRADIENT ──── */}
-          <div className="absolute inset-x-0 top-0 pointer-events-none"
-            style={{ height: 160, background: 'linear-gradient(180deg, rgba(0,0,0,0.75) 0%, transparent 100%)' }} />
-
-          {/* ──── BOTTOM GRADIENT ──── */}
-          <div className="absolute inset-x-0 bottom-0 pointer-events-none"
-            style={{ height: 280, background: 'linear-gradient(0deg, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.6) 50%, transparent 100%)' }} />
-        </div>
-
-        {/* ══════════════════════════════════════════════════
-            TOP BAR — auto-hide
-        ══════════════════════════════════════════════════ */}
-        <motion.div
-          className="absolute top-0 inset-x-0 z-40 flex items-center justify-between px-4 pt-12 pb-4 pointer-events-none"
-          animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : -16 }}
-          transition={{ duration: 0.28, ease: 'easeInOut' }}
-          style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
-        >
-          {/* Back button */}
-          <motion.button
-            onClick={() => navigate(-1)}
-            whileTap={{ scale: 0.88 }}
-            style={{
-              width: 42, height: 42,
-              background: 'rgba(0,0,0,0.5)',
-              backdropFilter: 'blur(16px)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 13,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-          >
-            <ArrowLeft size={20} className="text-white" />
-          </motion.button>
-
-          {/* Category + counter pill */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            background: 'rgba(0,0,0,0.45)',
-            backdropFilter: 'blur(16px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 20, padding: '6px 14px',
-          }}>
-            <span style={{ fontSize: 10, color: '#c5a26f', fontWeight: 700, letterSpacing: 2 }}>
-              {currentVideo.category.toUpperCase()}
-            </span>
-            <div style={{ width: 1, height: 10, background: 'rgba(255,255,255,0.2)' }} />
-            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', fontWeight: 600, letterSpacing: 1 }}>
-              {currentIndex + 1} / {feedVideos.length}
-            </span>
-          </div>
-
-          {/* Right controls: mute + speed */}
-          <div className="flex items-center gap-2">
-            <motion.button
-              whileTap={{ scale: 0.88 }}
-              onClick={() => setIsMuted(m => !m)}
-              style={{
-                width: 42, height: 42,
-                background: 'rgba(0,0,0,0.5)',
-                backdropFilter: 'blur(16px)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: 13,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              <AnimatePresence mode="wait">
-                {isMuted
-                  ? <motion.div key="muted" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.15 }}>
-                      <VolumeX size={18} className="text-white" />
-                    </motion.div>
-                  : <motion.div key="unmuted" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.15 }}>
-                      <Volume2 size={18} className="text-white" />
-                    </motion.div>
-                }
-              </AnimatePresence>
-            </motion.button>
-
-            <SpeedSelector speed={speed} onSelect={setSpeed} />
-          </div>
-        </motion.div>
-
-        {/* ══════════════════════════════════════════════════
-            CENTER PLAY/PAUSE BUTTON
-        ══════════════════════════════════════════════════ */}
-        <AnimatePresence>
-          {!isPlaying && isLoaded && (
-            <motion.div
-              className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <motion.div
-                initial={{ scale: 0.6, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.7, opacity: 0 }}
-                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                style={{
-                  width: 80, height: 80,
-                  background: 'rgba(255,255,255,0.18)',
-                  backdropFilter: 'blur(20px)',
-                  border: '2px solid rgba(255,255,255,0.4)',
-                  borderRadius: 40,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-                }}
-              >
-                <Play size={36} className="text-white" style={{ marginLeft: 4 }} />
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ══════════════════════════════════════════════════
-            RIGHT ACTION BAR — auto-hide
-        ══════════════════════════════════════════════════ */}
-        <motion.div
-          className="absolute right-3 z-40 flex flex-col items-center gap-4"
-          style={{ bottom: 120, pointerEvents: overlayVisible ? 'auto' : 'none' }}
-          animate={{ opacity: overlayVisible ? 1 : 0, x: overlayVisible ? 0 : 24 }}
-          transition={{ duration: 0.28, ease: 'easeInOut' }}
-        >
-          {/* LIKE */}
-          <div className="flex flex-col items-center gap-1">
-            <motion.button
-              onClick={handleLike}
-              whileTap={{ scale: 0.82 }}
-              style={{
-                width: 52, height: 52,
-                background: isLiked ? '#e11d48' : 'rgba(0,0,0,0.55)',
-                backdropFilter: 'blur(16px)',
-                border: `1px solid ${isLiked ? '#e11d48' : 'rgba(255,255,255,0.12)'}`,
-                borderRadius: 16,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background 0.2s, border 0.2s',
-              }}
-            >
-              <motion.div
-                animate={{ scale: isLiked ? [1, 1.4, 1] : 1 }}
-                transition={{ duration: 0.3, type: 'spring' }}
-              >
-                <Heart size={24} className={isLiked ? 'fill-white text-white' : 'text-white'} />
-              </motion.div>
-            </motion.button>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>LIKE</span>
-          </div>
-
-          {/* SAVE */}
-          <div className="flex flex-col items-center gap-1">
-            <motion.button
-              onClick={toggleSave}
-              whileTap={{ scale: 0.82 }}
-              style={{
-                width: 52, height: 52,
-                background: isSaved ? 'rgba(197,162,111,0.2)' : 'rgba(0,0,0,0.55)',
-                backdropFilter: 'blur(16px)',
-                border: `1px solid ${isSaved ? '#c5a26f' : 'rgba(255,255,255,0.12)'}`,
-                borderRadius: 16,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background 0.2s, border 0.2s',
-              }}
-            >
-              <Bookmark size={24} className={isSaved ? 'fill-[#c5a26f] text-[#c5a26f]' : 'text-white'} />
-            </motion.button>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>SAVE</span>
-          </div>
-
-          {/* SHARE */}
-          <div className="flex flex-col items-center gap-1">
-            <motion.button
-              onClick={handleShare}
-              whileTap={{ scale: 0.82 }}
-              style={{
-                width: 52, height: 52,
-                background: 'rgba(0,0,0,0.55)',
-                backdropFilter: 'blur(16px)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: 16,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              <Share2 size={22} className="text-white" />
-            </motion.button>
-            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>SHARE</span>
-          </div>
-
-          {/* SUBSCRIBE lock (premium) */}
-          {currentVideo.isPremium && (
-            <div className="flex flex-col items-center gap-1 mt-1">
-              <motion.button
-                onClick={() => setShowPaywall(true)}
-                whileTap={{ scale: 0.82 }}
-                style={{
-                  width: 52, height: 52,
-                  background: '#e11d48',
-                  borderRadius: 16,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 4px 20px rgba(225,29,72,0.4)',
-                }}
-              >
-                <Lock size={22} className="text-white" />
-              </motion.button>
-              <span style={{ fontSize: 9, color: '#e11d48', fontWeight: 700, letterSpacing: 1 }}>PREMIUM</span>
-            </div>
-          )}
-        </motion.div>
-
-        {/* ══════════════════════════════════════════════════
-            BOTTOM META + SCRUBBER — auto-hide
-        ══════════════════════════════════════════════════ */}
-        <motion.div
-          className="absolute inset-x-0 bottom-0 z-40 pb-6 pt-4"
-          animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : 20 }}
-          transition={{ duration: 0.28, ease: 'easeInOut' }}
-          style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
-        >
-          {/* Video meta */}
-          <div className="px-5 mb-4 pr-20">
-            {/* Duration badge */}
-            <div className="inline-flex items-center gap-1.5 mb-2"
-              style={{
-                background: 'rgba(197,162,111,0.2)',
-                border: '1px solid rgba(197,162,111,0.4)',
-                borderRadius: 8, padding: '3px 10px',
-              }}>
-              <div style={{ width: 6, height: 6, borderRadius: 3, background: '#c5a26f' }} />
-              <span style={{ fontSize: 10, color: '#c5a26f', fontWeight: 700, letterSpacing: 1.5 }}>
-                {currentVideo.duration}
-              </span>
-            </div>
-
-            <h2 style={{
-              fontSize: 22, fontWeight: 700, color: '#fff',
-              letterSpacing: -0.8, lineHeight: 1.2,
-              textShadow: '0 2px 12px rgba(0,0,0,0.8)',
-              marginBottom: 6,
-            }}>
-              {currentVideo.title}
-            </h2>
-
-            <p style={{
-              fontSize: 12.5, color: 'rgba(255,255,255,0.65)',
-              lineHeight: 1.5, display: '-webkit-box',
-              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-            }}>
-              {currentVideo.description}
-            </p>
-
-            {/* Star rating */}
-            <div className="flex items-center gap-2 mt-3">
-              <div className="flex gap-0.5">
-                {[1,2,3,4,5].map(s => (
-                  <motion.button
-                    key={s}
-                    onClick={() => rateVideo(s)}
-                    whileTap={{ scale: 0.7 }}
-                    style={{ fontSize: 18, color: s <= userRating ? '#c5a26f' : 'rgba(255,255,255,0.25)' }}
-                  >
-                    ★
-                  </motion.button>
-                ))}
-              </div>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: 600 }}>Rate this short</span>
-            </div>
-          </div>
-
-          {/* ── SCRUBBER ── */}
-          <UltraScrubber
-            currentTime={currentTime}
-            duration={duration}
-            buffered={buffered}
-            onSeek={seekTo}
-          />
-
-          {/* ── PLAYBACK CONTROLS ROW ── */}
-          <div className="flex items-center justify-between px-5 pt-2">
-            {/* Prev */}
-            <motion.button
-              onClick={navigatePrev}
-              whileTap={{ scale: 0.85 }}
-              disabled={currentIndex === 0}
-              style={{
-                width: 46, height: 46,
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 14,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: currentIndex === 0 ? 0.3 : 1,
-              }}
-            >
-              <ChevronUp size={22} className="text-white" />
-            </motion.button>
-
-            {/* Play/Pause center */}
-            <motion.button
-              onClick={() => setIsPlaying(p => !p)}
-              whileTap={{ scale: 0.88 }}
-              style={{
-                width: 62, height: 62,
-                background: 'linear-gradient(135deg, #c5a26f, #d4b17f)',
-                borderRadius: 20,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 4px 24px rgba(197,162,111,0.5)',
-              }}
-            >
-              <AnimatePresence mode="wait">
-                {isPlaying
-                  ? <motion.div key="pause" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.12 }}>
-                      <Pause size={28} className="text-black" />
-                    </motion.div>
-                  : <motion.div key="play" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.12 }}>
-                      <Play size={28} className="text-black" style={{ marginLeft: 3 }} />
-                    </motion.div>
-                }
-              </AnimatePresence>
-            </motion.button>
-
-            {/* Next */}
-            <motion.button
-              onClick={navigateNext}
-              whileTap={{ scale: 0.85 }}
-              disabled={currentIndex >= feedVideos.length - 1}
-              style={{
-                width: 46, height: 46,
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 14,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: currentIndex >= feedVideos.length - 1 ? 0.3 : 1,
-              }}
-            >
-              <ChevronDown size={22} className="text-white" />
-            </motion.button>
-          </div>
-        </motion.div>
-
-        {/* ══════════════════════════════════════════════════
-            SWIPE HINT INDICATORS (top / bottom edges)
-        ══════════════════════════════════════════════════ */}
-        <AnimatePresence>
-          {currentIndex > 0 && (
-            <motion.div
-              className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 0.4, y: 0 }}
-              exit={{ opacity: 0 }}
-            >
-              <div style={{ width: 32, height: 3, borderRadius: 2, background: 'white' }} />
-            </motion.div>
-          )}
-          {currentIndex < feedVideos.length - 1 && (
-            <motion.div
-              className="absolute bottom-1 inset-x-0 flex justify-center pointer-events-none z-20"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 0.4, y: 0 }}
-              exit={{ opacity: 0 }}
-            >
-              <div style={{ width: 32, height: 3, borderRadius: 2, background: 'white' }} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-      </motion.div>{/* end drag container */}
-
-      {/* ══════════════════════════════════════════════════
-          PAYWALL MODALS
-      ══════════════════════════════════════════════════ */}
-      <AnimatePresence>
-        {showScrollPaywall && (
-          <SubscriptionInterceptModal
-            onClose={() => setShowScrollPaywall(false)}
-            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }}
-          />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {showPaywall && (
-          <PaywallModal
-            video={currentVideo}
-            onClose={() => setShowPaywall(false)}
-            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }}
-          />
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-export default ShortsPlayerPage;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SYSTEM 3 — DIGITAL STORE PAGE
@@ -4284,5 +3150,1105 @@ function AdminPage() {
     </div>
   );
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// ULTRA-PREMIUM KUKU TV STYLE PLAYER — DROP-IN REPLACEMENT
+// Replace CinematicPlayer + ShortsPlayerPage in your App.tsx with this code
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// FEATURES:
+// ✅ True 100dvh full-bleed vertical player
+// ✅ Auto-hide overlays after 3s (Kuku TV style)
+// ✅ Tap anywhere = reveal + reset timer
+// ✅ Double-tap LEFT = rewind 10s (with animated ripple)
+// ✅ Double-tap RIGHT = forward 10s (with animated ripple)
+// ✅ Swipe up/down = next/prev video with spring physics
+// ✅ Drag-to-seek scrubber with thumb + buffered track
+// ✅ Animated gradient top/bottom chrome
+// ✅ Speed selector (0.5x→2x) floating pill
+// ✅ Mute toggle with animated icon swap
+// ✅ Center play/pause with morph animation
+// ✅ Like button with heart burst particle explosion
+// ✅ Video progress saved to localStorage for resume
+// ✅ Gesture velocity-aware swipe detection
+// ✅ Long-press scrubber for frame-accurate seeking
+// ✅ Loading skeleton with shimmer
+// ✅ Error state with retry
+// ═══════════════════════════════════════════════════════════════════════════
 
-export default App;
+import React, {
+  useState, useEffect, useRef, useCallback, useLayoutEffect
+} from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence, useMotionValue, useTransform, PanInfo } from 'framer-motion';
+import {
+  ArrowLeft, Heart, Bookmark, Share2, Lock,
+  Volume2, VolumeX, Play, Pause, RotateCcw, RotateCw,
+  ChevronUp, ChevronDown, Star
+} from 'lucide-react';
+
+// ─── paste your existing imports from App.tsx ───
+// These are referenced below — make sure they exist in scope:
+// - Video, WatchHistoryItem interfaces
+// - getStoredVideos, getWatchHistory, addToWatchHistory, incrementView, getResumeTimestamp
+// - ls (localStorage helper)
+// - SubscriptionInterceptModal, PaywallModal
+// - incrementScrollCount, getScrollCount, resetScrollCount
+// - useAuth hook
+
+
+// ════════════════════════════════════════════════════════════════
+// TYPES (local to this file)
+// ════════════════════════════════════════════════════════════════
+interface RippleEffect {
+  id: number;
+  x: number;
+  y: number;
+  side: 'left' | 'right';
+  label: string;
+}
+
+interface HeartParticle {
+  id: number;
+  x: number;
+  y: number;
+  angle: number;
+  distance: number;
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// ULTRA CINEMATIC PLAYER CORE
+// ════════════════════════════════════════════════════════════════
+interface UltraPlayerProps {
+  video: Video;
+  isPlaying: boolean;
+  isMuted: boolean;
+  speed: number;
+  resumeFrom: number;
+  onPlayPause: () => void;
+  onEnded: () => void;
+  onTimeUpdate: (current: number, duration: number, buffered: number) => void;
+  onLoaded: () => void;
+  onError: () => void;
+  videoRef: React.RefObject<HTMLVideoElement>;
+}
+
+function UltraPlayerCore({
+  video, isPlaying, isMuted, speed, resumeFrom,
+  onPlayPause, onEnded, onTimeUpdate, onLoaded, onError, videoRef
+}: UltraPlayerProps) {
+  const hasResumed = useRef(false);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (isPlaying) videoRef.current.play().catch(() => {});
+    else videoRef.current.pause();
+  }, [isPlaying]);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  }, [speed]);
+
+  const handleMeta = () => {
+    if (!videoRef.current) return;
+    if (!hasResumed.current && resumeFrom > 2) {
+      videoRef.current.currentTime = resumeFrom;
+      hasResumed.current = true;
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (!videoRef.current) return;
+    const vid = videoRef.current;
+    let buffered = 0;
+    if (vid.buffered.length > 0) {
+      buffered = vid.buffered.end(vid.buffered.length - 1);
+    }
+    onTimeUpdate(vid.currentTime, vid.duration || 0, buffered);
+  };
+
+  if (video.source === 'youtube') {
+    const videoId = video.videoUrl.split('/').pop()?.split('?')[0] || '';
+    return (
+      <iframe
+        className="absolute inset-0 w-full h-full"
+        src={`https://www.youtube.com/embed/${videoId}?autoplay=1&controls=0&modestbranding=1&rel=0&playsinline=1&enablejsapi=1`}
+        title={video.title}
+        frameBorder="0"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowFullScreen
+        onLoad={onLoaded}
+      />
+    );
+  }
+
+  const resolvedUrl = video.source === 'bunny'
+    ? `https://reelrampproshorts1.b-cdn.net/${video.videoUrl.replace(/^\//, '')}`
+    : video.videoUrl;
+
+  return (
+    <video
+      ref={videoRef}
+      src={resolvedUrl}
+      className="absolute inset-0 w-full h-full object-cover"
+      autoPlay
+      playsInline
+      loop={false}
+      onEnded={onEnded}
+      onTimeUpdate={handleTimeUpdate}
+      onLoadedMetadata={handleMeta}
+      onLoadedData={onLoaded}
+      onError={onError}
+      style={{ backgroundColor: '#000' }}
+    />
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// SCRUBBER — drag-to-seek with buffered track
+// ════════════════════════════════════════════════════════════════
+interface ScrubberProps {
+  currentTime: number;
+  duration: number;
+  buffered: number;
+  onSeek: (t: number) => void;
+}
+
+function UltraScrubber({ currentTime, duration, buffered, onSeek }: ScrubberProps) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [dragPct, setDragPct] = useState(0);
+
+  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const bufPct = duration > 0 ? (buffered / duration) * 100 : 0;
+  const displayPct = dragging ? dragPct : pct;
+
+  const getPctFromEvent = (clientX: number) => {
+    if (!trackRef.current) return 0;
+    const rect = trackRef.current.getBoundingClientRect();
+    return Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = getPctFromEvent(e.clientX);
+    setDragging(true);
+    setDragPct(p);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!dragging) return;
+    setDragPct(getPctFromEvent(e.clientX));
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (!dragging) return;
+    const p = getPctFromEvent(e.clientX);
+    setDragging(false);
+    onSeek((p / 100) * duration);
+  };
+
+  const formatTime = (s: number) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="w-full px-4 pb-2 select-none">
+      {/* Time labels */}
+      <div className="flex justify-between text-[10px] text-white/50 font-mono mb-2 px-0.5">
+        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(duration)}</span>
+      </div>
+
+      {/* Track */}
+      <div
+        ref={trackRef}
+        className="relative w-full cursor-pointer"
+        style={{ height: dragging ? 20 : 14, transition: 'height 0.15s' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
+        {/* Base track */}
+        <div className="absolute inset-x-0 rounded-full bg-white/15" style={{ top: '50%', transform: 'translateY(-50%)', height: dragging ? 4 : 3 }} />
+
+        {/* Buffered */}
+        <div className="absolute rounded-full bg-white/30 transition-all"
+          style={{ top: '50%', transform: 'translateY(-50%)', height: dragging ? 4 : 3, left: 0, width: `${bufPct}%` }} />
+
+        {/* Played */}
+        <div className="absolute rounded-full transition-none"
+          style={{
+            top: '50%', transform: 'translateY(-50%)',
+            height: dragging ? 4 : 3,
+            left: 0, width: `${displayPct}%`,
+            background: 'linear-gradient(90deg, #c5a26f, #e8c98a)',
+            boxShadow: '0 0 8px #c5a26f88'
+          }} />
+
+        {/* Thumb */}
+        <motion.div
+          className="absolute rounded-full bg-white shadow-lg shadow-black/50"
+          style={{
+            top: '50%',
+            left: `${displayPct}%`,
+            transform: 'translate(-50%, -50%)',
+            width: dragging ? 18 : 12,
+            height: dragging ? 18 : 12,
+            border: '2px solid #c5a26f',
+            transition: 'width 0.15s, height 0.15s',
+            boxShadow: dragging ? '0 0 0 6px rgba(197,162,111,0.25)' : undefined,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// SPEED PILL SELECTOR
+// ════════════════════════════════════════════════════════════════
+function SpeedSelector({ speed, onSelect }: { speed: number; onSelect: (s: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center justify-center"
+        style={{
+          width: 44, height: 44,
+          background: 'rgba(0,0,0,0.55)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 14,
+        }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#c5a26f', letterSpacing: -0.5 }}>{speed}x</span>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.85, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.85, y: 8 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            className="absolute bottom-full mb-2 right-0 overflow-hidden"
+            style={{
+              background: 'rgba(10,10,10,0.92)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 16,
+              minWidth: 72,
+            }}
+          >
+            {speeds.map(s => (
+              <button
+                key={s}
+                onClick={() => { onSelect(s); setOpen(false); }}
+                className="flex items-center justify-between w-full px-4 py-2.5 text-xs font-semibold transition-colors"
+                style={{
+                  color: speed === s ? '#c5a26f' : 'rgba(255,255,255,0.7)',
+                  background: speed === s ? 'rgba(197,162,111,0.15)' : 'transparent',
+                  borderBottom: '1px solid rgba(255,255,255,0.05)',
+                }}
+              >
+                <span>{s}x</span>
+                {speed === s && <span style={{ width: 6, height: 6, borderRadius: 3, background: '#c5a26f', display: 'inline-block' }} />}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// DOUBLE-TAP RIPPLE
+// ════════════════════════════════════════════════════════════════
+function TapRipple({ ripple }: { ripple: RippleEffect }) {
+  return (
+    <motion.div
+      key={ripple.id}
+      className="absolute pointer-events-none flex flex-col items-center justify-center"
+      style={{ left: ripple.x - 60, top: ripple.y - 60, width: 120, height: 120 }}
+      initial={{ opacity: 0, scale: 0.4 }}
+      animate={{ opacity: [0, 1, 1, 0], scale: [0.4, 1.1, 1, 0.8] }}
+      transition={{ duration: 0.65, times: [0, 0.2, 0.7, 1] }}
+    >
+      {/* Circular ripple rings */}
+      {[0, 1, 2].map(i => (
+        <motion.div
+          key={i}
+          className="absolute rounded-full border border-white/40"
+          style={{ width: 60 + i * 24, height: 60 + i * 24 }}
+          initial={{ opacity: 0.8, scale: 0.5 }}
+          animate={{ opacity: 0, scale: 1.4 }}
+          transition={{ duration: 0.5, delay: i * 0.07 }}
+        />
+      ))}
+      <div className="flex items-center gap-1 z-10">
+        {ripple.side === 'left'
+          ? <RotateCcw size={22} className="text-white" />
+          : <RotateCw size={22} className="text-white" />
+        }
+      </div>
+      <div className="z-10 mt-1" style={{ fontSize: 11, color: 'rgba(255,255,255,0.9)', fontWeight: 600 }}>
+        {ripple.label}
+      </div>
+    </motion.div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// HEART BURST PARTICLES
+// ════════════════════════════════════════════════════════════════
+function HeartBurst({ particles }: { particles: HeartParticle[] }) {
+  return (
+    <>
+      {particles.map(p => (
+        <motion.div
+          key={p.id}
+          className="absolute pointer-events-none text-lg"
+          style={{ left: p.x, top: p.y }}
+          initial={{ opacity: 1, scale: 0, x: 0, y: 0 }}
+          animate={{
+            opacity: [1, 1, 0],
+            scale: [0, 1.4, 0.8],
+            x: Math.cos(p.angle) * p.distance,
+            y: Math.sin(p.angle) * p.distance - 30,
+          }}
+          transition={{ duration: 0.9, ease: 'easeOut' }}
+        >
+          ❤️
+        </motion.div>
+      ))}
+    </>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// LOADING SKELETON
+// ════════════════════════════════════════════════════════════════
+function PlayerSkeleton() {
+  return (
+    <div className="absolute inset-0 bg-[#0a0a0a] flex items-center justify-center z-20">
+      <div className="flex flex-col items-center gap-5">
+        {/* Spinner ring */}
+        <div className="relative w-16 h-16">
+          <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#c5a26f] animate-spin" />
+          <div className="absolute inset-2 rounded-full border border-transparent border-t-[#c5a26f]/40 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '0.8s' }} />
+        </div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', letterSpacing: 3, fontWeight: 600 }}>LOADING</div>
+      </div>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// MAIN SHORTS PLAYER PAGE — KUKU TV ULTRA LEVEL
+// ════════════════════════════════════════════════════════════════
+export function ShortsPlayerPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+
+  // ── Video feed state ──
+  const [feedVideos, setFeedVideos] = useState<Video[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  // ── Playback state ──
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [buffered, setBuffered] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [resumeFrom, setResumeFrom] = useState(0);
+
+  // ── UI overlay state ──
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const overlayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Interaction state ──
+  const [isLiked, setIsLiked] = useState(false);
+  const [library, setLibrary] = useState<number[]>([]);
+  const [userRating, setUserRating] = useState(0);
+  const [ripples, setRipples] = useState<RippleEffect[]>([]);
+  const [heartParticles, setHeartParticles] = useState<HeartParticle[]>([]);
+  const rippleId = useRef(0);
+  const heartId = useRef(0);
+
+  // ── Double tap detection ──
+  const lastTapTime = useRef(0);
+  const lastTapSide = useRef<'left' | 'right' | null>(null);
+
+  // ── Paywall ──
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [showScrollPaywall, setShowScrollPaywall] = useState(false);
+
+  // ── Refs ──
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const saveInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const currentVideoId = parseInt(id || '1');
+
+  // ─────────── Load feed ───────────
+  useEffect(() => {
+    const vids = getStoredVideos();
+    setFeedVideos(vids);
+    const idx = vids.findIndex(v => v.id === currentVideoId);
+    setCurrentIndex(idx !== -1 ? idx : 0);
+    setLibrary(ls.get('reelramp_library', []));
+  }, [currentVideoId]);
+
+  const currentVideo = feedVideos[currentIndex];
+
+  // ─────────── Per-video setup ───────────
+  useEffect(() => {
+    if (!currentVideo) return;
+    setIsLoaded(false);
+    setHasError(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setBuffered(0);
+    setIsPlaying(true);
+    setIsLiked(false);
+
+    // Load resume timestamp
+    const h = getWatchHistory();
+    const item = h.find(i => i.videoId === currentVideo.id);
+    setResumeFrom(item?.timestamp || 0);
+
+    incrementView(currentVideo.id);
+    const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
+    setUserRating(ratings[currentVideo.id] || 0);
+
+    // Save progress every 5s
+    if (saveInterval.current) clearInterval(saveInterval.current);
+    saveInterval.current = setInterval(() => {
+      if (!videoRef.current || videoRef.current.duration === 0) return;
+      const pct = Math.round((videoRef.current.currentTime / videoRef.current.duration) * 100);
+      addToWatchHistory(currentVideo.id, pct, videoRef.current.currentTime);
+    }, 5000);
+
+    return () => { if (saveInterval.current) clearInterval(saveInterval.current); };
+  }, [currentIndex, currentVideo?.id]);
+
+  // ─────────── Overlay auto-hide ───────────
+  const resetOverlayTimer = useCallback(() => {
+    setOverlayVisible(true);
+    if (overlayTimer.current) clearTimeout(overlayTimer.current);
+    overlayTimer.current = setTimeout(() => {
+      if (isPlaying) setOverlayVisible(false);
+    }, 3000);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      overlayTimer.current = setTimeout(() => setOverlayVisible(false), 3000);
+    } else {
+      setOverlayVisible(true);
+      if (overlayTimer.current) clearTimeout(overlayTimer.current);
+    }
+    return () => { if (overlayTimer.current) clearTimeout(overlayTimer.current); };
+  }, [isPlaying]);
+
+  // ─────────── Navigation ───────────
+  const navigateNext = useCallback(() => {
+    if (currentIndex >= feedVideos.length - 1) return;
+    setCurrentIndex(i => i + 1);
+  }, [currentIndex, feedVideos.length]);
+
+  const navigatePrev = useCallback(() => {
+    if (currentIndex <= 0) return;
+    setCurrentIndex(i => i - 1);
+  }, [currentIndex]);
+
+  const handleEnded = () => {
+    if (currentVideo) addToWatchHistory(currentVideo.id, 100, duration);
+    navigateNext();
+  };
+
+  // ─────────── Time update ───────────
+  const handleTimeUpdate = (t: number, d: number, buf: number) => {
+    setCurrentTime(t);
+    setDuration(d);
+    setBuffered(buf);
+  };
+
+  // ─────────── Seek ───────────
+  const seekTo = (t: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = Math.max(0, Math.min(t, duration));
+      setCurrentTime(videoRef.current.currentTime);
+    }
+  };
+
+  // ─────────── Drag swipe ───────────
+  const handleDragEnd = (_: any, info: PanInfo) => {
+    const vel = info.velocity.y;
+    const offset = info.offset.y;
+    // Velocity-aware threshold
+    if (vel < -300 || offset < -80) navigateNext();
+    else if (vel > 300 || offset > 80) navigatePrev();
+  };
+
+  // ─────────── Tap zones (double tap seek) ───────────
+  const handleContainerTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    resetOverlayTimer();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const w = rect.width;
+    const side = x < w * 0.4 ? 'left' : x > w * 0.6 ? 'right' : 'center';
+
+    const now = Date.now();
+    const isDoubleTap = now - lastTapTime.current < 300 && lastTapSide.current === side;
+    lastTapTime.current = now;
+    lastTapSide.current = side as any;
+
+    if (isDoubleTap && side !== 'center') {
+      // Double tap seek
+      const delta = side === 'right' ? 10 : -10;
+      seekTo(currentTime + delta);
+
+      const id = ++rippleId.current;
+      setRipples(prev => [...prev, { id, x, y, side: side as 'left' | 'right', label: side === 'right' ? '+10s' : '-10s' }]);
+      setTimeout(() => setRipples(prev => prev.filter(r => r.id !== id)), 700);
+    } else if (side === 'center' && !isDoubleTap) {
+      // Single tap center = play/pause
+      setTimeout(() => {
+        if (Date.now() - lastTapTime.current >= 290) {
+          setIsPlaying(p => !p);
+        }
+      }, 310);
+    }
+  };
+
+  // ─────────── Like with heart burst ───────────
+  const handleLike = (e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    if (!isLiked) {
+      const count = 8;
+      const newParticles: HeartParticle[] = Array.from({ length: count }, (_, i) => ({
+        id: ++heartId.current,
+        x: cx,
+        y: cy,
+        angle: (i / count) * Math.PI * 2,
+        distance: 50 + Math.random() * 40,
+      }));
+      setHeartParticles(prev => [...prev, ...newParticles]);
+      setTimeout(() => setHeartParticles(prev => prev.filter(p => !newParticles.find(n => n.id === p.id))), 1000);
+    }
+    setIsLiked(l => !l);
+  };
+
+  // ─────────── Library toggle ───────────
+  const toggleSave = () => {
+    if (!currentVideo) return;
+    const updated = library.includes(currentVideo.id)
+      ? library.filter(x => x !== currentVideo.id)
+      : [...library, currentVideo.id];
+    setLibrary(updated);
+    ls.set('reelramp_library', updated);
+  };
+
+  // ─────────── Share ───────────
+  const handleShare = () => {
+    const url = `${window.location.origin}/player/${currentVideo?.id}`;
+    if (navigator.share) navigator.share({ title: currentVideo?.title, url });
+    else navigator.clipboard.writeText(url);
+  };
+
+  // ─────────── Rate ───────────
+  const rateVideo = (star: number) => {
+    if (!currentVideo) return;
+    setUserRating(star);
+    const ratings = ls.get<Record<number, number>>('reelramp_ratings', {});
+    ratings[currentVideo.id] = star;
+    ls.set('reelramp_ratings', ratings);
+  };
+
+  if (!currentVideo) {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
+        <div className="w-10 h-10 border-4 border-[#c5a26f] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const isSaved = library.includes(currentVideo.id);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black overflow-hidden z-50 touch-none"
+      style={{ height: '100dvh', fontFamily: "'SF Pro Display', -apple-system, sans-serif" }}
+    >
+      {/* ──── DRAG CONTAINER ──── */}
+      <motion.div
+        key={currentIndex}
+        className="absolute inset-0"
+        drag="y"
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={{ top: 0.15, bottom: 0.15 }}
+        onDragEnd={handleDragEnd}
+        dragMomentum={false}
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.96 }}
+        transition={{ duration: 0.22, ease: [0.25, 1, 0.5, 1] }}
+      >
+        {/* ──── VIDEO ──── */}
+        <div ref={containerRef} className="absolute inset-0" onClick={handleContainerTap}>
+          <UltraPlayerCore
+            video={currentVideo}
+            isPlaying={isPlaying}
+            isMuted={isMuted}
+            speed={speed}
+            resumeFrom={resumeFrom}
+            onPlayPause={() => setIsPlaying(p => !p)}
+            onEnded={handleEnded}
+            onTimeUpdate={handleTimeUpdate}
+            onLoaded={() => setIsLoaded(true)}
+            onError={() => setHasError(true)}
+            videoRef={videoRef}
+          />
+
+          {/* Loading */}
+          {!isLoaded && !hasError && <PlayerSkeleton />}
+
+          {/* Error */}
+          {hasError && (
+            <div className="absolute inset-0 bg-[#0a0a0a] flex flex-col items-center justify-center z-20 gap-4">
+              <div style={{ fontSize: 40 }}>⚠️</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14 }}>Video failed to load</div>
+              <button onClick={() => { setHasError(false); setIsLoaded(false); }}
+                className="px-6 py-3 bg-[#c5a26f] text-black font-semibold rounded-2xl text-sm">
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Double-tap ripples */}
+          {ripples.map(r => <TapRipple key={r.id} ripple={r} />)}
+
+          {/* Heart burst particles */}
+          <HeartBurst particles={heartParticles} />
+
+          {/* ──── TOP GRADIENT ──── */}
+          <div className="absolute inset-x-0 top-0 pointer-events-none"
+            style={{ height: 160, background: 'linear-gradient(180deg, rgba(0,0,0,0.75) 0%, transparent 100%)' }} />
+
+          {/* ──── BOTTOM GRADIENT ──── */}
+          <div className="absolute inset-x-0 bottom-0 pointer-events-none"
+            style={{ height: 280, background: 'linear-gradient(0deg, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.6) 50%, transparent 100%)' }} />
+        </div>
+
+        {/* ══════════════════════════════════════════════════
+            TOP BAR — auto-hide
+        ══════════════════════════════════════════════════ */}
+        <motion.div
+          className="absolute top-0 inset-x-0 z-40 flex items-center justify-between px-4 pt-12 pb-4 pointer-events-none"
+          animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : -16 }}
+          transition={{ duration: 0.28, ease: 'easeInOut' }}
+          style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
+        >
+          {/* Back button */}
+          <motion.button
+            onClick={() => navigate(-1)}
+            whileTap={{ scale: 0.88 }}
+            style={{
+              width: 42, height: 42,
+              background: 'rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(16px)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 13,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <ArrowLeft size={20} className="text-white" />
+          </motion.button>
+
+          {/* Category + counter pill */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: 'rgba(0,0,0,0.45)',
+            backdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 20, padding: '6px 14px',
+          }}>
+            <span style={{ fontSize: 10, color: '#c5a26f', fontWeight: 700, letterSpacing: 2 }}>
+              {currentVideo.category.toUpperCase()}
+            </span>
+            <div style={{ width: 1, height: 10, background: 'rgba(255,255,255,0.2)' }} />
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', fontWeight: 600, letterSpacing: 1 }}>
+              {currentIndex + 1} / {feedVideos.length}
+            </span>
+          </div>
+
+          {/* Right controls: mute + speed */}
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileTap={{ scale: 0.88 }}
+              onClick={() => setIsMuted(m => !m)}
+              style={{
+                width: 42, height: 42,
+                background: 'rgba(0,0,0,0.5)',
+                backdropFilter: 'blur(16px)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 13,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <AnimatePresence mode="wait">
+                {isMuted
+                  ? <motion.div key="muted" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.15 }}>
+                      <VolumeX size={18} className="text-white" />
+                    </motion.div>
+                  : <motion.div key="unmuted" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.15 }}>
+                      <Volume2 size={18} className="text-white" />
+                    </motion.div>
+                }
+              </AnimatePresence>
+            </motion.button>
+
+            <SpeedSelector speed={speed} onSelect={setSpeed} />
+          </div>
+        </motion.div>
+
+        {/* ══════════════════════════════════════════════════
+            CENTER PLAY/PAUSE BUTTON
+        ══════════════════════════════════════════════════ */}
+        <AnimatePresence>
+          {!isPlaying && isLoaded && (
+            <motion.div
+              className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <motion.div
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.7, opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                style={{
+                  width: 80, height: 80,
+                  background: 'rgba(255,255,255,0.18)',
+                  backdropFilter: 'blur(20px)',
+                  border: '2px solid rgba(255,255,255,0.4)',
+                  borderRadius: 40,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                }}
+              >
+                <Play size={36} className="text-white" style={{ marginLeft: 4 }} />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ══════════════════════════════════════════════════
+            RIGHT ACTION BAR — auto-hide
+        ══════════════════════════════════════════════════ */}
+        <motion.div
+          className="absolute right-3 z-40 flex flex-col items-center gap-4"
+          style={{ bottom: 120, pointerEvents: overlayVisible ? 'auto' : 'none' }}
+          animate={{ opacity: overlayVisible ? 1 : 0, x: overlayVisible ? 0 : 24 }}
+          transition={{ duration: 0.28, ease: 'easeInOut' }}
+        >
+          {/* LIKE */}
+          <div className="flex flex-col items-center gap-1">
+            <motion.button
+              onClick={handleLike}
+              whileTap={{ scale: 0.82 }}
+              style={{
+                width: 52, height: 52,
+                background: isLiked ? '#e11d48' : 'rgba(0,0,0,0.55)',
+                backdropFilter: 'blur(16px)',
+                border: `1px solid ${isLiked ? '#e11d48' : 'rgba(255,255,255,0.12)'}`,
+                borderRadius: 16,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.2s, border 0.2s',
+              }}
+            >
+              <motion.div
+                animate={{ scale: isLiked ? [1, 1.4, 1] : 1 }}
+                transition={{ duration: 0.3, type: 'spring' }}
+              >
+                <Heart size={24} className={isLiked ? 'fill-white text-white' : 'text-white'} />
+              </motion.div>
+            </motion.button>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>LIKE</span>
+          </div>
+
+          {/* SAVE */}
+          <div className="flex flex-col items-center gap-1">
+            <motion.button
+              onClick={toggleSave}
+              whileTap={{ scale: 0.82 }}
+              style={{
+                width: 52, height: 52,
+                background: isSaved ? 'rgba(197,162,111,0.2)' : 'rgba(0,0,0,0.55)',
+                backdropFilter: 'blur(16px)',
+                border: `1px solid ${isSaved ? '#c5a26f' : 'rgba(255,255,255,0.12)'}`,
+                borderRadius: 16,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.2s, border 0.2s',
+              }}
+            >
+              <Bookmark size={24} className={isSaved ? 'fill-[#c5a26f] text-[#c5a26f]' : 'text-white'} />
+            </motion.button>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>SAVE</span>
+          </div>
+
+          {/* SHARE */}
+          <div className="flex flex-col items-center gap-1">
+            <motion.button
+              onClick={handleShare}
+              whileTap={{ scale: 0.82 }}
+              style={{
+                width: 52, height: 52,
+                background: 'rgba(0,0,0,0.55)',
+                backdropFilter: 'blur(16px)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 16,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <Share2 size={22} className="text-white" />
+            </motion.button>
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', fontWeight: 700, letterSpacing: 1.5 }}>SHARE</span>
+          </div>
+
+          {/* SUBSCRIBE lock (premium) */}
+          {currentVideo.isPremium && (
+            <div className="flex flex-col items-center gap-1 mt-1">
+              <motion.button
+                onClick={() => setShowPaywall(true)}
+                whileTap={{ scale: 0.82 }}
+                style={{
+                  width: 52, height: 52,
+                  background: '#e11d48',
+                  borderRadius: 16,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 4px 20px rgba(225,29,72,0.4)',
+                }}
+              >
+                <Lock size={22} className="text-white" />
+              </motion.button>
+              <span style={{ fontSize: 9, color: '#e11d48', fontWeight: 700, letterSpacing: 1 }}>PREMIUM</span>
+            </div>
+          )}
+        </motion.div>
+
+        {/* ══════════════════════════════════════════════════
+            BOTTOM META + SCRUBBER — auto-hide
+        ══════════════════════════════════════════════════ */}
+        <motion.div
+          className="absolute inset-x-0 bottom-0 z-40 pb-6 pt-4"
+          animate={{ opacity: overlayVisible ? 1 : 0, y: overlayVisible ? 0 : 20 }}
+          transition={{ duration: 0.28, ease: 'easeInOut' }}
+          style={{ pointerEvents: overlayVisible ? 'auto' : 'none' }}
+        >
+          {/* Video meta */}
+          <div className="px-5 mb-4 pr-20">
+            {/* Duration badge */}
+            <div className="inline-flex items-center gap-1.5 mb-2"
+              style={{
+                background: 'rgba(197,162,111,0.2)',
+                border: '1px solid rgba(197,162,111,0.4)',
+                borderRadius: 8, padding: '3px 10px',
+              }}>
+              <div style={{ width: 6, height: 6, borderRadius: 3, background: '#c5a26f' }} />
+              <span style={{ fontSize: 10, color: '#c5a26f', fontWeight: 700, letterSpacing: 1.5 }}>
+                {currentVideo.duration}
+              </span>
+            </div>
+
+            <h2 style={{
+              fontSize: 22, fontWeight: 700, color: '#fff',
+              letterSpacing: -0.8, lineHeight: 1.2,
+              textShadow: '0 2px 12px rgba(0,0,0,0.8)',
+              marginBottom: 6,
+            }}>
+              {currentVideo.title}
+            </h2>
+
+            <p style={{
+              fontSize: 12.5, color: 'rgba(255,255,255,0.65)',
+              lineHeight: 1.5, display: '-webkit-box',
+              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            }}>
+              {currentVideo.description}
+            </p>
+
+            {/* Star rating */}
+            <div className="flex items-center gap-2 mt-3">
+              <div className="flex gap-0.5">
+                {[1,2,3,4,5].map(s => (
+                  <motion.button
+                    key={s}
+                    onClick={() => rateVideo(s)}
+                    whileTap={{ scale: 0.7 }}
+                    style={{ fontSize: 18, color: s <= userRating ? '#c5a26f' : 'rgba(255,255,255,0.25)' }}
+                  >
+                    ★
+                  </motion.button>
+                ))}
+              </div>
+              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontWeight: 600 }}>Rate this short</span>
+            </div>
+          </div>
+
+          {/* ── SCRUBBER ── */}
+          <UltraScrubber
+            currentTime={currentTime}
+            duration={duration}
+            buffered={buffered}
+            onSeek={seekTo}
+          />
+
+          {/* ── PLAYBACK CONTROLS ROW ── */}
+          <div className="flex items-center justify-between px-5 pt-2">
+            {/* Prev */}
+            <motion.button
+              onClick={navigatePrev}
+              whileTap={{ scale: 0.85 }}
+              disabled={currentIndex === 0}
+              style={{
+                width: 46, height: 46,
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                opacity: currentIndex === 0 ? 0.3 : 1,
+              }}
+            >
+              <ChevronUp size={22} className="text-white" />
+            </motion.button>
+
+            {/* Play/Pause center */}
+            <motion.button
+              onClick={() => setIsPlaying(p => !p)}
+              whileTap={{ scale: 0.88 }}
+              style={{
+                width: 62, height: 62,
+                background: 'linear-gradient(135deg, #c5a26f, #d4b17f)',
+                borderRadius: 20,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 24px rgba(197,162,111,0.5)',
+              }}
+            >
+              <AnimatePresence mode="wait">
+                {isPlaying
+                  ? <motion.div key="pause" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.12 }}>
+                      <Pause size={28} className="text-black" />
+                    </motion.div>
+                  : <motion.div key="play" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} transition={{ duration: 0.12 }}>
+                      <Play size={28} className="text-black" style={{ marginLeft: 3 }} />
+                    </motion.div>
+                }
+              </AnimatePresence>
+            </motion.button>
+
+            {/* Next */}
+            <motion.button
+              onClick={navigateNext}
+              whileTap={{ scale: 0.85 }}
+              disabled={currentIndex >= feedVideos.length - 1}
+              style={{
+                width: 46, height: 46,
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                opacity: currentIndex >= feedVideos.length - 1 ? 0.3 : 1,
+              }}
+            >
+              <ChevronDown size={22} className="text-white" />
+            </motion.button>
+          </div>
+        </motion.div>
+
+        {/* ══════════════════════════════════════════════════
+            SWIPE HINT INDICATORS (top / bottom edges)
+        ══════════════════════════════════════════════════ */}
+        <AnimatePresence>
+          {currentIndex > 0 && (
+            <motion.div
+              className="absolute top-2 inset-x-0 flex justify-center pointer-events-none z-20"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 0.4, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              <div style={{ width: 32, height: 3, borderRadius: 2, background: 'white' }} />
+            </motion.div>
+          )}
+          {currentIndex < feedVideos.length - 1 && (
+            <motion.div
+              className="absolute bottom-1 inset-x-0 flex justify-center pointer-events-none z-20"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 0.4, y: 0 }}
+              exit={{ opacity: 0 }}
+            >
+              <div style={{ width: 32, height: 3, borderRadius: 2, background: 'white' }} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+      </motion.div>{/* end drag container */}
+
+      {/* ══════════════════════════════════════════════════
+          PAYWALL MODALS
+      ══════════════════════════════════════════════════ */}
+      <AnimatePresence>
+        {showScrollPaywall && (
+          <SubscriptionInterceptModal
+            onClose={() => setShowScrollPaywall(false)}
+            onSubscribe={() => { setShowScrollPaywall(false); resetScrollCount(); navigate('/subscription'); }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showPaywall && (
+          <PaywallModal
+            video={currentVideo}
+            onClose={() => setShowPaywall(false)}
+            onSubscribe={() => { setShowPaywall(false); navigate('/subscription'); }}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+export default ShortsPlayerPage;
+
