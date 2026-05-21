@@ -1,20 +1,51 @@
 @import "tailwindcss";
 
 @layer base {
-  html { scroll-behavior: smooth; overflow-x: hidden; touch-action: pan-y; -webkit-text-size-adjust: 100%; }
-  body { margin: 0; min-width: 320px; max-width: 100vw; overflow-x: hidden; background: var(--rr-bg, #fff7ed); overscroll-behavior-x: none; }
-  #root { max-width: 100vw; overflow-x: hidden; }
-  button, a { touch-action: manipulation; }
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: var(--rr-bg, #fff7ed);
+  }
 }
 
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full bg-[var(--rr-primary)] px-6 py-3 font-black text-black shadow-sm transition-colors active:opacity-90; }
-  .card { @apply rounded-[var(--rr-radius)] bg-white shadow-sm border border-black/5; }
-  .pill { @apply shrink-0 rounded-full bg-white px-5 py-3 font-black text-zinc-700 shadow-sm border border-black/5 transition-colors; }
-  .pill.active { @apply bg-zinc-950 text-white; }
-  .input { @apply my-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-zinc-950 outline-none transition focus:border-[var(--rr-primary)] focus:ring-4 focus:ring-black/5; }
-  .panel { @apply space-y-3 rounded-[var(--rr-radius)] bg-white p-5 shadow-sm border border-black/5; }
-  .adminh { @apply flex items-center gap-2 text-2xl font-black; }
-  .save { @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#c5a26f] px-5 py-4 font-black text-black shadow-sm transition-colors active:opacity-90; }
-  .icon { @apply grid h-11 w-11 place-items-center rounded-full bg-black/35 text-white backdrop-blur transition hover:bg-white/15; }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-[var(--rr-primary)] px-6 py-3 font-black text-black shadow-sm transition hover:scale-[1.02] active:scale-[0.98];
+  }
+
+  .card {
+    @apply rounded-[var(--rr-radius)] bg-white shadow-sm border border-black/5;
+  }
+
+  .pill {
+    @apply shrink-0 rounded-full bg-white px-5 py-3 font-black text-zinc-700 shadow-sm border border-black/5 transition hover:scale-[1.02];
+  }
+
+  .pill.active {
+    @apply bg-zinc-950 text-white;
+  }
+
+  .input {
+    @apply my-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-zinc-950 outline-none transition focus:border-[var(--rr-primary)] focus:ring-4 focus:ring-black/5;
+  }
+
+  .panel {
+    @apply space-y-3 rounded-[var(--rr-radius)] bg-white p-5 shadow-sm border border-black/5;
+  }
+
+  .adminh {
+    @apply flex items-center gap-2 text-2xl font-black;
+  }
+
+  .save {
+    @apply inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#c5a26f] px-5 py-4 font-black text-black shadow-sm transition hover:scale-[1.01] active:scale-[0.99];
+  }
+
+  .icon {
+    @apply grid h-11 w-11 place-items-center rounded-full bg-black/35 text-white backdrop-blur transition hover:bg-white/15;
+  }
 }
