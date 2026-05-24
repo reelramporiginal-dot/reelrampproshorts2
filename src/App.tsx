@@ -23,6 +23,7 @@ const defaultPlayer={mode:'default',bunnyEmbedBase:'https://iframe.mediadelivery
 const fallbackImages={hero:'/images/reelramp-hero.jpg',studio:'/images/reelramp-studio.jpg',promo:'/images/reelramp-promo.jpg'};
 const api=(r:string)=>`/api/${r}`; const gid=()=>`guest_${Date.now()}_${Math.random().toString(36).slice(2,9)}`; const vurl=(f:string)=>!f?'':f.startsWith('http')?f:`${CDN}${f}`; const money=(n:number)=>`₹${Number(n||0).toLocaleString('en-IN')}`; const ftime=(n:number)=>`${Math.floor((n||0)/60)}:${Math.floor((n||0)%60).toString().padStart(2,'0')}`;
 const isInstalledApp=()=>window.matchMedia?.('(display-mode: standalone)').matches || (navigator as any).standalone===true || localStorage.getItem('rr_install_completed')==='1';
+const isIOS=()=>/iPhone|iPad|iPod/i.test(navigator.userAgent)&&!(window as any).MSStream;
 const bunnyIframeUrl=(video:Video,player:any)=>{if(video.bunny_embed_url)return video.bunny_embed_url;const id=video.bunny_video_id||video.video_filename;const base=String(player?.bunnyEmbedBase||defaultPlayer.bunnyEmbedBase).replace(/\/$/,'');const lib=player?.bunnyLibraryId?`/${player.bunnyLibraryId}`:'';const qs=new URLSearchParams({autoplay:String(player?.autoplay!==false),muted:String(!!player?.muted),preload:'true',responsive:String(player?.responsive!==false)});return `${base}${lib}/${encodeURIComponent(id||'')}?${qs.toString()}`};
 
 function Provider({children}:{children:ReactNode}){
@@ -165,10 +166,88 @@ function Profile(){
 
 function WalletReferral(){const {data,guestId,mutate}=useApp();const tx=data.wallet_transactions||[];const balance=tx.filter(t=>t.user_id===guestId).reduce((a,t)=>a+(t.type==='debit'?-Number(t.coins||0):Number(t.coins||0)),0);const code=`RR${guestId.slice(-5).toUpperCase()}`;return <section className="space-y-5"><Title t="Wallet & Referral" s="Coins, rewards and referral growth system."/><div className="grid gap-4 md:grid-cols-2"><div className="card p-6"><Wallet className="text-yellow-500" size={44}/><h2 className="mt-3 text-4xl font-black">{balance} Coins</h2><p className="text-zinc-500">Welcome bonus, referrals aur future episode unlock ke liye.</p><button className="btn mt-4" onClick={()=>mutate('wallet_transactions','POST',{user_id:guestId,type:'credit',coins:10,reason:'Daily reward',reference_id:'daily'})}>Claim Daily 10</button></div><div className="card p-6"><Gift className="text-[var(--rr-accent)]" size={44}/><h2 className="mt-3 text-2xl font-black">Referral Code</h2><p className="my-3 rounded-2xl bg-zinc-100 p-4 text-2xl font-black">{code}</p><button className="btn" onClick={()=>navigator.clipboard.writeText(code)}>Copy Code</button></div></div><DataTable resource="wallet_transactions" rows={tx.filter(t=>t.user_id===guestId)}/></section>}
 function HelpCenter(){const {data}=useApp();return <section className="space-y-5"><Title t="Help Center" s="Video, account, subscription aur support FAQ."/>{(data.help_articles||[]).filter(a=>a.is_published).map(a=><article key={a.id} className="card p-6"><p className="font-black text-[var(--rr-accent)]">{a.category}</p><h2 className="text-2xl font-black">{a.title}</h2><p className="mt-3 whitespace-pre-line text-zinc-600">{a.body}</p></article>)}</section>}
-function PwaInstall(){const {guestId,mutate}=useApp();const [deferred,setDeferred]=useState<any>(null),[hidden,setHidden]=useState(isInstalledApp()||localStorage.getItem('rr_install_closed')==='1'),[open,setOpen]=useState(false);useEffect(()=>{if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});const mark=()=>{localStorage.setItem('rr_install_completed','1');setHidden(true);setOpen(false)};if(isInstalledApp()){mark();return}const h=(e:any)=>{e.preventDefault();setDeferred(e);if(localStorage.getItem('rr_install_closed')!=='1')setOpen(true)};window.addEventListener('beforeinstallprompt',h);window.addEventListener('appinstalled',mark);const t=window.setTimeout(()=>{if(!isInstalledApp()&&localStorage.getItem('rr_install_closed')!=='1')setOpen(true)},3500);return()=>{window.removeEventListener('beforeinstallprompt',h);window.removeEventListener('appinstalled',mark);window.clearTimeout(t)}},[]);if(hidden||isInstalledApp())return null;const install=async()=>{let installed=false;if(deferred){deferred.prompt();const choice=await deferred.userChoice;installed=choice?.outcome==='accepted'}else if(/iPhone|iPad|iPod/i.test(navigator.userAgent)){alert('iPhone par Share button dabao, phir Add to Home Screen select karo. Install hone ke baad yeh popup nahi dikhega.')}else{alert('Browser menu se Install app / Add to Home screen select kar sakte ho.')}try{await mutate('push_subscriptions','POST',{user_id:guestId,endpoint:'pwa-install-interest',subscription:{platform:navigator.userAgent,hasPrompt:!!deferred,accepted:installed},enabled:true})}catch{}if(installed){localStorage.setItem('rr_install_completed','1');setHidden(true)}else{localStorage.setItem('rr_install_closed','1');setHidden(true)}setOpen(false)};return <>{open&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur"><motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl"><button onClick={()=>setOpen(false)} className="float-right rounded-full bg-zinc-100 p-2"><X/></button><div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div><h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2><p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p><button onClick={install} className="btn mt-5 w-full">Install App</button><button onClick={()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false)}} className="mt-3 font-bold text-zinc-500">Not now</button></motion.div></div>}<button onClick={()=>setOpen(true)} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6"><Download className="mr-2 inline" size={18}/> Install App</button></>}
+
+// FIX: PWA Install - iOS ke liye special bottom sheet, Android ke liye native prompt
+function PwaInstall(){
+  const {guestId,mutate}=useApp();
+  const [deferred,setDeferred]=useState<any>(null);
+  const [hidden,setHidden]=useState(isInstalledApp()||localStorage.getItem('rr_install_closed')==='1');
+  const [open,setOpen]=useState(false);
+
+  useEffect(()=>{
+    if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    const mark=()=>{localStorage.setItem('rr_install_completed','1');setHidden(true);setOpen(false)};
+    if(isInstalledApp()){mark();return}
+
+    const h=(e:any)=>{
+      e.preventDefault();
+      setDeferred(e);
+      // Auto-show prompt after capturing event
+      if(localStorage.getItem('rr_install_closed')!=='1')setOpen(true)
+    };
+    window.addEventListener('beforeinstallprompt',h);
+    window.addEventListener('appinstalled',mark);
+
+    // Show after 3.5s only if not Android (Android gets native prompt auto)
+    const t=window.setTimeout(()=>{
+      if(!isInstalledApp()&&localStorage.getItem('rr_install_closed')!=='1')setOpen(true)
+    },3500);
+    return()=>{window.removeEventListener('beforeinstallprompt',h);window.removeEventListener('appinstalled',mark);window.clearTimeout(t)}
+  },[]);
+
+  if(hidden||isInstalledApp())return null;
+
+  const install=async()=>{
+    // Android / Chrome - native install prompt
+    if(deferred){
+      deferred.prompt();
+      const choice=await deferred.userChoice;
+      const accepted=choice?.outcome==='accepted';
+      try{await mutate('push_subscriptions','POST',{user_id:guestId,endpoint:'pwa-install-interest',subscription:{platform:navigator.userAgent,hasPrompt:true,accepted},enabled:true})}catch{}
+      if(accepted){localStorage.setItem('rr_install_completed','1');setHidden(true);setOpen(false)}
+      else{setOpen(false)}
+      return
+    }
+    // iOS Safari - show step-by-step guide in bottom sheet (no native prompt available)
+    // just keep modal open to show iOS instructions, don't close
+    return
+  };
+
+  const dismiss=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false)};
+  const ios=isIOS();
+
+  return <>
+    {open&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
+      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl">
+        <button onClick={dismiss} className="float-right rounded-full bg-zinc-100 p-2"><X/></button>
+        <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
+        <h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2>
+        {ios
+          ? <>
+              <p className="mt-2 text-zinc-600">iPhone/iPad pe install karne ke liye:</p>
+              <div className="mt-4 space-y-3 text-left">
+                <div className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] font-black text-black text-sm">1</span><p className="text-sm font-bold">Safari browser me kholo (agar pehle se nahi hai)</p></div>
+                <div className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] font-black text-black text-sm">2</span><p className="text-sm font-bold">Neeche Share button <span className="inline-block px-1">□↑</span> dabao</p></div>
+                <div className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] font-black text-black text-sm">3</span><p className="text-sm font-bold">"Add to Home Screen" select karo → Add dabao</p></div>
+              </div>
+              <button onClick={dismiss} className="btn mt-5 w-full">Samajh gaya!</button>
+            </>
+          : <>
+              <p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p>
+              <button onClick={install} className="btn mt-5 w-full">Install App</button>
+              <button onClick={dismiss} className="mt-3 font-bold text-zinc-500">Not now</button>
+            </>
+        }
+      </motion.div>
+    </div>}
+    <button onClick={()=>setOpen(true)} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6">
+      <Download className="mr-2 inline" size={18}/> Install App
+    </button>
+  </>
+}
+
 function Policies(){const {data}=useApp();return <section className="space-y-4"><Title t="Legal Policies" s="Privacy Policy, Terms aur Payment policies."/>{(data.legal_policies||[]).filter(p=>p.is_published).map(p=><article key={p.id} className="card p-6"><h2 className="text-2xl font-black">{p.title}</h2><p className="text-sm font-bold text-[var(--rr-accent)]">Version {p.version}</p><p className="mt-4 whitespace-pre-line text-zinc-600">{p.body}</p></article>)}</section>}
 
-// FIXED: Kuku TV style promo popup - full screen vertical video like story
 function PromoVideoModal({go}:{go:(t:string)=>void}){
   const {data,subscribed}=useApp();
   const [open,setOpen]=useState(false);
@@ -193,86 +272,31 @@ function PromoVideoModal({go}:{go:(t:string)=>void}){
   useEffect(()=>{
     if(!open)return;
     setProgress(0);setCanSkip(false);
-    // Allow skip after 5 seconds
     timerRef.current=window.setTimeout(()=>setCanSkip(true),5000);
-    // Progress bar
     const interval=window.setInterval(()=>setProgress(p=>Math.min(100,p+1)),300);
     return()=>{window.clearTimeout(timerRef.current);window.clearInterval(interval)}
   },[open]);
 
   const close=()=>{setOpen(false);setProgress(0);setCanSkip(false)};
-  
   if(!open||!promo)return null;
   
   return <AnimatePresence>
-    <motion.div
-      key="promo-overlay"
-      initial={{opacity:0}}
-      animate={{opacity:1}}
-      exit={{opacity:0}}
-      className="fixed inset-0 z-[80] bg-black flex items-center justify-center"
-      onClick={(e)=>{if(e.target===e.currentTarget&&canSkip)close()}}
-    >
-      {/* Full screen vertical video like Kuku/Story TV */}
+    <motion.div key="promo-overlay" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-[80] bg-black flex items-center justify-center" onClick={(e)=>{if(e.target===e.currentTarget&&canSkip)close()}}>
       <div className="relative w-full h-full max-w-[430px] mx-auto bg-zinc-950">
-        {/* Video / Image background */}
-        {promo.video_filename
-          ? <video
-              ref={videoRef}
-              src={vurl(promo.video_filename)}
-              poster={promo.poster_url||undefined}
-              autoPlay
-              muted={muted}
-              playsInline
-              loop
-              className="absolute inset-0 h-full w-full object-cover"
-              onEnded={()=>{if(canSkip)close()}}
-            />
-          : promo.poster_url
-            ? <img src={promo.poster_url} className="absolute inset-0 h-full w-full object-cover"/>
-            : <div className="absolute inset-0 bg-gradient-to-br from-zinc-900 to-black grid place-items-center"><Sparkles size={80} className="text-[var(--rr-primary)]"/></div>
-        }
-        
-        {/* Dark gradient overlays */}
+        {promo.video_filename?<video ref={videoRef} src={vurl(promo.video_filename)} poster={promo.poster_url||undefined} autoPlay muted={muted} playsInline loop className="absolute inset-0 h-full w-full object-cover" onEnded={()=>{if(canSkip)close()}}/>:promo.poster_url?<img src={promo.poster_url} className="absolute inset-0 h-full w-full object-cover"/>:<div className="absolute inset-0 bg-gradient-to-br from-zinc-900 to-black grid place-items-center"><Sparkles size={80} className="text-[var(--rr-primary)]"/></div>}
         <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/50"/>
-        
-        {/* Top bar - progress + controls */}
         <div className="absolute top-0 inset-x-0 p-4 space-y-3">
-          {/* Progress bar */}
-          <div className="h-1 rounded-full bg-white/20 overflow-hidden">
-            <motion.div
-              className="h-full rounded-full bg-[var(--rr-primary)]"
-              style={{width:`${progress}%`}}
-              transition={{duration:.3}}
-            />
-          </div>
+          <div className="h-1 rounded-full bg-white/20 overflow-hidden"><motion.div className="h-full rounded-full bg-[var(--rr-primary)]" style={{width:`${progress}%`}} transition={{duration:.3}}/></div>
           <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-full bg-[var(--rr-primary)] grid place-items-center font-black text-black text-xs">{(promo.celebrity_name||'RR').slice(0,2).toUpperCase()}</div>
-              <div><p className="text-white text-xs font-black">{promo.celebrity_name||'ReelRamp Pro'}</p><p className="text-white/60 text-[10px]">Sponsored</p></div>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={()=>setMuted(!muted)} className="h-9 w-9 rounded-full bg-black/40 backdrop-blur grid place-items-center text-white">{muted?<VolumeX size={16}/>:<Volume2 size={16}/>}</button>
-              {canSkip
-                ? <button onClick={close} className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur px-3 py-2 text-white text-xs font-black"><X size={14}/> Skip</button>
-                : <div className="flex items-center gap-1 rounded-full bg-black/40 backdrop-blur px-3 py-2 text-white/60 text-xs font-bold">Skip in {5-Math.floor(progress/20)}s</div>
-              }
-            </div>
+            <div className="flex items-center gap-2"><div className="h-8 w-8 rounded-full bg-[var(--rr-primary)] grid place-items-center font-black text-black text-xs">{(promo.celebrity_name||'RR').slice(0,2).toUpperCase()}</div><div><p className="text-white text-xs font-black">{promo.celebrity_name||'ReelRamp Pro'}</p><p className="text-white/60 text-[10px]">Sponsored</p></div></div>
+            <div className="flex gap-2"><button onClick={()=>setMuted(!muted)} className="h-9 w-9 rounded-full bg-black/40 backdrop-blur grid place-items-center text-white">{muted?<VolumeX size={16}/>:<Volume2 size={16}/>}</button>{canSkip?<button onClick={close} className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur px-3 py-2 text-white text-xs font-black"><X size={14}/> Skip</button>:<div className="flex items-center gap-1 rounded-full bg-black/40 backdrop-blur px-3 py-2 text-white/60 text-xs font-bold">Skip in {5-Math.floor(progress/20)}s</div>}</div>
           </div>
         </div>
-        
-        {/* Bottom content - offer details */}
         <div className="absolute bottom-0 inset-x-0 p-6 space-y-4">
           {promo.celebrity_name&&<p className="text-[var(--rr-primary)] text-sm font-black">⭐ {promo.celebrity_name} recommends</p>}
           <h2 className="text-4xl font-black text-white leading-tight">{promo.title}</h2>
           {(promo.offer_text||promo.subtitle)&&<p className="text-white/80 text-base">{promo.offer_text||promo.subtitle}</p>}
-          <div className="grid gap-3 pt-2">
-            <button
-              onClick={()=>{close();go(promo.cta_action||'plans')}}
-              className="w-full rounded-full bg-[var(--rr-primary)] py-4 text-black font-black text-lg"
-            >{promo.cta_label||'View Offer'}</button>
-            <button onClick={close} className="w-full rounded-full bg-white/10 backdrop-blur py-3 text-white font-bold">Abhi nahi</button>
-          </div>
+          <div className="grid gap-3 pt-2"><button onClick={()=>{close();go(promo.cta_action||'plans')}} className="w-full rounded-full bg-[var(--rr-primary)] py-4 text-black font-black text-lg">{promo.cta_label||'View Offer'}</button><button onClick={close} className="w-full rounded-full bg-white/10 backdrop-blur py-3 text-white font-bold">Abhi nahi</button></div>
         </div>
       </div>
     </motion.div>
@@ -294,50 +318,91 @@ function Info(){return <div className="card overflow-hidden md:grid md:grid-cols
 function Empty(){return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50}/><h2 className="text-3xl font-black">No content yet</h2></div>}
 function Title({t,s}:{t:string;s:string}){return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>}
 
+// FIX: Shell - login button blink issue fixed with CSS transition instead of state-driven class swap
 function Shell(){
   const {loading,theme,data,user}=useApp();
   const [tab,setTab]=useState('home');
   const [exitAsk,setExitAsk]=useState(false);
-  // FIXED: show login button only if not logged in
   const isLoggedIn=!!(user?.email);
+  
   useEffect(()=>{
     document.documentElement.style.setProperty('--rr-primary',theme.primary||'#c5a26f');
     document.documentElement.style.setProperty('--rr-accent',theme.accent||'#ff4f8b');
     document.documentElement.style.setProperty('--rr-bg',theme.bg||'#fff7ed');
     document.documentElement.style.setProperty('--rr-radius',theme.radius||'30px')
   },[theme]);
+
   useEffect(()=>{
     history.pushState({rr:true},'',location.href);
     const onPop=()=>{setExitAsk(true);history.pushState({rr:true},'',location.href)};
     window.addEventListener('popstate',onPop);
     return()=>window.removeEventListener('popstate',onPop)
   },[]);
+
+  // Stable tab setter - prevents unnecessary re-renders
+  const goTab=useCallback((t:string)=>setTab(t),[]);
+
   if(new URLSearchParams(location.search).get('admin')==='1')return <AdminGate/>;
   if(loading)return <div className="grid min-h-screen place-items-center bg-orange-50"><Loader2 className="animate-spin text-[var(--rr-accent)]" size={54}/></div>;
+  
   const popup=(data.popup_settings||[]).find(p=>p.enabled);
-  const page=tab==='home'?<HomePage go={setTab}/>:tab==='forYou'?<ForYou/>:tab==='series'?<SeriesPage go={setTab}/>:tab==='search'?<SearchPage go={setTab}/>:tab==='plans'?<Plans/>:tab==='wallet'?<WalletReferral/>:tab==='help'?<HelpCenter/>:tab==='profile'?<Profile/>:<Policies/>;
+  
+  const page=tab==='home'?<HomePage go={goTab}/>
+    :tab==='forYou'?<ForYou/>
+    :tab==='series'?<SeriesPage go={goTab}/>
+    :tab==='search'?<SearchPage go={goTab}/>
+    :tab==='plans'?<Plans/>
+    :tab==='wallet'?<WalletReferral/>
+    :tab==='help'?<HelpCenter/>
+    :tab==='profile'?<Profile/>
+    :<Policies/>;
+
   return <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
     <header className="sticky top-0 z-30 border-b border-black/5 bg-white/85 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
-        <button onClick={()=>setTab('home')} className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span><b className="text-xl">{theme.brand||'ReelRamp Pro'}</b></button>
-        {/* FIXED: Show user name when logged in, Login button when not */}
-        <button onClick={()=>setTab('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn?'bg-[var(--rr-primary)] text-black':'bg-zinc-950 text-white'}`}>
+        <button onClick={()=>goTab('home')} className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span>
+          <b className="text-xl">{theme.brand||'ReelRamp Pro'}</b>
+        </button>
+        {/* FIX: No conditional className swap - use stable classes + inline style to avoid blink */}
+        <button
+          onClick={()=>goTab('profile')}
+          className="rounded-full px-5 py-2 font-bold transition-colors duration-200"
+          style={{
+            backgroundColor: isLoggedIn ? 'var(--rr-primary)' : '#09090b',
+            color: isLoggedIn ? '#000' : '#fff'
+          }}
+        >
           {isLoggedIn
             ? (user?.display_name?.split(' ')[0]||user?.email?.split('@')[0]||'Profile')
             : 'Login'
           }
         </button>
       </div>
-      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3"><button onClick={()=>setTab('series')} className="pill">Series</button><button onClick={()=>setTab('search')} className="pill">Search</button><button onClick={()=>setTab('wallet')} className="pill">Wallet</button><button onClick={()=>setTab('help')} className="pill">Help</button></div>
+      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3">
+        <button onClick={()=>goTab('series')} className="pill">Series</button>
+        <button onClick={()=>goTab('search')} className="pill">Search</button>
+        <button onClick={()=>goTab('wallet')} className="pill">Wallet</button>
+        <button onClick={()=>goTab('help')} className="pill">Help</button>
+      </div>
     </header>
     <NotificationStrip/>
     {popup&&<div className="mx-auto mt-4 max-w-6xl px-4"><div className="rounded-3xl bg-gradient-to-r from-pink-500 to-orange-400 p-4 text-white shadow-lg"><b>{popup.title}</b><p>{popup.message}</p></div></div>}
     <main className="mx-auto max-w-6xl p-4 pb-28 md:p-8">{page}</main>
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 backdrop-blur">
-      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">{[['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?'Profile':'Login']].map(([id,Icon,label]:any)=><button key={id} onClick={()=>setTab(id)} className={`rounded-2xl p-2 text-xs font-black ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}><Icon className="mx-auto mb-1" size={20}/>{label}</button>)}</div>
+      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">
+        {([['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?'Profile':'Login']] as const).map(([id,Icon,label])=>
+          <button key={id} onClick={()=>goTab(id)} className={`rounded-2xl p-2 text-xs font-black transition-colors duration-150 ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}>
+            <Icon className="mx-auto mb-1" size={20}/>{label}
+          </button>
+        )}
+      </div>
     </nav>
-    <footer className="px-4 pb-32 text-center text-sm text-zinc-500"><button onClick={()=>setTab('policies')} className="font-bold underline">Legal Policies</button><p>© 2026 ReelRamp Originals Pvt. Ltd.</p></footer>
-    <PromoVideoModal go={setTab}/>
+    <footer className="px-4 pb-32 text-center text-sm text-zinc-500">
+      <button onClick={()=>goTab('policies')} className="font-bold underline">Legal Policies</button>
+      <p>© 2026 ReelRamp Originals Pvt. Ltd.</p>
+    </footer>
+    <PromoVideoModal go={goTab}/>
     <PwaInstall/>
     {exitAsk&&<div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4 backdrop-blur"><div className="w-full max-w-sm rounded-[32px] bg-white p-6 text-center shadow-2xl"><h2 className="text-2xl font-black">Exit ReelRamp Pro?</h2><p className="mt-2 text-zinc-600">Kya aap app se bahar jana chahte hain? Aapki kahani yahin se resume ho jayegi.</p><div className="mt-5 grid grid-cols-2 gap-3"><button onClick={()=>setExitAsk(false)} className="btn">Stay</button><button onClick={()=>{setExitAsk(false);history.back()}} className="rounded-full bg-zinc-950 px-5 py-3 font-black text-white">Exit</button></div></div></div>}
   </div>
