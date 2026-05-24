@@ -1,98 +1,133 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Vercel environment variables se aayenge
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing env vars: SUPABASE_URL and SUPABASE_SERVICE_KEY required');
-}
-
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Jinhe filter karna hai user_id ya guest_id se
-const USER_FILTERED = ['subscriptions', 'payments', 'watch_history', 'likes', 'bookmarks', 'wallet_transactions', 'referrals'];
+const INSERT_ONLY = [
+  'video_views', 'payments', 'subscriptions', 'support_tickets',
+  'content_reports', 'audit_logs', 'promo_events',
+  'error_logs', 'push_subscriptions'
+];
+
+const CONFLICT_MAP = {
+  users: 'guest_id',
+  admin_settings: 'key',
+  categories: 'id',
+  plans: 'id',
+  series: 'id',
+  videos: 'id',
+  banners: 'id',
+  popup_settings: 'id',
+  platform_settings: 'id',
+  legal_policies: 'id',
+  help_articles: 'id',
+  promo_campaigns: 'id',
+  notifications: 'id',
+  wallet_transactions: 'id',
+  referrals: 'id',
+  likes: 'user_id,video_id',
+  bookmarks: 'user_id,video_id',
+  watch_history: 'user_id,video_id',
+};
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Resource name URL se nikalo: /api/watch_history → watch_history
   const urlPath = req.url.split('?')[0].replace(/^\/api\//, '');
   const resource = urlPath || 'videos';
-  const searchParams = new URL(req.url, `https://${req.headers.host || 'x.com'}`).searchParams;
+
+  let searchParams;
+  try {
+    searchParams = new URL(req.url, `https://${req.headers.host || 'localhost'}`).searchParams;
+  } catch {
+    searchParams = new URLSearchParams();
+  }
 
   console.log(`[${req.method}] /api/${resource}`);
 
   try {
-    // ── GET ──────────────────────────────────────────────
+
     if (req.method === 'GET') {
       let query = supabase.from(resource).select('*');
 
-      // guest_id filter (users table)
-      if (searchParams.get('guest_id')) {
+      if (searchParams.get('guest_id'))
         query = query.eq('guest_id', searchParams.get('guest_id'));
-      }
 
-      // user_id filter
-      if (searchParams.get('user_id')) {
+      if (searchParams.get('user_id'))
         query = query.eq('user_id', searchParams.get('user_id'));
-      }
 
-      // Videos: unpublished sirf admin ke liye
-      if (resource === 'videos' && !searchParams.get('includeUnpublished')) {
+      if (resource === 'videos' && !searchParams.get('includeUnpublished'))
         query = query.eq('is_published', true);
-      }
 
-      const { data, error } = await query
-        .order('id', { ascending: false })
-        .limit(500);
+      const { data, error } = await query.order('id', { ascending: false }).limit(500);
 
       if (error) {
-        console.error(`GET ${resource} error:`, error);
+        console.error(`GET ${resource} error:`, error.message);
         return res.status(400).json({ error: error.message });
       }
       return res.status(200).json(data || []);
     }
 
-    // ── POST ─────────────────────────────────────────────
     if (req.method === 'POST') {
       const body = req.body;
-      if (!body || typeof body !== 'object') {
-        return res.status(400).json({ error: 'Invalid request body' });
-      }
+      if (!body || typeof body !== 'object')
+        return res.status(400).json({ error: 'Invalid body' });
 
-      // json_import special route
       if (resource === 'json_import') {
-        const { resource: targetResource, rows, dryRun } = body;
-        if (!targetResource || !Array.isArray(rows)) {
+        const { resource: target, rows, dryRun } = body;
+        if (!target || !Array.isArray(rows))
           return res.status(400).json({ error: 'resource and rows[] required' });
-        }
-        if (dryRun) {
+        if (dryRun)
           return res.status(200).json({ valid: true, count: rows.length, dryRun: true });
-        }
-        const { data, error } = await supabase.from(targetResource).upsert(rows).select();
+        const { data, error } = await supabase.from(target).upsert(rows).select();
         if (error) return res.status(400).json({ error: error.message });
         return res.status(200).json({ imported: data?.length || 0 });
       }
 
-      const { data, error } = await supabase
-        .from(resource)
-        .upsert(body, { onConflict: resource === 'users' ? 'guest_id' : 'id' })
-        .select()
-        .single();
+      let data, error;
+
+      if (resource === 'likes' || resource === 'bookmarks') {
+        ({ data, error } = await supabase
+          .from(resource)
+          .upsert(body, { onConflict: 'user_id,video_id', ignoreDuplicates: true })
+          .select()
+          .single());
+
+      } else if (resource === 'watch_history') {
+        ({ data, error } = await supabase
+          .from(resource)
+          .upsert(body, { onConflict: 'user_id,video_id' })
+          .select()
+          .single());
+
+      } else if (INSERT_ONLY.includes(resource)) {
+        ({ data, error } = await supabase
+          .from(resource)
+          .insert(body)
+          .select()
+          .single());
+
+      } else {
+        const onConflict = CONFLICT_MAP[resource] || 'id';
+        ({ data, error } = await supabase
+          .from(resource)
+          .upsert(body, { onConflict })
+          .select()
+          .single());
+      }
 
       if (error) {
-        console.error(`POST ${resource} error:`, error);
+        console.error(`POST ${resource} error:`, error.message, '| body:', JSON.stringify(body));
         return res.status(400).json({ error: error.message });
       }
       return res.status(200).json(data);
     }
 
-    // ── PUT ──────────────────────────────────────────────
     if (req.method === 'PUT') {
       const body = req.body;
       if (!body?.id) return res.status(400).json({ error: 'id required for PUT' });
@@ -106,41 +141,39 @@ export default async function handler(req, res) {
         .single();
 
       if (error) {
-        console.error(`PUT ${resource} error:`, error);
+        console.error(`PUT ${resource} error:`, error.message);
         return res.status(400).json({ error: error.message });
       }
       return res.status(200).json(data);
     }
 
-    // ── DELETE ───────────────────────────────────────────
     if (req.method === 'DELETE') {
       const body = req.body;
-      
-      // id se delete
-      if (body?.id) {
-        const { error } = await supabase.from(resource).delete().eq('id', body.id);
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json({ success: true });
-      }
+      let error;
 
-      // likes/bookmarks: user_id + video_id se delete
-      if (body?.user_id && body?.video_id) {
-        const { error } = await supabase
+      if (body?.id) {
+        ({ error } = await supabase.from(resource).delete().eq('id', body.id));
+      } else if (body?.user_id && body?.video_id) {
+        ({ error } = await supabase
           .from(resource)
           .delete()
           .eq('user_id', body.user_id)
-          .eq('video_id', body.video_id);
-        if (error) return res.status(400).json({ error: error.message });
-        return res.status(200).json({ success: true });
+          .eq('video_id', body.video_id));
+      } else {
+        return res.status(400).json({ error: 'id or user_id+video_id required' });
       }
 
-      return res.status(400).json({ error: 'id or user_id+video_id required for DELETE' });
+      if (error) {
+        console.error(`DELETE ${resource} error:`, error.message);
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(200).json({ success: true });
     }
 
     return res.status(405).json({ error: `Method ${req.method} not allowed` });
 
   } catch (err) {
-    console.error('Unhandled error:', err);
+    console.error('Unhandled error:', err.message);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 }
