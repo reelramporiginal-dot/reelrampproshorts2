@@ -39,7 +39,7 @@ function Provider({children}:{children:ReactNode}){
       if(session?.user?.email){fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guest_id:session.user.id,display_name:session.user.user_metadata?.full_name||session.user.email,email:session.user.email,role:'viewer'})}).then(()=>refresh(true))}
     });
     const {data:{subscription}}=supabase.auth.onAuthStateChange((event:string,session:Session|null)=>{
-      if(session?.user?.email){localStorage.setItem('rr_guest',session.user.id);fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guest_id:session.user.id,display_name:session.user.user_metadata?.full_name||session.user.email,email:session.user.email,role:'viewer'})}).then(()=>{if(event==='SIGNED_IN')location.reload();else refresh(true)
+      if(session?.user?.email){localStorage.setItem('rr_guest',session.user.id);fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guest_id:session.user.id,display_name:session.user.user_metadata?.full_name||session.user.email,email:session.user.email,role:'viewer'})}).then(()=>{if(event==='SIGNED_IN')location.reload();else refresh(true)})}
     });
     return()=>subscription.unsubscribe()
   },[]);
