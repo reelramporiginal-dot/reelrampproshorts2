@@ -1,62 +1,146 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY  // service_role key (secret, sirf server side)
-);
+// Vercel environment variables se aayenge
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing env vars: SUPABASE_URL and SUPABASE_SERVICE_KEY required');
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Jinhe filter karna hai user_id ya guest_id se
+const USER_FILTERED = ['subscriptions', 'payments', 'watch_history', 'likes', 'bookmarks', 'wallet_transactions', 'referrals'];
 
 export default async function handler(req, res) {
-  const resource = req.url.replace('/api/', '').split('?')[0];
-  const params = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
-  const method = req.method;
-
-  // CORS headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (method === 'OPTIONS') return res.status(200).end();
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // Resource name URL se nikalo: /api/watch_history → watch_history
+  const urlPath = req.url.split('?')[0].replace(/^\/api\//, '');
+  const resource = urlPath || 'videos';
+  const searchParams = new URL(req.url, `https://${req.headers.host || 'x.com'}`).searchParams;
+
+  console.log(`[${req.method}] /api/${resource}`);
 
   try {
-    if (method === 'GET') {
+    // ── GET ──────────────────────────────────────────────
+    if (req.method === 'GET') {
       let query = supabase.from(resource).select('*');
-      
-      // Filters
-      if (params.guest_id) query = query.eq('guest_id', params.guest_id);
-      if (params.user_id) query = query.eq('user_id', params.user_id);
-      if (resource === 'videos' && !params.includeUnpublished) {
+
+      // guest_id filter (users table)
+      if (searchParams.get('guest_id')) {
+        query = query.eq('guest_id', searchParams.get('guest_id'));
+      }
+
+      // user_id filter
+      if (searchParams.get('user_id')) {
+        query = query.eq('user_id', searchParams.get('user_id'));
+      }
+
+      // Videos: unpublished sirf admin ke liye
+      if (resource === 'videos' && !searchParams.get('includeUnpublished')) {
         query = query.eq('is_published', true);
       }
-      
-      const { data, error } = await query.order('id', { ascending: false }).limit(500);
-      if (error) return res.status(400).json({ error: error.message });
-      return res.json(data || []);
+
+      const { data, error } = await query
+        .order('id', { ascending: false })
+        .limit(500);
+
+      if (error) {
+        console.error(`GET ${resource} error:`, error);
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(200).json(data || []);
     }
 
-    const body = req.body || {};
+    // ── POST ─────────────────────────────────────────────
+    if (req.method === 'POST') {
+      const body = req.body;
+      if (!body || typeof body !== 'object') {
+        return res.status(400).json({ error: 'Invalid request body' });
+      }
 
-    if (method === 'POST') {
-      const { data, error } = await supabase.from(resource).upsert(body).select().single();
-      if (error) return res.status(400).json({ error: error.message });
-      return res.json(data);
+      // json_import special route
+      if (resource === 'json_import') {
+        const { resource: targetResource, rows, dryRun } = body;
+        if (!targetResource || !Array.isArray(rows)) {
+          return res.status(400).json({ error: 'resource and rows[] required' });
+        }
+        if (dryRun) {
+          return res.status(200).json({ valid: true, count: rows.length, dryRun: true });
+        }
+        const { data, error } = await supabase.from(targetResource).upsert(rows).select();
+        if (error) return res.status(400).json({ error: error.message });
+        return res.status(200).json({ imported: data?.length || 0 });
+      }
+
+      const { data, error } = await supabase
+        .from(resource)
+        .upsert(body, { onConflict: resource === 'users' ? 'guest_id' : 'id' })
+        .select()
+        .single();
+
+      if (error) {
+        console.error(`POST ${resource} error:`, error);
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(200).json(data);
     }
 
-    if (method === 'PUT') {
+    // ── PUT ──────────────────────────────────────────────
+    if (req.method === 'PUT') {
+      const body = req.body;
+      if (!body?.id) return res.status(400).json({ error: 'id required for PUT' });
       const { id, ...rest } = body;
-      const { data, error } = await supabase.from(resource).update(rest).eq('id', id).select().single();
-      if (error) return res.status(400).json({ error: error.message });
-      return res.json(data);
+
+      const { data, error } = await supabase
+        .from(resource)
+        .update(rest)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error(`PUT ${resource} error:`, error);
+        return res.status(400).json({ error: error.message });
+      }
+      return res.status(200).json(data);
     }
 
-    if (method === 'DELETE') {
-      const { id } = body;
-      const { error } = await supabase.from(resource).delete().eq('id', id);
-      if (error) return res.status(400).json({ error: error.message });
-      return res.json({ success: true });
+    // ── DELETE ───────────────────────────────────────────
+    if (req.method === 'DELETE') {
+      const body = req.body;
+      
+      // id se delete
+      if (body?.id) {
+        const { error } = await supabase.from(resource).delete().eq('id', body.id);
+        if (error) return res.status(400).json({ error: error.message });
+        return res.status(200).json({ success: true });
+      }
+
+      // likes/bookmarks: user_id + video_id se delete
+      if (body?.user_id && body?.video_id) {
+        const { error } = await supabase
+          .from(resource)
+          .delete()
+          .eq('user_id', body.user_id)
+          .eq('video_id', body.video_id);
+        if (error) return res.status(400).json({ error: error.message });
+        return res.status(200).json({ success: true });
+      }
+
+      return res.status(400).json({ error: 'id or user_id+video_id required for DELETE' });
     }
 
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ error: `Method ${req.method} not allowed` });
 
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('Unhandled error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 }
