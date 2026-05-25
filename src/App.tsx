@@ -244,7 +244,6 @@ function ForYou(){
   </section>
 }
 
-// ─── FIX 3: Plans page — plan brief modal + coming soon payment ───────────────
 function Plans(){
   const {plans,payment,guestId,mutate,subscribed}=useApp();
   const [selected,setSelected]=useState<Plan|null>(null);
@@ -279,24 +278,16 @@ function Plans(){
           <p className="text-4xl font-black">{money(p.price)}</p>
           <p className="text-zinc-500">{p.duration_days} days</p>
           {p.features&&typeof p.features==='object'&&<ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">{Object.entries(p.features).map(([k,v]:any)=><li key={k} className="flex items-center gap-2"><CheckCircle2 size={14} className="text-green-500 shrink-0"/>{v}</li>)}</ul>}
-          <button
-            type="button"
-            onClick={()=>openPlan(p)}
-            className="btn mt-5 w-full"
-          >
-            Select Plan
-          </button>
+          <button type="button" onClick={()=>openPlan(p)} className="btn mt-5 w-full">Select Plan</button>
         </div>
       ))}
     </div>
 
-    {/* Plan Brief + Payment Modal */}
     <AnimatePresence>
       {selected&&(
         <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur" onClick={close}>
           <motion.div initial={{scale:.93,y:24}} animate={{scale:1,y:0}} exit={{scale:.93,y:24}} onClick={e=>e.stopPropagation()} className="w-full max-w-sm rounded-[34px] bg-white shadow-2xl overflow-hidden">
 
-            {/* Step: Brief */}
             {step==='brief'&&<div className="p-7 space-y-4">
               <div className="flex justify-between items-start"><div><p className="text-xs font-black text-[var(--rr-accent)] uppercase tracking-wider">Plan Details</p><h2 className="text-3xl font-black mt-1">{selected.name}</h2></div><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
               <div className="rounded-3xl bg-zinc-950 text-white p-5">
@@ -311,13 +302,11 @@ function Plans(){
               <button type="button" onClick={()=>setStep('pay')} className="btn w-full">Proceed to Payment →</button>
             </div>}
 
-            {/* Step: Pay — Coming Soon if no gateway */}
             {step==='pay'&&<div className="p-7 space-y-4">
               <div className="flex justify-between items-center"><h2 className="text-2xl font-black">Payment</h2><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
               <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between"><span>{selected.name}</span><span>{money(selected.price)}</span></div>
 
               {!hasGateway?(
-                /* ── Coming Soon Block ── */
                 <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-800 p-6 text-center text-white space-y-3">
                   <div className="text-4xl">🚀</div>
                   <h3 className="text-xl font-black">Payment Gateway</h3>
@@ -326,7 +315,6 @@ function Plans(){
                   {payment.whatsapp&&<a href={`https://wa.me/${payment.whatsapp.replace(/\D/g,'')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">WhatsApp pe contact karo</a>}
                 </div>
               ):(
-                /* ── Gateway Available ── */
                 <div className="space-y-3">
                   <div className="rounded-2xl border border-zinc-200 p-4 text-sm space-y-1">
                     <p className="font-black">Gateway: {payment.gateway}</p>
@@ -342,7 +330,6 @@ function Plans(){
               <button type="button" onClick={()=>setStep('brief')} className="w-full text-center text-sm font-bold text-zinc-500 py-2">← Wapas jaao</button>
             </div>}
 
-            {/* Step: Done */}
             {step==='done'&&<div className="p-8 text-center space-y-4">
               <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-green-100"><CheckCircle2 size={48} className="text-green-500"/></div>
               <h2 className="text-3xl font-black">Plan Activated!</h2>
@@ -424,102 +411,42 @@ function WalletReferral(){
 
 function HelpCenter(){const {data}=useApp();return <section className="space-y-5"><Title t="Help Center" s="Video, account, subscription aur support FAQ."/>{(data.help_articles||[]).filter(a=>a.is_published).map(a=><article key={a.id} className="card p-6"><p className="font-black text-[var(--rr-accent)]">{a.category}</p><h2 className="text-2xl font-black">{a.title}</h2><p className="mt-3 whitespace-pre-line text-zinc-600">{a.body}</p></article>)}</section>}
 
-// ─── FIX 1: PWA Install — alert() hataya, in-app guidance dikhao ─────────────
+// ─── FIXED: PwaInstall — seedha native browser prompt, koi custom modal nahi ───
 function PwaInstall(){
   const {guestId,mutate}=useApp();
   const [deferred,setDeferred]=useState<any>(null);
   const [hidden,setHidden]=useState(isInstalledApp()||localStorage.getItem('rr_install_closed')==='1');
-  const [open,setOpen]=useState(false);
-  const [installing,setInstalling]=useState(false);
-  const [iosGuide,setIosGuide]=useState(false);
-  const [manualGuide,setManualGuide]=useState(false);
   const isIos=/iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   useEffect(()=>{
     if(isInstalledApp()){setHidden(true);return}
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-    const markInstalled=()=>{localStorage.setItem('rr_install_completed','1');setHidden(true);setOpen(false)};
-    const onPrompt=(e:any)=>{
-      e.preventDefault();
-      setDeferred(e);
-      if(localStorage.getItem('rr_install_closed')!=='1')setOpen(true);
-    };
+    const markInstalled=()=>{localStorage.setItem('rr_install_completed','1');setHidden(true)};
+    const onPrompt=(e:any)=>{e.preventDefault();setDeferred(e)};
     window.addEventListener('beforeinstallprompt',onPrompt);
     window.addEventListener('appinstalled',markInstalled);
-    const t=window.setTimeout(()=>{
-      if(!isInstalledApp()&&localStorage.getItem('rr_install_closed')!=='1')setOpen(true);
-    },4000);
-    return()=>{window.removeEventListener('beforeinstallprompt',onPrompt);window.removeEventListener('appinstalled',markInstalled);window.clearTimeout(t)};
+    return()=>{window.removeEventListener('beforeinstallprompt',onPrompt);window.removeEventListener('appinstalled',markInstalled)};
   },[]);
 
   if(hidden||isInstalledApp())return null;
 
   const install=async()=>{
-    setInstalling(true);
     if(deferred){
-      // Android Chrome — direct native prompt
       deferred.prompt();
       const {outcome}=await deferred.userChoice;
       if(outcome==='accepted'){
         localStorage.setItem('rr_install_completed','1');
-        setHidden(true);setOpen(false);
+        setHidden(true);
         try{await mutate('push_subscriptions','POST',{user_id:guestId,endpoint:'pwa-installed',subscription:{platform:navigator.userAgent},enabled:true})}catch{}
       }
-    } else if(isIos){
-      // iOS — in-app step-by-step guide, NO alert()
-      setIosGuide(true);
-    } else {
-      // Desktop / other — in-app manual guide, NO alert()
-      setManualGuide(true);
     }
-    setInstalling(false);
   };
 
-  const close=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false);setIosGuide(false);setManualGuide(false)};
-
-  return <>
-    {open&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
-      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl">
-        <button onClick={close} className="float-right rounded-full bg-zinc-100 p-2"><X/></button>
-
-        {/* Main install screen */}
-        {!iosGuide&&!manualGuide&&<>
-          <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
-          <h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2>
-          <p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p>
-          <button onClick={install} disabled={installing} className="btn mt-5 w-full disabled:opacity-60">{installing?<Loader2 className="animate-spin mx-auto"/>:'📲 Install App'}</button>
-          <button onClick={close} className="mt-3 font-bold text-zinc-500">Abhi nahi</button>
-        </>}
-
-        {/* iOS step-by-step guide */}
-        {iosGuide&&<>
-          <h2 className="text-2xl font-black mb-4">iPhone par Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Neeche Safari toolbar mein <b>Share button</b> (box with arrow ↑) dabao</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span>Scroll karke <b>"Add to Home Screen"</b> option select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> button dabao</span></li>
-          </ol>
-          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai. Chrome/Firefox mein nahi.</p>
-          <button onClick={()=>setIosGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
-        {/* Desktop / manual guide */}
-        {manualGuide&&<>
-          <h2 className="text-2xl font-black mb-4">App Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Browser ke address bar mein right side mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo — app install ho jaayega!</span></li>
-          </ol>
-          <button onClick={()=>setManualGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
-      </motion.div>
-    </div>}
-    <button onClick={()=>setOpen(true)} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6"><Download className="mr-2 inline" size={18}/>Install App</button>
-  </>
+  return(
+    <button onClick={install} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6">
+      <Download className="mr-2 inline" size={18}/>Install App
+    </button>
+  );
 }
 
 function Policies(){const {data}=useApp();return <section className="space-y-4"><Title t="Legal Policies" s="Privacy Policy, Terms aur Payment policies."/>{(data.legal_policies||[]).filter(p=>p.is_published).map(p=><article key={p.id} className="card p-6"><h2 className="text-2xl font-black">{p.title}</h2><p className="text-sm font-bold text-[var(--rr-accent)]">Version {p.version}</p><p className="mt-4 whitespace-pre-line text-zinc-600">{p.body}</p></article>)}</section>}
@@ -627,6 +554,7 @@ function Admin(){
     {tab==='json'&&<div className="panel"><h2 className="adminh"><FileJson/> JSON Backup / Restore</h2><button className="save" onClick={exp}>Export Full JSON</button><select className="input" value={importResource} onChange={e=>setImportResource(e.target.value)}>{resources.map(r=><option key={r}>{r}</option>)}</select><textarea className="input min-h-56" value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste JSON array or full backup JSON here"/><div className="flex gap-2"><button className="btn" onClick={()=>doImport(true)}>Validate</button><button className="btn" onClick={()=>doImport(false)}>Import</button><button className="btn" onClick={()=>refresh()}>Refresh</button></div>{importMsg&&<pre className="max-h-64 overflow-auto rounded-2xl bg-zinc-950 p-4 text-xs text-green-200">{importMsg}</pre>}</div>}
   </main>
 }
+
 function Crud({resource,fields,checks,defaults}:{resource:string;fields:string[];checks?:string[];defaults?:any}){
   const {data,mutate}=useApp();
   const [f,setF]=useState<any>(defaults||{});
@@ -653,7 +581,6 @@ function Info(){
 function Empty(){return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50}/><h2 className="text-3xl font-black">No content yet</h2></div>}
 function Title({t,s}:{t:string;s:string}){return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>}
 
-// ─── FIX 2: Back button — pehle app ke andar navigate karo, last mein exit puchho ─
 function Shell(){
   const {loading,theme,data,user}=useApp();
   const [tab,setTab]=useState('home');
@@ -661,7 +588,6 @@ function Shell(){
   const [exitAsk,setExitAsk]=useState(false);
   const isLoggedIn=!!(user?.email);
 
-  // Tab change — stack me push karo
   const go=(t:string)=>{
     setTab(t);
     setHistoryStack(prev=>[...prev,t]);
@@ -675,23 +601,18 @@ function Shell(){
   },[theme]);
 
   useEffect(()=>{
-    // History entry push karo taaki popstate fire ho
     history.pushState({rr:true},'',location.href);
 
     const onPop=()=>{
-      // Pehle check karo kya stack mein kuch hai wapas jaane ke liye
       setHistoryStack(prev=>{
         if(prev.length>1){
-          // Stack se last entry hatao aur us tab par jao
           const newStack=[...prev];
           newStack.pop();
           const prevTab=newStack[newStack.length-1];
           setTab(prevTab);
-          // Browser history maintain karo
           history.pushState({rr:true},'',location.href);
           return newStack;
         } else {
-          // Stack khaali hai — exit confirm karo
           setExitAsk(true);
           history.pushState({rr:true},'',location.href);
           return prev;
@@ -727,7 +648,6 @@ function Shell(){
     <PromoVideoModal go={go}/>
     <PwaInstall/>
 
-    {/* Exit confirmation — sirf tab dikhe jab stack khaali ho */}
     {exitAsk&&<div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4 backdrop-blur">
       <motion.div initial={{scale:.93,opacity:0}} animate={{scale:1,opacity:1}} className="w-full max-w-sm rounded-[32px] bg-white p-6 text-center shadow-2xl">
         <h2 className="text-2xl font-black">Exit ReelRamp Pro?</h2>
