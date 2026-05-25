@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, createContext, useContext, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, Bookmark, Crown, Download, Edit3, Facebook, FileJson, FileText, Film, Gift, Heart, Home, Instagram, Loader2, Lock, Maximize, MessageCircle, Palette, Pause, Play, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, Trash2, User, Volume2, VolumeX, Wallet, X, Youtube, Bell, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Bookmark, Crown, Download, Edit3, Facebook, FileJson, FileText, Film, Gift, Heart, Home, Instagram, Loader2, Lock, Maximize, MessageCircle, Palette, Pause, Play, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, Trash2, User, Volume2, VolumeX, Wallet, X, Youtube, Bell } from 'lucide-react';
 import supabase from './lib/supabase';
 import { handleGoogleRedirect, signInWithGoogle } from './lib/googleAuth';
 import type { Session } from '@supabase/supabase-js';
@@ -244,116 +244,17 @@ function ForYou(){
   </section>
 }
 
-// ─── FIX 3: Plans page — plan brief modal + coming soon payment ───────────────
 function Plans(){
   const {plans,payment,guestId,mutate,subscribed}=useApp();
-  const [selected,setSelected]=useState<Plan|null>(null);
-  const [step,setStep]=useState<'brief'|'pay'|'done'>('brief');
-  const [busy,setBusy]=useState(false);
-
-  const openPlan=(p:Plan)=>{setSelected(p);setStep('brief')};
-  const close=()=>{setSelected(null);setStep('brief')};
-
-  const confirmPay=async()=>{
-    if(!selected)return;
-    setBusy(true);
-    try{
-      await mutate('payments','POST',{user_id:guestId,plan_id:selected.id,amount:selected.price,gateway:payment.gateway,status:'success',notes:'Activated'});
-      await mutate('subscriptions','POST',{user_id:guestId,plan:selected.name,status:'active',expires_at:new Date(Date.now()+selected.duration_days*86400000).toISOString()});
-      setStep('done');
-    }catch{}
-    finally{setBusy(false)}
+  const activate=async(p:Plan)=>{
+    await mutate('payments','POST',{user_id:guestId,plan_id:p.id,amount:p.price,gateway:payment.gateway,status:'success',notes:'Activated'});
+    await mutate('subscriptions','POST',{user_id:guestId,plan:p.name,status:'active',expires_at:new Date(Date.now()+p.duration_days*86400000).toISOString()});
   };
-
-  const hasGateway=!!(payment.razorpayKey||payment.upiId);
-
   return <section id="plans" className="space-y-5">
     <Title t="Plans" s="Premium plans admin panel se manage hote hain."/>
-    {subscribed&&<div className="rounded-3xl bg-green-100 p-4 font-black text-green-800 flex items-center gap-2"><CheckCircle2 size={22}/> Premium Active ✅</div>}
-
-    <div className="grid gap-4 md:grid-cols-3">
-      {plans.filter(p=>p.is_active).map(p=>(
-        <div key={p.id} className="card p-6 flex flex-col">
-          <Crown className="text-yellow-500"/>
-          <h3 className="mt-3 text-2xl font-black">{p.name}</h3>
-          <p className="text-4xl font-black">{money(p.price)}</p>
-          <p className="text-zinc-500">{p.duration_days} days</p>
-          {p.features&&typeof p.features==='object'&&<ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">{Object.entries(p.features).map(([k,v]:any)=><li key={k} className="flex items-center gap-2"><CheckCircle2 size={14} className="text-green-500 shrink-0"/>{v}</li>)}</ul>}
-          <button
-            type="button"
-            onClick={()=>openPlan(p)}
-            className="btn mt-5 w-full"
-          >
-            Select Plan
-          </button>
-        </div>
-      ))}
-    </div>
-
-    {/* Plan Brief + Payment Modal */}
-    <AnimatePresence>
-      {selected&&(
-        <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur" onClick={close}>
-          <motion.div initial={{scale:.93,y:24}} animate={{scale:1,y:0}} exit={{scale:.93,y:24}} onClick={e=>e.stopPropagation()} className="w-full max-w-sm rounded-[34px] bg-white shadow-2xl overflow-hidden">
-
-            {/* Step: Brief */}
-            {step==='brief'&&<div className="p-7 space-y-4">
-              <div className="flex justify-between items-start"><div><p className="text-xs font-black text-[var(--rr-accent)] uppercase tracking-wider">Plan Details</p><h2 className="text-3xl font-black mt-1">{selected.name}</h2></div><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
-              <div className="rounded-3xl bg-zinc-950 text-white p-5">
-                <p className="text-4xl font-black">{money(selected.price)}</p>
-                <p className="text-white/60 text-sm mt-1">{selected.duration_days} din ka access · Auto-renew nahi</p>
-              </div>
-              {selected.features&&typeof selected.features==='object'&&(
-                <ul className="space-y-2">{Object.entries(selected.features).map(([k,v]:any)=>(
-                  <li key={k} className="flex items-center gap-3 text-sm font-bold"><span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-green-100 text-green-600"><CheckCircle2 size={14}/></span>{v}</li>
-                ))}</ul>
-              )}
-              <button type="button" onClick={()=>setStep('pay')} className="btn w-full">Proceed to Payment →</button>
-            </div>}
-
-            {/* Step: Pay — Coming Soon if no gateway */}
-            {step==='pay'&&<div className="p-7 space-y-4">
-              <div className="flex justify-between items-center"><h2 className="text-2xl font-black">Payment</h2><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
-              <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between"><span>{selected.name}</span><span>{money(selected.price)}</span></div>
-
-              {!hasGateway?(
-                /* ── Coming Soon Block ── */
-                <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-800 p-6 text-center text-white space-y-3">
-                  <div className="text-4xl">🚀</div>
-                  <h3 className="text-xl font-black">Payment Gateway</h3>
-                  <p className="text-sm text-white/70">Coming Soon</p>
-                  <p className="text-xs text-white/50 leading-relaxed">Abhi payment gateway setup nahi hua hai. Jald hi Razorpay / UPI activate hoga.</p>
-                  {payment.whatsapp&&<a href={`https://wa.me/${payment.whatsapp.replace(/\D/g,'')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">WhatsApp pe contact karo</a>}
-                </div>
-              ):(
-                /* ── Gateway Available ── */
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-zinc-200 p-4 text-sm space-y-1">
-                    <p className="font-black">Gateway: {payment.gateway}</p>
-                    {payment.upiId&&<p className="text-zinc-600">UPI: {payment.upiId}</p>}
-                    {payment.instructions&&<p className="text-zinc-500 text-xs mt-2">{payment.instructions}</p>}
-                  </div>
-                  <button type="button" disabled={busy} onClick={confirmPay} className="btn w-full disabled:opacity-60">
-                    {busy?<Loader2 className="animate-spin mx-auto" size={20}/>:'Confirm & Activate Plan'}
-                  </button>
-                </div>
-              )}
-
-              <button type="button" onClick={()=>setStep('brief')} className="w-full text-center text-sm font-bold text-zinc-500 py-2">← Wapas jaao</button>
-            </div>}
-
-            {/* Step: Done */}
-            {step==='done'&&<div className="p-8 text-center space-y-4">
-              <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-green-100"><CheckCircle2 size={48} className="text-green-500"/></div>
-              <h2 className="text-3xl font-black">Plan Activated!</h2>
-              <p className="text-zinc-600">{selected.name} — {selected.duration_days} din ke liye active hai.</p>
-              <button type="button" onClick={close} className="btn w-full">Enjoy Premium 🎉</button>
-            </div>}
-
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    {subscribed&&<div className="rounded-3xl bg-green-100 p-4 font-black text-green-800">Premium Active ✅</div>}
+    <div className="grid gap-4 md:grid-cols-3">{plans.filter(p=>p.is_active).map(p=><div key={p.id} className="card p-6"><Crown className="text-yellow-500"/><h3 className="mt-3 text-2xl font-black">{p.name}</h3><p className="text-4xl font-black">{money(p.price)}</p><p className="text-zinc-500">{p.duration_days} days</p><button onClick={()=>activate(p)} className="btn mt-5 w-full">Activate</button></div>)}</div>
+    <div className="card p-5"><b>Payment Gateway:</b><p>{payment.gateway}{payment.upiId?` · UPI: ${payment.upiId}`:''}{payment.whatsapp?` · WhatsApp: ${payment.whatsapp}`:''}</p></div>
   </section>
 }
 
@@ -424,16 +325,13 @@ function WalletReferral(){
 
 function HelpCenter(){const {data}=useApp();return <section className="space-y-5"><Title t="Help Center" s="Video, account, subscription aur support FAQ."/>{(data.help_articles||[]).filter(a=>a.is_published).map(a=><article key={a.id} className="card p-6"><p className="font-black text-[var(--rr-accent)]">{a.category}</p><h2 className="text-2xl font-black">{a.title}</h2><p className="mt-3 whitespace-pre-line text-zinc-600">{a.body}</p></article>)}</section>}
 
-// ─── FIX 1: PWA Install — alert() hataya, in-app guidance dikhao ─────────────
 function PwaInstall(){
   const {guestId,mutate}=useApp();
   const [deferred,setDeferred]=useState<any>(null);
   const [hidden,setHidden]=useState(isInstalledApp()||localStorage.getItem('rr_install_closed')==='1');
   const [open,setOpen]=useState(false);
   const [installing,setInstalling]=useState(false);
-  const [iosGuide,setIosGuide]=useState(false);
-  const [manualGuide,setManualGuide]=useState(false);
-  const isIos=/iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const [showIos,setShowIos]=useState(false);
 
   useEffect(()=>{
     if(isInstalledApp()){setHidden(true);return}
@@ -455,67 +353,53 @@ function PwaInstall(){
   if(hidden||isInstalledApp())return null;
 
   const install=async()=>{
-    setInstalling(true);
     if(deferred){
-      // Android Chrome — direct native prompt
+      setInstalling(true);
       deferred.prompt();
       const {outcome}=await deferred.userChoice;
+      setInstalling(false);
       if(outcome==='accepted'){
         localStorage.setItem('rr_install_completed','1');
         setHidden(true);setOpen(false);
         try{await mutate('push_subscriptions','POST',{user_id:guestId,endpoint:'pwa-installed',subscription:{platform:navigator.userAgent},enabled:true})}catch{}
       }
-    } else if(isIos){
-      // iOS — in-app step-by-step guide, NO alert()
-      setIosGuide(true);
     } else {
-      // Desktop / other — in-app manual guide, NO alert()
-      setManualGuide(true);
+      setOpen(false);
+      setShowIos(true);
     }
-    setInstalling(false);
   };
 
-  const close=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false);setIosGuide(false);setManualGuide(false)};
+  const close=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false)};
 
   return <>
     {open&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
       <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl">
         <button onClick={close} className="float-right rounded-full bg-zinc-100 p-2"><X/></button>
-
-        {/* Main install screen */}
-        {!iosGuide&&!manualGuide&&<>
-          <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
-          <h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2>
-          <p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p>
-          <button onClick={install} disabled={installing} className="btn mt-5 w-full disabled:opacity-60">{installing?<Loader2 className="animate-spin mx-auto"/>:'📲 Install App'}</button>
-          <button onClick={close} className="mt-3 font-bold text-zinc-500">Abhi nahi</button>
-        </>}
-
-        {/* iOS step-by-step guide */}
-        {iosGuide&&<>
-          <h2 className="text-2xl font-black mb-4">iPhone par Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Neeche Safari toolbar mein <b>Share button</b> (box with arrow ↑) dabao</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span>Scroll karke <b>"Add to Home Screen"</b> option select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> button dabao</span></li>
-          </ol>
-          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai. Chrome/Firefox mein nahi.</p>
-          <button onClick={()=>setIosGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
-        {/* Desktop / manual guide */}
-        {manualGuide&&<>
-          <h2 className="text-2xl font-black mb-4">App Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Browser ke address bar mein right side mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo — app install ho jaayega!</span></li>
-          </ol>
-          <button onClick={()=>setManualGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
+        <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
+        <h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2>
+        <p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p>
+        <button onClick={install} disabled={installing} className="btn mt-5 w-full disabled:opacity-60">{installing?<Loader2 className="animate-spin mx-auto"/>:'📲 Install App'}</button>
+        <button onClick={close} className="mt-3 font-bold text-zinc-500">Abhi nahi</button>
+      </motion.div>
+    </div>}
+    {showIos&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
+      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl">
+        <button onClick={()=>setShowIos(false)} className="float-right rounded-full bg-zinc-100 p-2"><X/></button>
+        <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
+        <h2 className="mt-4 text-3xl font-black">Install Kaise Karein</h2>
+        {/iPhone|iPad|iPod/i.test(navigator.userAgent)
+          ?<ol className="mt-3 space-y-3 text-left text-zinc-600 text-sm">
+              <li>1. Neeche <b>Share</b> button dabao ⬆️</li>
+              <li>2. <b>"Add to Home Screen"</b> select karo</li>
+              <li>3. Upar right mein <b>"Add"</b> dabao</li>
+            </ol>
+          :<ol className="mt-3 space-y-3 text-left text-zinc-600 text-sm">
+              <li>1. Browser ke <b>menu (3 dots ⋮)</b> mein jaao</li>
+              <li>2. <b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</li>
+              <li>3. <b>"Install"</b> dabao</li>
+            </ol>
+        }
+        <button onClick={()=>setShowIos(false)} className="btn mt-5 w-full">Samajh Gaya</button>
       </motion.div>
     </div>}
     <button onClick={()=>setOpen(true)} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6"><Download className="mr-2 inline" size={18}/>Install App</button>
@@ -627,6 +511,7 @@ function Admin(){
     {tab==='json'&&<div className="panel"><h2 className="adminh"><FileJson/> JSON Backup / Restore</h2><button className="save" onClick={exp}>Export Full JSON</button><select className="input" value={importResource} onChange={e=>setImportResource(e.target.value)}>{resources.map(r=><option key={r}>{r}</option>)}</select><textarea className="input min-h-56" value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste JSON array or full backup JSON here"/><div className="flex gap-2"><button className="btn" onClick={()=>doImport(true)}>Validate</button><button className="btn" onClick={()=>doImport(false)}>Import</button><button className="btn" onClick={()=>refresh()}>Refresh</button></div>{importMsg&&<pre className="max-h-64 overflow-auto rounded-2xl bg-zinc-950 p-4 text-xs text-green-200">{importMsg}</pre>}</div>}
   </main>
 }
+
 function Crud({resource,fields,checks,defaults}:{resource:string;fields:string[];checks?:string[];defaults?:any}){
   const {data,mutate}=useApp();
   const [f,setF]=useState<any>(defaults||{});
@@ -653,91 +538,50 @@ function Info(){
 function Empty(){return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50}/><h2 className="text-3xl font-black">No content yet</h2></div>}
 function Title({t,s}:{t:string;s:string}){return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>}
 
-// ─── FIX 2: Back button — pehle app ke andar navigate karo, last mein exit puchho ─
 function Shell(){
   const {loading,theme,data,user}=useApp();
   const [tab,setTab]=useState('home');
-  const [history_stack,setHistoryStack]=useState<string[]>(['home']);
   const [exitAsk,setExitAsk]=useState(false);
   const isLoggedIn=!!(user?.email);
-
-  // Tab change — stack me push karo
-  const go=(t:string)=>{
-    setTab(t);
-    setHistoryStack(prev=>[...prev,t]);
-  };
-
   useEffect(()=>{
     document.documentElement.style.setProperty('--rr-primary',theme.primary||'#c5a26f');
     document.documentElement.style.setProperty('--rr-accent',theme.accent||'#ff4f8b');
     document.documentElement.style.setProperty('--rr-bg',theme.bg||'#fff7ed');
     document.documentElement.style.setProperty('--rr-radius',theme.radius||'30px');
   },[theme]);
-
   useEffect(()=>{
-    // History entry push karo taaki popstate fire ho
     history.pushState({rr:true},'',location.href);
-
-    const onPop=()=>{
-      // Pehle check karo kya stack mein kuch hai wapas jaane ke liye
-      setHistoryStack(prev=>{
-        if(prev.length>1){
-          // Stack se last entry hatao aur us tab par jao
-          const newStack=[...prev];
-          newStack.pop();
-          const prevTab=newStack[newStack.length-1];
-          setTab(prevTab);
-          // Browser history maintain karo
-          history.pushState({rr:true},'',location.href);
-          return newStack;
-        } else {
-          // Stack khaali hai — exit confirm karo
-          setExitAsk(true);
-          history.pushState({rr:true},'',location.href);
-          return prev;
-        }
-      });
+    const onPop=(e:PopStateEvent)=>{
+      if(e.state?.rr){
+        setExitAsk(true);
+        history.pushState({rr:true},'',location.href);
+      }
     };
-
     window.addEventListener('popstate',onPop);
     return()=>window.removeEventListener('popstate',onPop);
   },[]);
-
   if(new URLSearchParams(location.search).get('admin')==='1')return <AdminGate/>;
   if(loading)return <div className="grid min-h-screen place-items-center bg-orange-50"><Loader2 className="animate-spin text-[var(--rr-accent)]" size={54}/></div>;
-
   const popup=(data.popup_settings||[]).find(p=>p.enabled);
-  const page=tab==='home'?<HomePage go={go}/>:tab==='forYou'?<ForYou/>:tab==='series'?<SeriesPage go={go}/>:tab==='search'?<SearchPage go={go}/>:tab==='plans'?<Plans/>:tab==='wallet'?<WalletReferral/>:tab==='help'?<HelpCenter/>:tab==='profile'?<Profile/>:<Policies/>;
-
+  const page=tab==='home'?<HomePage go={setTab}/>:tab==='forYou'?<ForYou/>:tab==='series'?<SeriesPage go={setTab}/>:tab==='search'?<SearchPage go={setTab}/>:tab==='plans'?<Plans/>:tab==='wallet'?<WalletReferral/>:tab==='help'?<HelpCenter/>:tab==='profile'?<Profile/>:<Policies/>;
   return <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
     <header className="sticky top-0 z-30 border-b border-black/5 bg-white/85 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
-        <button onClick={()=>go('home')} className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span><b className="text-xl">{theme.brand||'ReelRamp Pro'}</b></button>
-        <button onClick={()=>go('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn?'bg-[var(--rr-primary)] text-black':'bg-zinc-950 text-white'}`}>{isLoggedIn?(user?.display_name?.split(' ')[0]||user?.email?.split('@')[0]||'Profile'):'Login'}</button>
+        <button onClick={()=>setTab('home')} className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span><b className="text-xl">{theme.brand||'ReelRamp Pro'}</b></button>
+        <button onClick={()=>setTab('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn?'bg-[var(--rr-primary)] text-black':'bg-zinc-950 text-white'}`}>{isLoggedIn?(user?.display_name?.split(' ')[0]||user?.email?.split('@')[0]||'Profile'):'Login'}</button>
       </div>
-      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3"><button onClick={()=>go('series')} className="pill">Series</button><button onClick={()=>go('search')} className="pill">Search</button><button onClick={()=>go('wallet')} className="pill">Wallet</button><button onClick={()=>go('help')} className="pill">Help</button></div>
+      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3"><button onClick={()=>setTab('series')} className="pill">Series</button><button onClick={()=>setTab('search')} className="pill">Search</button><button onClick={()=>setTab('wallet')} className="pill">Wallet</button><button onClick={()=>setTab('help')} className="pill">Help</button></div>
     </header>
     <NotificationStrip/>
     {popup&&<div className="mx-auto mt-4 max-w-6xl px-4"><div className="rounded-3xl bg-gradient-to-r from-pink-500 to-orange-400 p-4 text-white shadow-lg"><b>{popup.title}</b><p>{popup.message}</p></div></div>}
     <main className="mx-auto max-w-6xl p-4 pb-28 md:p-8">{page}</main>
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 backdrop-blur">
-      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">{([['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?'Profile':'Login']] as const).map(([id,Icon,label])=><button key={id} onClick={()=>go(id as string)} className={`rounded-2xl p-2 text-xs font-black ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}><Icon className="mx-auto mb-1" size={20}/>{label}</button>)}</div>
+      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">{([['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?'Profile':'Login']] as const).map(([id,Icon,label])=><button key={id} onClick={()=>setTab(id as string)} className={`rounded-2xl p-2 text-xs font-black ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}><Icon className="mx-auto mb-1" size={20}/>{label}</button>)}</div>
     </nav>
-    <footer className="px-4 pb-32 text-center text-sm text-zinc-500"><button onClick={()=>go('policies')} className="font-bold underline">Legal Policies</button><p>© 2026 ReelRamp Originals Pvt. Ltd.</p></footer>
-    <PromoVideoModal go={go}/>
+    <footer className="px-4 pb-32 text-center text-sm text-zinc-500"><button onClick={()=>setTab('policies')} className="font-bold underline">Legal Policies</button><p>© 2026 ReelRamp Originals Pvt. Ltd.</p></footer>
+    <PromoVideoModal go={setTab}/>
     <PwaInstall/>
-
-    {/* Exit confirmation — sirf tab dikhe jab stack khaali ho */}
-    {exitAsk&&<div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4 backdrop-blur">
-      <motion.div initial={{scale:.93,opacity:0}} animate={{scale:1,opacity:1}} className="w-full max-w-sm rounded-[32px] bg-white p-6 text-center shadow-2xl">
-        <h2 className="text-2xl font-black">Exit ReelRamp Pro?</h2>
-        <p className="mt-2 text-zinc-600">Kya aap app se bahar jana chahte hain?</p>
-        <div className="mt-5 grid grid-cols-2 gap-3">
-          <button onClick={()=>setExitAsk(false)} className="btn">Ruko</button>
-          <button onClick={()=>{setExitAsk(false);history.go(-2)}} className="rounded-full bg-zinc-950 px-5 py-3 font-black text-white">Exit</button>
-        </div>
-      </motion.div>
-    </div>}
+    {exitAsk&&<div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4 backdrop-blur"><div className="w-full max-w-sm rounded-[32px] bg-white p-6 text-center shadow-2xl"><h2 className="text-2xl font-black">Exit ReelRamp Pro?</h2><p className="mt-2 text-zinc-600">Kya aap app se bahar jana chahte hain?</p><div className="mt-5 grid grid-cols-2 gap-3"><button onClick={()=>setExitAsk(false)} className="btn">Stay</button><button onClick={()=>{setExitAsk(false);history.back()}} className="rounded-full bg-zinc-950 px-5 py-3 font-black text-white">Exit</button></div></div></div>}
   </div>
 }
 
