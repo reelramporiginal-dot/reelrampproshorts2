@@ -18,7 +18,7 @@ const CDN=(import.meta.env.VITE_BUNNY_CDN_URL||'').replace(/\/$/,'')+'/';
 const ADMIN_SECRET=import.meta.env.VITE_ADMIN_SECRET||'RRPRO2026';
 const resources=['videos','series','categories','banners','popup_settings','platform_settings','admin_settings','legal_policies','plans','users','subscriptions','payments','watch_history','likes','bookmarks','video_views','support_tickets','promo_campaigns','notifications','promo_events','audit_logs','referrals','wallet_transactions','content_reports','error_logs','help_articles','push_subscriptions'];
 const defaultTheme={brand:'ReelRamp Pro',logoText:'RR',primary:'#c5a26f',accent:'#ff4f8b',bg:'#fff7ed',surface:'#ffffff',text:'#23170f',radius:'30px'};
-const defaultPayment={gateway:'Razorpay / UPI',razorpayKey:'',upiId:'',monthlyPrice:99,annualPrice:899,whatsapp:'+917307493338',instructions:'Admin panel se Razorpay/UPI details configure karein.'};
+const defaultPayment={gateway:'',razorpayKey:'',razorpaySecret:'',upiId:'',upiQr:'',monthlyPrice:99,annualPrice:899,whatsapp:'+917307493338',instructions:'',webhookSecret:'',testMode:false};
 const defaultPlayer={mode:'default',bunnyEmbedBase:'https://iframe.mediadelivery.net/embed',bunnyLibraryId:'',autoplay:true,muted:false,responsive:true,controls:true};
 const fallbackImages={hero:'/images/reelramp-hero.jpg',studio:'/images/reelramp-studio.jpg',promo:'/images/reelramp-promo.jpg'};
 const api=(r:string)=>`/api/${r}`;
@@ -244,7 +244,6 @@ function ForYou(){
   </section>
 }
 
-// ─── FIX 3: Plans page — plan brief modal + coming soon payment ───────────────
 function Plans(){
   const {plans,payment,guestId,mutate,subscribed}=useApp();
   const [selected,setSelected]=useState<Plan|null>(null);
@@ -279,24 +278,16 @@ function Plans(){
           <p className="text-4xl font-black">{money(p.price)}</p>
           <p className="text-zinc-500">{p.duration_days} days</p>
           {p.features&&typeof p.features==='object'&&<ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">{Object.entries(p.features).map(([k,v]:any)=><li key={k} className="flex items-center gap-2"><CheckCircle2 size={14} className="text-green-500 shrink-0"/>{v}</li>)}</ul>}
-          <button
-            type="button"
-            onClick={()=>openPlan(p)}
-            className="btn mt-5 w-full"
-          >
-            Select Plan
-          </button>
+          <button type="button" onClick={()=>openPlan(p)} className="btn mt-5 w-full">Select Plan</button>
         </div>
       ))}
     </div>
 
-    {/* Plan Brief + Payment Modal */}
     <AnimatePresence>
       {selected&&(
         <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur" onClick={close}>
           <motion.div initial={{scale:.93,y:24}} animate={{scale:1,y:0}} exit={{scale:.93,y:24}} onClick={e=>e.stopPropagation()} className="w-full max-w-sm rounded-[34px] bg-white shadow-2xl overflow-hidden">
 
-            {/* Step: Brief */}
             {step==='brief'&&<div className="p-7 space-y-4">
               <div className="flex justify-between items-start"><div><p className="text-xs font-black text-[var(--rr-accent)] uppercase tracking-wider">Plan Details</p><h2 className="text-3xl font-black mt-1">{selected.name}</h2></div><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
               <div className="rounded-3xl bg-zinc-950 text-white p-5">
@@ -311,13 +302,11 @@ function Plans(){
               <button type="button" onClick={()=>setStep('pay')} className="btn w-full">Proceed to Payment →</button>
             </div>}
 
-            {/* Step: Pay — Coming Soon if no gateway */}
             {step==='pay'&&<div className="p-7 space-y-4">
               <div className="flex justify-between items-center"><h2 className="text-2xl font-black">Payment</h2><button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18}/></button></div>
               <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between"><span>{selected.name}</span><span>{money(selected.price)}</span></div>
 
               {!hasGateway?(
-                /* ── Coming Soon Block ── */
                 <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-800 p-6 text-center text-white space-y-3">
                   <div className="text-4xl">🚀</div>
                   <h3 className="text-xl font-black">Payment Gateway</h3>
@@ -326,11 +315,11 @@ function Plans(){
                   {payment.whatsapp&&<a href={`https://wa.me/${payment.whatsapp.replace(/\D/g,'')}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">WhatsApp pe contact karo</a>}
                 </div>
               ):(
-                /* ── Gateway Available ── */
                 <div className="space-y-3">
                   <div className="rounded-2xl border border-zinc-200 p-4 text-sm space-y-1">
                     <p className="font-black">Gateway: {payment.gateway}</p>
                     {payment.upiId&&<p className="text-zinc-600">UPI: {payment.upiId}</p>}
+                    {payment.upiQr&&<img src={payment.upiQr} alt="UPI QR" className="mx-auto mt-2 h-32 w-32 rounded-xl object-contain border"/>}
                     {payment.instructions&&<p className="text-zinc-500 text-xs mt-2">{payment.instructions}</p>}
                   </div>
                   <button type="button" disabled={busy} onClick={confirmPay} className="btn w-full disabled:opacity-60">
@@ -342,7 +331,6 @@ function Plans(){
               <button type="button" onClick={()=>setStep('brief')} className="w-full text-center text-sm font-bold text-zinc-500 py-2">← Wapas jaao</button>
             </div>}
 
-            {/* Step: Done */}
             {step==='done'&&<div className="p-8 text-center space-y-4">
               <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-green-100"><CheckCircle2 size={48} className="text-green-500"/></div>
               <h2 className="text-3xl font-black">Plan Activated!</h2>
@@ -388,7 +376,7 @@ function Profile(){
         <div className="relative mt-6 grid gap-3 sm:grid-cols-3"><div className="rounded-3xl bg-white/10 p-4"><b>{subscribed?'Premium':'Free'}</b><small className="block text-white/60">Current Plan</small></div><div className="rounded-3xl bg-white/10 p-4"><b>{(data.bookmarks||[]).length}</b><small className="block text-white/60">Saved</small></div><div className="rounded-3xl bg-white/10 p-4"><b>{(data.watch_history||[]).length}</b><small className="block text-white/60">History</small></div></div>
       </div>
       <div className="bg-white p-6 text-zinc-950 md:p-8">
-        <div className="mb-5 flex items-center gap-3"><span className="grid h-14 w-14 place-items-center rounded-3xl bg-[var(--rr-primary)]"><User className="text-black"/></span><div><h2 className="text-2xl font-black">{isLoggedIn?`Namaste, ${user?.display_name?.split(' ')[0]||'User'}!`:'Member Login'}</h2><p className="text-sm text-zinc-500">{isLoggedIn?user?.email:'Apna account se login karein'}</p></div></div>
+        <div className="mb-5 flex items-center gap-3"><span className="grid h-14 w-14 place-items-center rounded-3xl bg-[var(--rr-primary)]"><User className="text-black"/></span><div><h2 className="text-2xl font-black">{isLoggedIn?`Namaste, ${user?.display_name?.trim().split(' ')[0]||'User'}!`:'Member Login'}</h2><p className="text-sm text-zinc-500">{isLoggedIn?user?.email:'Apna account se login karein'}</p></div></div>
         {!isLoggedIn&&<>
           <input className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="Display name"/>
           <input className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email address"/>
@@ -424,101 +412,119 @@ function WalletReferral(){
 
 function HelpCenter(){const {data}=useApp();return <section className="space-y-5"><Title t="Help Center" s="Video, account, subscription aur support FAQ."/>{(data.help_articles||[]).filter(a=>a.is_published).map(a=><article key={a.id} className="card p-6"><p className="font-black text-[var(--rr-accent)]">{a.category}</p><h2 className="text-2xl font-black">{a.title}</h2><p className="mt-3 whitespace-pre-line text-zinc-600">{a.body}</p></article>)}</section>}
 
-// ─── FIX 1: PWA Install — alert() hataya, in-app guidance dikhao ─────────────
+// ─── FIX 1: PWA Install — No modal on button click, direct browser install ────
 function PwaInstall(){
   const {guestId,mutate}=useApp();
   const [deferred,setDeferred]=useState<any>(null);
   const [hidden,setHidden]=useState(isInstalledApp()||localStorage.getItem('rr_install_closed')==='1');
-  const [open,setOpen]=useState(false);
+  const [iosOpen,setIosOpen]=useState(false);
+  const [manualOpen,setManualOpen]=useState(false);
   const [installing,setInstalling]=useState(false);
-  const [iosGuide,setIosGuide]=useState(false);
-  const [manualGuide,setManualGuide]=useState(false);
   const isIos=/iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   useEffect(()=>{
     if(isInstalledApp()){setHidden(true);return}
     if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
-    const markInstalled=()=>{localStorage.setItem('rr_install_completed','1');setHidden(true);setOpen(false)};
+
+    const markInstalled=()=>{
+      localStorage.setItem('rr_install_completed','1');
+      setHidden(true);
+      setIosOpen(false);
+      setManualOpen(false);
+    };
+
     const onPrompt=(e:any)=>{
       e.preventDefault();
       setDeferred(e);
-      if(localStorage.getItem('rr_install_closed')!=='1')setOpen(true);
+      // ✅ FIX: Koi modal auto-open NAHI karte — sirf deferred event save karte hain
+      // Browser khud install icon dikhata hai address bar mein
     };
+
     window.addEventListener('beforeinstallprompt',onPrompt);
     window.addEventListener('appinstalled',markInstalled);
-    const t=window.setTimeout(()=>{
-      if(!isInstalledApp()&&localStorage.getItem('rr_install_closed')!=='1')setOpen(true);
-    },4000);
-    return()=>{window.removeEventListener('beforeinstallprompt',onPrompt);window.removeEventListener('appinstalled',markInstalled);window.clearTimeout(t)};
+
+    return()=>{
+      window.removeEventListener('beforeinstallprompt',onPrompt);
+      window.removeEventListener('appinstalled',markInstalled);
+    }
   },[]);
 
   if(hidden||isInstalledApp())return null;
 
   const install=async()=>{
-    setInstalling(true);
     if(deferred){
-      // Android Chrome — direct native prompt
+      // ✅ Android Chrome — seedha native browser prompt trigger hoga, koi app modal nahi
+      setInstalling(true);
       deferred.prompt();
       const {outcome}=await deferred.userChoice;
+      setInstalling(false);
       if(outcome==='accepted'){
         localStorage.setItem('rr_install_completed','1');
-        setHidden(true);setOpen(false);
+        setHidden(true);
         try{await mutate('push_subscriptions','POST',{user_id:guestId,endpoint:'pwa-installed',subscription:{platform:navigator.userAgent},enabled:true})}catch{}
       }
     } else if(isIos){
-      // iOS — in-app step-by-step guide, NO alert()
-      setIosGuide(true);
+      // iOS Safari — in-app step guide dikhao
+      setIosOpen(true);
     } else {
-      // Desktop / other — in-app manual guide, NO alert()
-      setManualGuide(true);
+      // Desktop / other browser — manual guide
+      setManualOpen(true);
     }
-    setInstalling(false);
   };
 
-  const close=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true);setOpen(false);setIosGuide(false);setManualGuide(false)};
+  const closeIos=()=>setIosOpen(false);
+  const closeManual=()=>setManualOpen(false);
+  const dismissForever=()=>{localStorage.setItem('rr_install_closed','1');setHidden(true)};
 
   return <>
-    {open&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
-      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 text-center shadow-2xl">
-        <button onClick={close} className="float-right rounded-full bg-zinc-100 p-2"><X/></button>
-
-        {/* Main install screen */}
-        {!iosGuide&&!manualGuide&&<>
-          <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)]"><Download className="text-black" size={34}/></div>
-          <h2 className="mt-4 text-3xl font-black">Install ReelRamp Pro</h2>
-          <p className="mt-2 text-zinc-600">Home screen par app jaisa experience, faster launch aur premium story access.</p>
-          <button onClick={install} disabled={installing} className="btn mt-5 w-full disabled:opacity-60">{installing?<Loader2 className="animate-spin mx-auto"/>:'📲 Install App'}</button>
-          <button onClick={close} className="mt-3 font-bold text-zinc-500">Abhi nahi</button>
-        </>}
-
-        {/* iOS step-by-step guide */}
-        {iosGuide&&<>
-          <h2 className="text-2xl font-black mb-4">iPhone par Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Neeche Safari toolbar mein <b>Share button</b> (box with arrow ↑) dabao</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span>Scroll karke <b>"Add to Home Screen"</b> option select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> button dabao</span></li>
-          </ol>
-          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai. Chrome/Firefox mein nahi.</p>
-          <button onClick={()=>setIosGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
-        {/* Desktop / manual guide */}
-        {manualGuide&&<>
-          <h2 className="text-2xl font-black mb-4">App Install karein</h2>
-          <ol className="text-left space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Browser ke address bar mein right side mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo — app install ho jaayega!</span></li>
-          </ol>
-          <button onClick={()=>setManualGuide(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
-          <button onClick={close} className="mt-2 font-bold text-zinc-500 text-sm">Close</button>
-        </>}
-
+    {/* ── iOS Guide Modal ── */}
+    {iosOpen&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
+      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 shadow-2xl">
+        <button onClick={closeIos} className="float-right rounded-full bg-zinc-100 p-2"><X size={18}/></button>
+        <h2 className="text-2xl font-black mb-2">iPhone par Install karein</h2>
+        <p className="text-sm text-zinc-500 mb-5">Neeche diye steps follow karein:</p>
+        <ol className="space-y-4 text-sm font-bold">
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Safari toolbar mein <b>Share button</b> (box with arrow ↑) dabao</span></li>
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span>Scroll karke <b>"Add to Home Screen"</b> select karo</span></li>
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> button dabao</span></li>
+        </ol>
+        <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai.</p>
+        <button onClick={closeIos} className="btn mt-4 w-full">Samajh gaya ✓</button>
       </motion.div>
     </div>}
-    <button onClick={()=>setOpen(true)} className="fixed bottom-24 left-4 z-40 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl md:left-auto md:right-6"><Download className="mr-2 inline" size={18}/>Install App</button>
+
+    {/* ── Desktop / Other Browser Guide Modal ── */}
+    {manualOpen&&<div className="fixed inset-0 z-[60] grid place-items-center bg-black/55 p-4 backdrop-blur">
+      <motion.div initial={{scale:.92,opacity:0,y:20}} animate={{scale:1,opacity:1,y:0}} className="w-full max-w-sm rounded-[34px] bg-white p-6 shadow-2xl">
+        <button onClick={closeManual} className="float-right rounded-full bg-zinc-100 p-2"><X size={18}/></button>
+        <h2 className="text-2xl font-black mb-2">App Install karein</h2>
+        <p className="text-sm text-zinc-500 mb-5">Browser se install karne ke steps:</p>
+        <ol className="space-y-4 text-sm font-bold">
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Browser address bar ke right side mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</span></li>
+          <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo — app install ho jaayega!</span></li>
+        </ol>
+        <button onClick={closeManual} className="btn mt-4 w-full">Samajh gaya ✓</button>
+      </motion.div>
+    </div>}
+
+    {/* ── Floating Install Button ── */}
+    <button
+      onClick={install}
+      disabled={installing}
+      className="fixed bottom-24 left-4 z-40 flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl disabled:opacity-60 md:left-auto md:right-6"
+    >
+      {installing?<Loader2 className="animate-spin" size={18}/>:<Download size={18}/>}
+      Install App
+    </button>
+
+    {/* ── Small dismiss link near button ── */}
+    <button
+      onClick={dismissForever}
+      className="fixed bottom-[4.5rem] left-4 z-40 text-xs text-zinc-400 md:left-auto md:right-6"
+    >
+      Dismiss
+    </button>
   </>
 }
 
@@ -617,7 +623,114 @@ function Admin(){
     {tab==='reports'&&<DataTable resource="content_reports" rows={data.content_reports||[]}/>}
     {tab==='errors'&&<DataTable resource="error_logs" rows={data.error_logs||[]}/>}
     {tab==='audit'&&<DataTable resource="audit_logs" rows={data.audit_logs||[]}/>}
-    {tab==='theme'&&<div className="panel"><h2 className="adminh"><Palette/> Theme & Logo</h2>{['brand','logoText','primary','accent','bg','radius'].map(k=><input key={k} type={k==='primary'||k==='accent'||k==='bg'?'color':'text'} className="input" value={th[k]||''} onChange={e=>setTh({...th,[k]:e.target.value})} placeholder={k}/>)}<button className="save" onClick={()=>saveSetting('theme',th)}>Save Theme</button><h2 className="adminh mt-6"><Wallet/> Payment Setup</h2>{['gateway','razorpayKey','upiId','monthlyPrice','annualPrice','whatsapp','instructions','testMode','webhookSecret'].map(k=><input key={k} className="input" value={pay[k]||''} onChange={e=>setPay({...pay,[k]:e.target.value})} placeholder={k}/>)}<button className="save" onClick={()=>saveSetting('payment',pay)}>Save Payment</button></div>}
+
+    {/* ─── FIX 3: Theme + Payment Gateway Full Manual Setup ─────────────────── */}
+    {tab==='theme'&&<div className="panel space-y-3">
+      <h2 className="adminh"><Palette/> Theme & Logo</h2>
+      {['brand','logoText'].map(k=>(
+        <div key={k}>
+          <label className="mb-1 block text-sm font-black capitalize">{k}</label>
+          <input className="input" value={th[k]||''} onChange={e=>setTh({...th,[k]:e.target.value})} placeholder={k}/>
+        </div>
+      ))}
+      {(['primary','accent','bg'] as const).map(k=>(
+        <div key={k} className="flex items-center gap-3">
+          <label className="w-24 text-sm font-black capitalize">{k} Color</label>
+          <input type="color" className="h-10 w-16 cursor-pointer rounded-xl border border-zinc-200" value={th[k]||'#000000'} onChange={e=>setTh({...th,[k]:e.target.value})}/>
+          <input className="input flex-1" value={th[k]||''} onChange={e=>setTh({...th,[k]:e.target.value})} placeholder={`#hex`}/>
+        </div>
+      ))}
+      <div>
+        <label className="mb-1 block text-sm font-black">Border Radius</label>
+        <input className="input" value={th.radius||''} onChange={e=>setTh({...th,radius:e.target.value})} placeholder="30px"/>
+      </div>
+      <button className="save" onClick={()=>saveSetting('theme',th)}>💾 Save Theme</button>
+
+      {/* ── Payment Gateway ── */}
+      <div className="mt-8 rounded-3xl border-2 border-dashed border-zinc-200 p-6 space-y-4">
+        <h2 className="adminh"><Wallet/> Payment Gateway Setup</h2>
+        <p className="text-sm text-zinc-500">Yahan se Razorpay, UPI ya koi bhi gateway manually configure karein. Save karne ke baad Plans page par automatically activate ho jaayega.</p>
+
+        <div>
+          <label className="mb-1 block text-sm font-black">Gateway Type *</label>
+          <select className="input" value={pay.gateway||''} onChange={e=>setPay({...pay,gateway:e.target.value})}>
+            <option value="">-- Gateway Select Karein --</option>
+            <option value="Razorpay">Razorpay</option>
+            <option value="PayU">PayU</option>
+            <option value="Cashfree">Cashfree</option>
+            <option value="UPI Manual">UPI Manual</option>
+            <option value="Paytm">Paytm</option>
+            <option value="PhonePe">PhonePe</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-black">Razorpay Key ID</label>
+            <input className="input" value={pay.razorpayKey||''} onChange={e=>setPay({...pay,razorpayKey:e.target.value})} placeholder="rzp_live_xxxxxxxxxx"/>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-black">Razorpay Key Secret</label>
+            <input className="input" type="password" value={pay.razorpaySecret||''} onChange={e=>setPay({...pay,razorpaySecret:e.target.value})} placeholder="Secret key (hidden)"/>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-black">UPI ID</label>
+            <input className="input" value={pay.upiId||''} onChange={e=>setPay({...pay,upiId:e.target.value})} placeholder="yourname@upi"/>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-black">UPI QR Code Image URL</label>
+            <input className="input" value={pay.upiQr||''} onChange={e=>setPay({...pay,upiQr:e.target.value})} placeholder="https://... (QR image link)"/>
+          </div>
+        </div>
+
+        {pay.upiQr&&<div className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-3"><img src={pay.upiQr} alt="UPI QR Preview" className="h-20 w-20 rounded-xl object-contain border bg-white"/><p className="text-xs font-bold text-zinc-500">QR Preview — yahi users ko dikhega payment screen par.</p></div>}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-black">Monthly Price (₹)</label>
+            <input className="input" type="number" value={pay.monthlyPrice||''} onChange={e=>setPay({...pay,monthlyPrice:Number(e.target.value)})} placeholder="99"/>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-black">Annual Price (₹)</label>
+            <input className="input" type="number" value={pay.annualPrice||''} onChange={e=>setPay({...pay,annualPrice:Number(e.target.value)})} placeholder="899"/>
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-black">WhatsApp Support Number</label>
+          <input className="input" value={pay.whatsapp||''} onChange={e=>setPay({...pay,whatsapp:e.target.value})} placeholder="+917307493338"/>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-black">Webhook Secret (Razorpay)</label>
+          <input className="input" type="password" value={pay.webhookSecret||''} onChange={e=>setPay({...pay,webhookSecret:e.target.value})} placeholder="Webhook secret (optional)"/>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-sm font-black">Payment Instructions (users ko dikhega)</label>
+          <textarea className="input min-h-20" value={pay.instructions||''} onChange={e=>setPay({...pay,instructions:e.target.value})} placeholder="Jaise: UPI se payment karein aur screenshot WhatsApp par bhejein."/>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl bg-amber-50 p-3">
+          <label className="flex cursor-pointer items-center gap-2 font-black text-sm">
+            <input type="checkbox" checked={!!pay.testMode} onChange={e=>setPay({...pay,testMode:e.target.checked})} className="h-4 w-4"/>
+            Test Mode (Razorpay test keys use honge)
+          </label>
+        </div>
+
+        {/* Status indicator */}
+        <div className={`rounded-2xl p-3 text-sm font-bold flex items-center gap-2 ${pay.razorpayKey||pay.upiId?'bg-green-50 text-green-700':'bg-zinc-100 text-zinc-500'}`}>
+          {pay.razorpayKey||pay.upiId?<><CheckCircle2 size={16}/> Gateway configured — Plans page par payment active hai.</>:<><span className="text-lg">⏳</span> Gateway set nahi hai — Plans par "Coming Soon" dikhega.</>}
+        </div>
+
+        <button className="save w-full" onClick={()=>saveSetting('payment',pay)}>💾 Save Payment Settings</button>
+      </div>
+    </div>}
+
     {tab==='player'&&<div className="panel"><h2 className="adminh"><Play/> Video Player Settings</h2><label className="font-black">Player mode</label><select className="input" value={pl.mode||'default'} onChange={e=>setPl({...pl,mode:e.target.value})}><option value="default">Default Player (MP4/HLS)</option><option value="bunny">Bunny.net Player (iframe embed)</option></select>{['bunnyEmbedBase','bunnyLibraryId'].map(k=><input key={k} className="input" value={pl[k]||''} onChange={e=>setPl({...pl,[k]:e.target.value})} placeholder={k}/>)}<label className="flex gap-2 font-bold"><input type="checkbox" checked={pl.autoplay!==false} onChange={e=>setPl({...pl,autoplay:e.target.checked})}/> Autoplay</label><label className="flex gap-2 font-bold"><input type="checkbox" checked={!!pl.muted} onChange={e=>setPl({...pl,muted:e.target.checked})}/> Muted</label><label className="flex gap-2 font-bold"><input type="checkbox" checked={pl.responsive!==false} onChange={e=>setPl({...pl,responsive:e.target.checked})}/> Responsive</label><button className="save" onClick={()=>saveSetting('player',pl)}>Save Player Settings</button></div>}
     {tab==='content'&&<Crud resource="platform_settings" fields={['site_name','hero_title','hero_subtitle','pwa_message']} checks={['maintenance_mode']} defaults={{site_name:'ReelRamp Pro'}}/>}
     {tab==='policies'&&<Crud resource="legal_policies" fields={['title','type','version','body']} checks={['is_published']} defaults={{version:'1.0',is_published:true}}/>}
@@ -627,6 +740,7 @@ function Admin(){
     {tab==='json'&&<div className="panel"><h2 className="adminh"><FileJson/> JSON Backup / Restore</h2><button className="save" onClick={exp}>Export Full JSON</button><select className="input" value={importResource} onChange={e=>setImportResource(e.target.value)}>{resources.map(r=><option key={r}>{r}</option>)}</select><textarea className="input min-h-56" value={importText} onChange={e=>setImportText(e.target.value)} placeholder="Paste JSON array or full backup JSON here"/><div className="flex gap-2"><button className="btn" onClick={()=>doImport(true)}>Validate</button><button className="btn" onClick={()=>doImport(false)}>Import</button><button className="btn" onClick={()=>refresh()}>Refresh</button></div>{importMsg&&<pre className="max-h-64 overflow-auto rounded-2xl bg-zinc-950 p-4 text-xs text-green-200">{importMsg}</pre>}</div>}
   </main>
 }
+
 function Crud({resource,fields,checks,defaults}:{resource:string;fields:string[];checks?:string[];defaults?:any}){
   const {data,mutate}=useApp();
   const [f,setF]=useState<any>(defaults||{});
@@ -653,15 +767,21 @@ function Info(){
 function Empty(){return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50}/><h2 className="text-3xl font-black">No content yet</h2></div>}
 function Title({t,s}:{t:string;s:string}){return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>}
 
-// ─── FIX 2: Back button — pehle app ke andar navigate karo, last mein exit puchho ─
+// ─── FIX 2: Shell — display_name properly use karo, email nahi ────────────────
 function Shell(){
   const {loading,theme,data,user}=useApp();
   const [tab,setTab]=useState('home');
   const [history_stack,setHistoryStack]=useState<string[]>(['home']);
   const [exitAsk,setExitAsk]=useState(false);
-  const isLoggedIn=!!(user?.email);
 
-  // Tab change — stack me push karo
+  // ✅ FIX: display_name se pehla word lo, email par kabhi fallback mat karo header mein
+  const isLoggedIn=!!(user?.email);
+  const headerName=isLoggedIn
+    ?(user?.display_name?.trim()
+        ? user.display_name.trim().split(' ')[0]
+        : 'Profile')
+    :'Login';
+
   const go=(t:string)=>{
     setTab(t);
     setHistoryStack(prev=>[...prev,t]);
@@ -675,30 +795,23 @@ function Shell(){
   },[theme]);
 
   useEffect(()=>{
-    // History entry push karo taaki popstate fire ho
     history.pushState({rr:true},'',location.href);
-
     const onPop=()=>{
-      // Pehle check karo kya stack mein kuch hai wapas jaane ke liye
       setHistoryStack(prev=>{
         if(prev.length>1){
-          // Stack se last entry hatao aur us tab par jao
           const newStack=[...prev];
           newStack.pop();
           const prevTab=newStack[newStack.length-1];
           setTab(prevTab);
-          // Browser history maintain karo
           history.pushState({rr:true},'',location.href);
           return newStack;
         } else {
-          // Stack khaali hai — exit confirm karo
           setExitAsk(true);
           history.pushState({rr:true},'',location.href);
           return prev;
         }
       });
     };
-
     window.addEventListener('popstate',onPop);
     return()=>window.removeEventListener('popstate',onPop);
   },[]);
@@ -712,22 +825,41 @@ function Shell(){
   return <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
     <header className="sticky top-0 z-30 border-b border-black/5 bg-white/85 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
-        <button onClick={()=>go('home')} className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span><b className="text-xl">{theme.brand||'ReelRamp Pro'}</b></button>
-        <button onClick={()=>go('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn?'bg-[var(--rr-primary)] text-black':'bg-zinc-950 text-white'}`}>{isLoggedIn?(user?.display_name?.split(' ')[0]||user?.email?.split('@')[0]||'Profile'):'Login'}</button>
+        <button onClick={()=>go('home')} className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText||'RR'}</span>
+          <b className="text-xl">{theme.brand||'ReelRamp Pro'}</b>
+        </button>
+        {/* ✅ FIX: headerName — display_name ka pehla word, refresh ke baad bhi stable */}
+        <button onClick={()=>go('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn?'bg-[var(--rr-primary)] text-black':'bg-zinc-950 text-white'}`}>
+          {headerName}
+        </button>
       </div>
-      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3"><button onClick={()=>go('series')} className="pill">Series</button><button onClick={()=>go('search')} className="pill">Search</button><button onClick={()=>go('wallet')} className="pill">Wallet</button><button onClick={()=>go('help')} className="pill">Help</button></div>
+      <div className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-4 pb-3">
+        <button onClick={()=>go('series')} className="pill">Series</button>
+        <button onClick={()=>go('search')} className="pill">Search</button>
+        <button onClick={()=>go('wallet')} className="pill">Wallet</button>
+        <button onClick={()=>go('help')} className="pill">Help</button>
+      </div>
     </header>
     <NotificationStrip/>
     {popup&&<div className="mx-auto mt-4 max-w-6xl px-4"><div className="rounded-3xl bg-gradient-to-r from-pink-500 to-orange-400 p-4 text-white shadow-lg"><b>{popup.title}</b><p>{popup.message}</p></div></div>}
     <main className="mx-auto max-w-6xl p-4 pb-28 md:p-8">{page}</main>
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 backdrop-blur">
-      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">{([['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?'Profile':'Login']] as const).map(([id,Icon,label])=><button key={id} onClick={()=>go(id as string)} className={`rounded-2xl p-2 text-xs font-black ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}><Icon className="mx-auto mb-1" size={20}/>{label}</button>)}</div>
+      <div className="mx-auto grid max-w-lg grid-cols-4 p-2">
+        {([['home',Home,'Home'],['forYou',Play,'For You'],['plans',Crown,'Plan'],['profile',User,isLoggedIn?headerName:'Login']] as const).map(([id,Icon,label])=>(
+          <button key={id} onClick={()=>go(id as string)} className={`rounded-2xl p-2 text-xs font-black ${tab===id?'bg-zinc-950 text-white':'text-zinc-500'}`}>
+            <Icon className="mx-auto mb-1" size={20}/>{label}
+          </button>
+        ))}
+      </div>
     </nav>
-    <footer className="px-4 pb-32 text-center text-sm text-zinc-500"><button onClick={()=>go('policies')} className="font-bold underline">Legal Policies</button><p>© 2026 ReelRamp Originals Pvt. Ltd.</p></footer>
+    <footer className="px-4 pb-32 text-center text-sm text-zinc-500">
+      <button onClick={()=>go('policies')} className="font-bold underline">Legal Policies</button>
+      <p>© 2026 ReelRamp Originals Pvt. Ltd.</p>
+    </footer>
     <PromoVideoModal go={go}/>
     <PwaInstall/>
 
-    {/* Exit confirmation — sirf tab dikhe jab stack khaali ho */}
     {exitAsk&&<div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4 backdrop-blur">
       <motion.div initial={{scale:.93,opacity:0}} animate={{scale:1,opacity:1}} className="w-full max-w-sm rounded-[32px] bg-white p-6 text-center shadow-2xl">
         <h2 className="text-2xl font-black">Exit ReelRamp Pro?</h2>
