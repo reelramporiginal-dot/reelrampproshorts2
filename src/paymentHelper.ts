@@ -1,4 +1,3 @@
-// src/paymentHelper.ts
 export const initiatePayment = async (plan: any, user: any) => {
   try {
     const res = await fetch('/api/payment', {
@@ -13,10 +12,9 @@ export const initiatePayment = async (plan: any, user: any) => {
     });
     const data = await res.json();
     if (data.payment_session_id) {
-       // Cashfree checkout trigger
-       window.location.href = data.payment_session_url; 
+       window.location.href = data.payment_session_url;
     }
   } catch (err) {
-    alert("Payment abhi kaam nahi kar raha, baad mein try karein.");
+    alert("Payment filhal unavailable hai.");
   }
 };
