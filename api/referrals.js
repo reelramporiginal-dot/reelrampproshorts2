@@ -6,31 +6,33 @@ const supabase = createClient(
 );
 
 export default async function handler(req, res) {
-  try {
-    if (req.method === 'GET') {
-      const { user_id } = req.query;
-      console.log("Fetching for user_id:", user_id); // Ye Vercel logs mein dikhega
-
-      if (!user_id) {
-        return res.status(400).json({ error: "Missing user_id" });
-      }
-
+  if (req.method === 'GET') {
+    try {
+      // Sirf simple select, koi filter nahi taaki error na aaye
       const { data, error } = await supabase
         .from('referrals')
-        .select('*')
-        .or(`referrer_id.eq.${user_id},referred_id.eq.${user_id}`);
+        .select('*');
 
-      if (error) {
-        console.error("Supabase Query Error:", error);
-        return res.status(400).json({ error: error.message });
-      }
+      if (error) throw error;
       return res.status(200).json(data);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
     }
-
-    // ... (POST logic waisa hi rahega)
-    return res.status(405).json({ message: 'Method not allowed' });
-  } catch (err) {
-    console.error("Critical Server Error:", err);
-    return res.status(500).json({ error: err.message });
   }
+
+  if (req.method === 'POST') {
+    try {
+      const { referrer_id, referred_id } = req.body;
+      const { data, error } = await supabase
+        .from('referrals')
+        .insert([{ referrer_id, referred_id }]);
+      
+      if (error) throw error;
+      return res.status(200).json({ data });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  return res.status(405).json({ message: 'Method not allowed' });
 }
