@@ -430,7 +430,7 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
         <Lock className="mx-auto mb-4 text-[var(--rr-primary)]" size={58} />
         <h2 className="text-3xl font-black">Premium Locked</h2>
         <p className="mt-2 opacity-75">Plan activate karke episode unlock karein.</p>
-        <a href="#plans" className="btn mt-5 inline-flex">Unlock Plan</a>
+       <button onClick={() => initiatePayment({ price: 699 }, user)} className="btn mt-5 inline-flex">Unlock Plan</button>
       </div>
     </div>
   );
