@@ -1,4 +1,7 @@
+// src/paymentHelper.ts
 export const initiatePayment = async (plan: any, user: any) => {
+  console.log("Payment process shuru ho raha hai...");
+  
   try {
     const res = await fetch('/api/payment', {
       method: 'POST',
@@ -10,11 +13,21 @@ export const initiatePayment = async (plan: any, user: any) => {
         customer_phone: "0000000000"
       })
     });
+
     const data = await res.json();
+    
+    // Yahan console mein check karo ki backend se kya aa raha hai
+    console.log("Backend Response:", data);
+
     if (data.payment_session_id) {
-       window.location.href = data.payment_session_url;
+       console.log("Session ID mil gaya, redirect ho raha hai...");
+       window.location.href = data.payment_session_url; 
+    } else {
+       console.error("Error: payment_session_id nahi mila!", data);
+       alert("Payment error: " + (data.error || "Session ID nahi mila"));
     }
   } catch (err) {
-    alert("Payment filhal unavailable hai.");
+    console.error("System Error:", err);
+    alert("Payment setup mein error aaya hai. Console check karein.");
   }
 };
