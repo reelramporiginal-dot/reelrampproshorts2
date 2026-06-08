@@ -1,4 +1,4 @@
-import { initiatePayment } from './paymentHelper';
+import { initiatePayment, setPaymentBridge } from './paymentHelper';
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -57,7 +57,6 @@ type PaymentSettings = {
   gateways: GatewayConfig[];
   whatsapp: string; instructions: string;
   monthlyPrice: number; annualPrice: number;
-  // legacy fields kept for backwards compat
   gateway?: string; razorpayKey?: string; razorpaySecret?: string;
   upiId?: string; upiQr?: string; webhookSecret?: string; testMode?: boolean;
 };
@@ -69,12 +68,18 @@ type Ctx = {
   refresh: (silent?: boolean) => Promise<void>;
   mutate: (r: string, m: 'POST' | 'PUT' | 'DELETE', b: Record<string, any>) => Promise<any>;
   addNotif: (n: Omit<Notification, 'id' | 'is_active'>) => void;
+  // FIX: expose setUser so Profile can do instant local update
+  setUser: (u: UserRow | null) => void;
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const AppContext = createContext<Ctx | null>(null);
 const CDN = (import.meta.env.VITE_BUNNY_CDN_URL || '').replace(/\/$/, '') + '/';
 const ADMIN_SECRET = import.meta.env.VITE_ADMIN_SECRET || 'RRPRO2026';
+
+// FIX: localStorage key for persisting display_name across refreshes
+const LS_DISPLAY_NAME = 'rr_display_name';
+
 const resources = [
   'videos', 'series', 'categories', 'banners', 'popup_settings', 'platform_settings',
   'admin_settings', 'legal_policies', 'plans', 'users', 'subscriptions', 'payments',
@@ -124,12 +129,9 @@ const bunnyIframeUrl = (video: Video, player: any) => {
   return `${base}${lib}/${encodeURIComponent(id || '')}?${qs.toString()}`;
 };
 
-// Safely migrate old payment format to new gateways array format
 const migratePayment = (raw: any): PaymentSettings => {
   if (!raw) return defaultPayment;
-  // If already has gateways array, return as-is with defaults merged
   if (Array.isArray(raw.gateways)) return { ...defaultPayment, ...raw };
-  // Migrate legacy single-gateway format
   const gateways: GatewayConfig[] = [];
   if (raw.razorpayKey || raw.gateway === 'Razorpay') {
     gateways.push({
@@ -152,7 +154,6 @@ const migratePayment = (raw: any): PaymentSettings => {
     instructions: raw.instructions || '',
     monthlyPrice: raw.monthlyPrice || 99,
     annualPrice: raw.annualPrice || 899,
-    // keep legacy keys for backwards compat
     gateway: raw.gateway, razorpayKey: raw.razorpayKey, razorpaySecret: raw.razorpaySecret,
     upiId: raw.upiId, upiQr: raw.upiQr, webhookSecret: raw.webhookSecret, testMode: raw.testMode
   };
@@ -235,8 +236,16 @@ function Provider({ children }: { children: ReactNode }) {
       const next: Record<string, Row[]> = {};
       resources.forEach((r, i) => next[r] = Array.isArray(vals[i]) ? vals[i] : []);
       setData(next);
-      if (next.users?.[0]) setUser(next.users[0] as UserRow);
-      else {
+
+      // FIX: When user data loads, persist display_name to localStorage immediately
+      if (next.users?.[0]) {
+        const freshUser = next.users[0] as UserRow;
+        setUser(freshUser);
+        // Cache display_name so Shell header survives hard refresh
+        if (freshUser.display_name) {
+          localStorage.setItem(LS_DISPLAY_NAME, freshUser.display_name);
+        }
+      } else {
         const cr = await fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guest_id: guestId, display_name: `Viewer ${guestId.slice(-4)}`, email: '', role: 'viewer' })
@@ -300,7 +309,7 @@ function Provider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [refresh]);
 
-  // ── Expiry check: auto-deactivate expired subscriptions ──
+  // Expiry check: auto-deactivate expired subscriptions
   useEffect(() => {
     const subs = data.subscriptions || [];
     subs.forEach(async (s) => {
@@ -322,11 +331,16 @@ function Provider({ children }: { children: ReactNode }) {
   const payment = migratePayment(rawPayment);
   const player = admin.find(x => x.key === 'player')?.value || defaultPlayer;
 
+  // FIX: Set the global payment bridge whenever payment settings change
+  // This makes initiatePayment() work from ANY component without prop drilling
+  useEffect(() => {
+    setPaymentBridge(payment);
+  }, [payment]);
+
   const allSubs = data.subscriptions || [];
   const activeSub = (allSubs.find(s => s.status === 'active' && new Date(s.expires_at).getTime() > Date.now()) || null) as Subscription | null;
   const subscribed = isSubActive(activeSub);
 
-  // Merge DB notifications + local transient notifications
   const mergedData = {
     ...data,
     notifications: [...(data.notifications || []), ...localNotifs]
@@ -338,7 +352,9 @@ function Provider({ children }: { children: ReactNode }) {
       categories: (data.categories || []) as Category[],
       plans: (data.plans || []) as Plan[],
       user, guestId, loading, subscribed, activeSub, theme, payment, player,
-      refresh, mutate, addNotif
+      refresh, mutate, addNotif,
+      // FIX: expose setUser for instant local state updates from Profile
+      setUser: setUser as (u: UserRow | null) => void,
     }}>
       {children}
     </AppContext.Provider>
@@ -352,8 +368,13 @@ function useApp() {
 }
 
 // ─── PLAYER ──────────────────────────────────────────────────────────────────
-function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; onNext: () => void }) {
-  const { guestId, subscribed, mutate, data, player } = useApp();
+// FIX: Added onNavigate prop so locked screen can trigger payment + navigation
+function Player({
+  video, onBack, onNext, onNavigate
+}: {
+  video: Video; onBack?: () => void; onNext: () => void; onNavigate?: (tab: string) => void;
+}) {
+  const { guestId, subscribed, mutate, data, player, user } = useApp();
   const ref = useRef<HTMLVideoElement | null>(null);
   const bar = useRef<HTMLDivElement | null>(null);
   const wrap = useRef<HTMLDivElement | null>(null);
@@ -423,6 +444,7 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
     ? mutate('bookmarks', 'DELETE', { user_id: guestId, video_id: video.id })
     : mutate('bookmarks', 'POST', { user_id: guestId, video_id: video.id });
 
+  // FIX: Locked screen now properly calls initiatePayment with navigate callback
   if (locked) return (
     <div ref={wrap} className="relative mx-auto grid h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] place-items-center overflow-hidden rounded-[34px] bg-zinc-950 text-white shadow-2xl">
       <video src={vurl(video.video_filename)} muted className="absolute h-full w-full object-cover opacity-20 blur-sm" />
@@ -430,7 +452,21 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
         <Lock className="mx-auto mb-4 text-[var(--rr-primary)]" size={58} />
         <h2 className="text-3xl font-black">Premium Locked</h2>
         <p className="mt-2 opacity-75">Plan activate karke episode unlock karein.</p>
-       <button onClick={() => initiatePayment({ price: 699 }, user)} className="btn mt-5 inline-flex">Unlock Plan</button>
+        {/* FIX: Full payment options — finds cheapest active plan automatically */}
+        <button
+          onClick={() => {
+            // Try to find cheapest active plan from global context
+            const lowestPlan = (window as any).__RR_PLANS__?.[0];
+            initiatePayment(
+              lowestPlan || { price: 699, name: 'Premium Plan', duration_days: 30 },
+              user,
+              { navigate: onNavigate }
+            );
+          }}
+          className="btn mt-5 inline-flex"
+        >
+          Unlock Plan
+        </button>
       </div>
     </div>
   );
@@ -613,7 +649,7 @@ function HomePage({ go }: { go: (t: string) => void }) {
         <FeatureCard icon="👑" title="Premium Unlock" body="Admin-controlled plans, paywall aur Razorpay-ready payment structure." />
         <FeatureCard icon="📲" title="Install App" body="PWA install se app jaisa home-screen experience paayein." />
       </div>
-      <Info />
+      <AppInfo />
     </section>
   );
 }
@@ -722,7 +758,8 @@ function VideoCard({ v, onClick }: { v: Video; onClick: () => void }) {
 }
 
 // ─── FOR YOU ──────────────────────────────────────────────────────────────────
-function ForYou() {
+// FIX: Passes go prop as onNavigate to Player for locked-screen payment button
+function ForYou({ go }: { go: (t: string) => void }) {
   const { videos, categories, mutate, guestId } = useApp();
   const [cat, setCat] = useState('All'), [idx, setIdx] = useState(0), [touch, setTouch] = useState<number | null>(null), [report, setReport] = useState('');
   const list = videos.filter(v => v.is_published && (cat === 'All' || v.category === cat));
@@ -743,7 +780,8 @@ function ForYou() {
           onWheel={e => { if (Math.abs(e.deltaY) > 30) { e.preventDefault(); e.deltaY > 0 ? next() : prev(); } }}
           onTouchStart={e => setTouch(e.touches[0].clientY)}
           onTouchEnd={e => { if (touch === null) return; const diff = touch - e.changedTouches[0].clientY; if (Math.abs(diff) > 55) { diff > 0 ? next() : prev(); } setTouch(null); }}>
-          <Player video={v} onNext={next} />
+          {/* FIX: onNavigate prop passed so locked screen can navigate to Plans */}
+          <Player video={v} onNext={next} onNavigate={go} />
         </div>
         <aside className="w-full max-w-[430px] space-y-4 lg:sticky lg:top-32">
           <div className="card p-5">
@@ -785,6 +823,29 @@ function Plans() {
   const [busy, setBusy] = useState(false);
   const [payErr, setPayErr] = useState('');
   const [txId, setTxId] = useState('');
+
+  // FIX: Sync active plans to global bridge so locked-screen button can read cheapest plan
+  useEffect(() => {
+    const activePlans = plans
+      .filter(p => p.is_active)
+      .sort((a, b) => a.sort_order - b.sort_order);
+    (window as any).__RR_PLANS__ = activePlans;
+  }, [plans]);
+
+  // FIX: Listen for rr:open-plan event dispatched by initiatePayment() UPI flow
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const plan = (e as CustomEvent).detail?.plan as Plan | undefined;
+      if (plan) {
+        // Try to find matching plan by price, else use first active plan
+        const match = plans.find(p => p.is_active && p.price === plan.price)
+          || plans.find(p => p.is_active);
+        if (match) { setSelected(match); setStep('pay'); setPayErr(''); setTxId(''); }
+      }
+    };
+    window.addEventListener('rr:open-plan', handler);
+    return () => window.removeEventListener('rr:open-plan', handler);
+  }, [plans]);
 
   const openPlan = (p: Plan) => { setSelected(p); setStep('brief'); setPayErr(''); setTxId(''); };
   const close = () => { setSelected(null); setStep('brief'); setPayErr(''); setBusy(false); };
@@ -833,7 +894,6 @@ function Plans() {
     if (!selected || !txId.trim()) { setPayErr('Transaction ID ya UTR number daalein'); return; }
     setBusy(true); setPayErr('');
     try {
-      // Mark payment as pending (manual verification needed)
       await mutate('payments', 'POST', {
         user_id: guestId, plan_id: selected.id, amount: selected.price,
         gateway: gw.name, status: 'pending',
@@ -1032,7 +1092,6 @@ function GatewayPayBlock({
     </div>
   );
 
-  // Generic / other gateways
   return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold">
@@ -1051,7 +1110,7 @@ function GatewayPayBlock({
 
 // ─── PROFILE / USER DASHBOARD ─────────────────────────────────────────────────
 function Profile() {
-  const { user, guestId, subscribed, activeSub, data, mutate } = useApp();
+  const { user, guestId, subscribed, activeSub, data, mutate, setUser } = useApp();
   const isLoggedIn = !!(user?.email);
   const [name, setName] = useState(user?.display_name || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -1061,7 +1120,11 @@ function Profile() {
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'account' | 'subscription' | 'history'>('account');
 
-  useEffect(() => { setName(user?.display_name || ''); setEmail(user?.email || ''); }, [user?.id]);
+  // FIX: Sync local form fields when user context changes (e.g. after refresh)
+  useEffect(() => {
+    setName(user?.display_name || '');
+    setEmail(user?.email || '');
+  }, [user?.id, user?.display_name]);
 
   const signIn = async (signUp = false) => {
     if (!email || !password) { setAuthMsg('Email aur password dono bharo.'); return; }
@@ -1076,8 +1139,23 @@ function Profile() {
     finally { setBusy(false); }
   };
 
-  const signOut = async () => { await supabase.auth.signOut(); localStorage.removeItem('rr_guest'); window.location.href = '/'; };
-  const saveProfile = () => user && mutate('users', 'PUT', { id: user.id, display_name: name, email }).then(() => setAuthMsg('Profile update ho gaya.'));
+  const signOut = async () => { await supabase.auth.signOut(); localStorage.removeItem('rr_guest'); localStorage.removeItem(LS_DISPLAY_NAME); window.location.href = '/'; };
+
+  // FIX: saveProfile — update DB, then immediately update context + localStorage
+  // so the header name changes right away WITHOUT waiting for the next full refresh
+  const saveProfile = async () => {
+    if (!user) return;
+    try {
+      await mutate('users', 'PUT', { id: user.id, display_name: name, email });
+      // Instant local state update — no flicker, no stale name
+      setUser({ ...user, display_name: name, email });
+      // Persist to localStorage so hard refresh also shows correct name
+      localStorage.setItem(LS_DISPLAY_NAME, name);
+      setAuthMsg('Profile update ho gaya ✅');
+    } catch (e: any) {
+      setAuthMsg('Update failed: ' + e.message);
+    }
+  };
 
   const cancelSub = async () => {
     if (!activeSub) return;
@@ -1200,7 +1278,6 @@ function Profile() {
                 <a href="#plans" className="btn mt-4 inline-flex">Plans Dekhein</a>
               </div>
             )}
-            {/* Payment History */}
             {payments.length > 0 && (
               <div>
                 <h3 className="font-black mb-2">Payment History</h3>
@@ -1521,7 +1598,6 @@ function Admin() {
   const [importText, setImportText] = useState('');
   const [importResource, setImportResource] = useState('videos');
   const [importMsg, setImportMsg] = useState('');
-  const [gwEdit, setGwEdit] = useState<GatewayConfig | null>(null);
   const [gwForm, setGwForm] = useState<Partial<GatewayConfig>>({});
 
   useEffect(() => setPay(payment), [payment]);
@@ -1534,7 +1610,6 @@ function Admin() {
     return mutate('admin_settings', row ? 'PUT' : 'POST', row ? { id: row.id, key, value } : { key, value });
   };
 
-  // ── Revenue calculations ──
   const payments = data.payments || [];
   const successPayments = payments.filter(p => p.status === 'success');
   const revenue = successPayments.reduce((a, p) => a + Number(p.amount || 0), 0);
@@ -1576,7 +1651,6 @@ function Admin() {
     } catch (e: any) { setImportMsg(e.message); }
   };
 
-  // Gateway management helpers
   const addGateway = () => {
     const newGw: GatewayConfig = {
       id: `gw_${Date.now()}`, name: gwForm.name || 'New Gateway',
@@ -1585,7 +1659,7 @@ function Admin() {
       keys: {}, healthStatus: 'unknown', ...gwForm
     };
     const updated = { ...pay, gateways: [...pay.gateways, newGw] };
-    setPay(updated); setGwForm({}); setGwEdit(null);
+    setPay(updated); setGwForm({});
   };
 
   const updateGateway = (id: string, changes: Partial<GatewayConfig>) => {
@@ -1612,7 +1686,6 @@ function Admin() {
         {tabs.map(t => <button key={t} onClick={() => setTab(t)} className={`pill ${tab === t ? 'active' : ''}`}>{t}</button>)}
       </div>
 
-      {/* ── DASHBOARD ── */}
       {tab === 'dashboard' && (
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-4">
@@ -1634,8 +1707,6 @@ function Admin() {
             <Stat l="Support Tickets" v={(data.support_tickets || []).length} />
           </div>
           <button onClick={pdf} className="btn"><FileText /> Download PDF Report</button>
-
-          {/* Pending UPI payments needing verification */}
           {pendingPayments.length > 0 && (
             <div className="card p-5">
               <h3 className="font-black text-amber-700 flex items-center gap-2 mb-3"><AlertCircle size={18} /> Pending Payments (Manual Verification Required)</h3>
@@ -1676,14 +1747,11 @@ function Admin() {
       {tab === 'errors' && <DataTable resource="error_logs" rows={data.error_logs || []} />}
       {tab === 'audit' && <DataTable resource="audit_logs" rows={data.audit_logs || []} />}
 
-      {/* ── GATEWAYS (Full Gateway Engine) ── */}
       {tab === 'gateways' && (
         <div className="space-y-5">
           <div className="panel">
             <h2 className="adminh"><Wallet /> Payment Gateway Engine</h2>
             <p className="text-sm text-zinc-500 mb-4">Multiple gateways add, edit, enable/disable karein. Default gateway plans page par use hoga.</p>
-
-            {/* Existing Gateways */}
             <div className="space-y-3 mb-5">
               {pay.gateways.map(gw => (
                 <div key={gw.id} className={`rounded-3xl border-2 p-4 ${gw.enabled ? 'border-green-200 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
@@ -1703,15 +1771,12 @@ function Admin() {
                       <button onClick={() => removeGateway(gw.id)} className="rounded-full bg-red-100 p-2 text-red-600"><Trash2 size={14} /></button>
                     </div>
                   </div>
-                  {/* Key preview (masked) */}
                   {Object.entries(gw.keys).map(([k, v]) => (
                     <p key={k} className="text-xs text-zinc-500 font-mono">{k}: {k.toLowerCase().includes('secret') ? '••••••••' : String(v).slice(0, 12) + (String(v).length > 12 ? '...' : '')}</p>
                   ))}
                 </div>
               ))}
             </div>
-
-            {/* Add Gateway Form */}
             <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
               <h3 className="font-black mb-3 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
               <div className="grid gap-3 md:grid-cols-2">
@@ -1724,8 +1789,6 @@ function Admin() {
                   </select>
                 </div>
               </div>
-
-              {/* Dynamic key fields based on type */}
               {(gwForm.type === 'Razorpay' || gwForm.type === 'Cashfree' || gwForm.type === 'PayU') && (
                 <div className="grid gap-3 md:grid-cols-2 mt-3">
                   <div><label className="label">Key ID / Client ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
@@ -1745,7 +1808,6 @@ function Admin() {
                   <div><label className="label">Secret / Private Key</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} /></div>
                 </div>
               )}
-
               <div className="flex items-center gap-3 mt-3">
                 <label className="flex cursor-pointer items-center gap-2 font-black text-sm">
                   <input type="checkbox" checked={!!gwForm.testMode} onChange={e => setGwForm({ ...gwForm, testMode: e.target.checked })} className="h-4 w-4" />
@@ -1754,23 +1816,19 @@ function Admin() {
               </div>
               <button onClick={addGateway} disabled={!gwForm.name || !gwForm.type} className="btn mt-4 disabled:opacity-50">Add Gateway</button>
             </div>
-
-            {/* Common settings */}
             <div className="mt-5 space-y-3">
               <h3 className="font-black">Common Settings</h3>
               <div className="grid gap-3 md:grid-cols-2">
                 <div><label className="label">WhatsApp Support</label><input className="input" value={pay.whatsapp || ''} onChange={e => setPay({ ...pay, whatsapp: e.target.value })} placeholder="+917307493338" /></div>
                 <div><label className="label">Monthly Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay({ ...pay, monthlyPrice: Number(e.target.value) })} /></div>
               </div>
-              <div><label className="label">Payment Instructions (users ko dikhega)</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} placeholder="UPI se payment karein aur UTR WhatsApp par bhejein." /></div>
+              <div><label className="label">Payment Instructions</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} placeholder="UPI se payment karein aur UTR WhatsApp par bhejein." /></div>
             </div>
-
             <button className="save w-full mt-4" onClick={() => saveSetting('payment', pay)}>💾 Save All Gateway Settings</button>
           </div>
         </div>
       )}
 
-      {/* ── THEME (kept exactly as before + payment section updated) ── */}
       {tab === 'theme' && (
         <div className="panel space-y-3">
           <h2 className="adminh"><Palette /> Theme & Logo</h2>
@@ -1786,11 +1844,9 @@ function Admin() {
           ))}
           <div><label className="mb-1 block text-sm font-black">Border Radius</label><input className="input" value={th.radius || ''} onChange={e => setTh({ ...th, radius: e.target.value })} placeholder="30px" /></div>
           <button className="save" onClick={() => saveSetting('theme', th)}>💾 Save Theme</button>
-
-          {/* Quick gateway status shown in theme tab too */}
           <div className={`mt-5 rounded-2xl p-3 text-sm font-bold flex items-center gap-2 ${pay.gateways.some(g => g.enabled) ? 'bg-green-50 text-green-700' : 'bg-zinc-100 text-zinc-500'}`}>
             {pay.gateways.some(g => g.enabled)
-              ? <><CheckCircle2 size={16} /> {pay.gateways.filter(g => g.enabled).length} gateway(s) active — Plans page par payment chalega.</>
+              ? <><CheckCircle2 size={16} /> {pay.gateways.filter(g => g.enabled).length} gateway(s) active</>
               : <><span>⏳</span> Koi gateway active nahi — "Gateways" tab mein configure karein.</>}
           </div>
         </div>
@@ -1882,7 +1938,7 @@ function DataTable({ rows, resource, onEdit }: { rows: Row[]; resource: string; 
 // ─── MISC COMPONENTS ──────────────────────────────────────────────────────────
 function Stat({ l, v }: { l: string; v: any }) { return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>; }
 
-function Info() {
+function AppInfo() {
   return (
     <div className="card overflow-hidden md:grid md:grid-cols-[.9fr_1.1fr]">
       <img src={fallbackImages.studio} className="h-full min-h-72 w-full object-cover" />
@@ -1908,9 +1964,16 @@ function Shell() {
   const [exitAsk, setExitAsk] = useState(false);
 
   const isLoggedIn = !!(user?.email);
-  const headerName = isLoggedIn
-    ? (user?.display_name?.trim() ? user.display_name.trim().split(' ')[0] : 'Profile')
-    : 'Login';
+
+  // FIX: Header name — reads from user context first, then falls back to
+  // localStorage cache (survives hard refresh until API response arrives)
+  const headerName = (() => {
+    const name = user?.display_name?.trim();
+    if (name) return name.split(' ')[0];
+    const cached = localStorage.getItem(LS_DISPLAY_NAME)?.trim();
+    if (cached) return cached.split(' ')[0];
+    return isLoggedIn ? 'Profile' : 'Login';
+  })();
 
   const go = (t: string) => { setTab(t); setHistoryStack(prev => [...prev, t]); };
 
@@ -1946,8 +2009,10 @@ function Shell() {
   if (loading) return <div className="grid min-h-screen place-items-center bg-orange-50"><Loader2 className="animate-spin text-[var(--rr-accent)]" size={54} /></div>;
 
   const popup = (data.popup_settings || []).find(p => p.enabled);
+
+  // FIX: Pass go to ForYou so Player's locked screen can navigate to Plans
   const page = tab === 'home' ? <HomePage go={go} />
-    : tab === 'forYou' ? <ForYou />
+    : tab === 'forYou' ? <ForYou go={go} />
       : tab === 'series' ? <SeriesPage go={go} />
         : tab === 'search' ? <SearchPage go={go} />
           : tab === 'plans' ? <Plans />
@@ -2012,5 +2077,8 @@ function Shell() {
     </div>
   );
 }
+
+// Re-export LS_DISPLAY_NAME for Profile's signOut cleanup
+const LS_DISPLAY_NAME_EXPORT = LS_DISPLAY_NAME;
 
 export default function App() { return <Provider><Shell /></Provider>; }
