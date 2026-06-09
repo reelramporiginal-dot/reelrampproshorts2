@@ -1,4 +1,4 @@
-import { initiatePayment } from './paymentHelper';
+import { initiatePayment, setPaymentBridge } from './paymentHelper';
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -6,8 +6,7 @@ import {
   Gift, Heart, Home, Instagram, Loader2, Lock, Maximize, MessageCircle, Palette,
   Pause, Play, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, Trash2,
   User, Volume2, VolumeX, Wallet, X, Youtube, Bell, CheckCircle2, AlertCircle,
-  Calendar, CreditCard, TrendingUp, Users, DollarSign, Clock, RotateCcw,
-  BarChart2, Zap, Shield, RefreshCcw, Ban, ChevronRight, Info
+  CreditCard, Clock, Ban
 } from 'lucide-react';
 import supabase from './lib/supabase';
 import { handleGoogleRedirect, signInWithGoogle } from './lib/googleAuth';
@@ -57,7 +56,6 @@ type PaymentSettings = {
   gateways: GatewayConfig[];
   whatsapp: string; instructions: string;
   monthlyPrice: number; annualPrice: number;
-  // legacy fields kept for backwards compat
   gateway?: string; razorpayKey?: string; razorpaySecret?: string;
   upiId?: string; upiQr?: string; webhookSecret?: string; testMode?: boolean;
 };
@@ -69,12 +67,15 @@ type Ctx = {
   refresh: (silent?: boolean) => Promise<void>;
   mutate: (r: string, m: 'POST' | 'PUT' | 'DELETE', b: Record<string, any>) => Promise<any>;
   addNotif: (n: Omit<Notification, 'id' | 'is_active'>) => void;
+  setUser: (u: UserRow | null) => void;
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const AppContext = createContext<Ctx | null>(null);
 const CDN = (import.meta.env.VITE_BUNNY_CDN_URL || '').replace(/\/$/, '') + '/';
 const ADMIN_SECRET = import.meta.env.VITE_ADMIN_SECRET || 'RRPRO2026';
+const LS_DISPLAY_NAME = 'rr_display_name';
+
 const resources = [
   'videos', 'series', 'categories', 'banners', 'popup_settings', 'platform_settings',
   'admin_settings', 'legal_policies', 'plans', 'users', 'subscriptions', 'payments',
@@ -111,6 +112,7 @@ const isInstalledApp = () =>
   window.matchMedia?.('(display-mode: standalone)').matches ||
   (navigator as any).standalone === true ||
   localStorage.getItem('rr_install_completed') === '1';
+
 const bunnyIframeUrl = (video: Video, player: any) => {
   if (video.bunny_embed_url) return video.bunny_embed_url;
   const id = video.bunny_video_id || video.video_filename;
@@ -124,12 +126,9 @@ const bunnyIframeUrl = (video: Video, player: any) => {
   return `${base}${lib}/${encodeURIComponent(id || '')}?${qs.toString()}`;
 };
 
-// Safely migrate old payment format to new gateways array format
 const migratePayment = (raw: any): PaymentSettings => {
   if (!raw) return defaultPayment;
-  // If already has gateways array, return as-is with defaults merged
   if (Array.isArray(raw.gateways)) return { ...defaultPayment, ...raw };
-  // Migrate legacy single-gateway format
   const gateways: GatewayConfig[] = [];
   if (raw.razorpayKey || raw.gateway === 'Razorpay') {
     gateways.push({
@@ -152,60 +151,57 @@ const migratePayment = (raw: any): PaymentSettings => {
     instructions: raw.instructions || '',
     monthlyPrice: raw.monthlyPrice || 99,
     annualPrice: raw.annualPrice || 899,
-    // keep legacy keys for backwards compat
     gateway: raw.gateway, razorpayKey: raw.razorpayKey, razorpaySecret: raw.razorpaySecret,
     upiId: raw.upiId, upiQr: raw.upiQr, webhookSecret: raw.webhookSecret, testMode: raw.testMode
   };
 };
 
-// ─── RAZORPAY INTEGRATION ────────────────────────────────────────────────────
-declare global { interface Window { Razorpay: any } }
+// ─── RAZORPAY (inline, used by Plans component directly) ─────────────────────
+declare global { interface Window { Razorpay: any; Cashfree: any } }
 
 const loadRazorpay = (): Promise<boolean> =>
   new Promise(resolve => {
     if (window.Razorpay) return resolve(true);
     const s = document.createElement('script');
     s.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    s.onload = () => resolve(true);
-    s.onerror = () => resolve(false);
+    s.onload = () => resolve(true); s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
 
 const openRazorpay = async (opts: {
   keyId: string; amount: number; planName: string; userName: string;
-  userEmail: string; userPhone?: string; testMode: boolean;
-  onSuccess: (data: { paymentId: string; orderId?: string; signature?: string }) => void;
+  userEmail: string; testMode: boolean;
+  onSuccess: (data: { paymentId: string }) => void;
   onFailure: (err: string) => void;
 }) => {
   const loaded = await loadRazorpay();
-  if (!loaded) { opts.onFailure('Razorpay load nahi hua. Internet check karein.'); return; }
-  const amountPaise = Math.round(opts.amount * 100);
-  const rzp = new window.Razorpay({
-    key: opts.keyId,
-    amount: amountPaise,
-    currency: 'INR',
-    name: 'ReelRamp Pro',
-    description: opts.planName,
-    prefill: { name: opts.userName || '', email: opts.userEmail || '' },
+  if (!loaded) { opts.onFailure('Razorpay load nahi hua.'); return; }
+  new window.Razorpay({
+    key: opts.keyId, amount: Math.round(opts.amount * 100), currency: 'INR',
+    name: 'ReelRamp Pro', description: opts.planName,
+    prefill: { name: opts.userName, email: opts.userEmail },
     theme: { color: '#c5a26f' },
-    handler: (response: any) => opts.onSuccess({
-      paymentId: response.razorpay_payment_id,
-      orderId: response.razorpay_order_id,
-      signature: response.razorpay_signature
-    }),
+    handler: (r: any) => opts.onSuccess({ paymentId: r.razorpay_payment_id }),
     modal: { ondismiss: () => opts.onFailure('Payment cancel ho gaya') }
-  });
-  rzp.open();
+  }).open();
 };
 
-// ─── SUBSCRIPTION HELPERS ────────────────────────────────────────────────────
+// ─── CASHFREE (inline, used by Plans component directly) ─────────────────────
+const loadCashfree = (): Promise<boolean> =>
+  new Promise(resolve => {
+    if (window.Cashfree) return resolve(true);
+    const s = document.createElement('script');
+    s.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+    s.onload = () => resolve(true); s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+
+// ─── SUBSCRIPTION HELPERS ─────────────────────────────────────────────────────
 const isSubActive = (sub: Subscription | null) =>
   !!sub && sub.status === 'active' && new Date(sub.expires_at).getTime() > Date.now();
 
-const daysLeft = (sub: Subscription | null) => {
-  if (!sub) return 0;
-  return Math.max(0, Math.floor((new Date(sub.expires_at).getTime() - Date.now()) / 86400000));
-};
+const daysLeft = (sub: Subscription | null) =>
+  sub ? Math.max(0, Math.floor((new Date(sub.expires_at).getTime() - Date.now()) / 86400000)) : 0;
 
 // ─── PROVIDER ────────────────────────────────────────────────────────────────
 function Provider({ children }: { children: ReactNode }) {
@@ -216,9 +212,7 @@ function Provider({ children }: { children: ReactNode }) {
   const [guestId] = useState(() => {
     const s = localStorage.getItem('rr_guest');
     if (s) return s;
-    const n = gid();
-    localStorage.setItem('rr_guest', n);
-    return n;
+    const n = gid(); localStorage.setItem('rr_guest', n); return n;
   });
 
   const refresh = useCallback(async (silent = false) => {
@@ -226,17 +220,20 @@ function Provider({ children }: { children: ReactNode }) {
     try {
       const calls = resources.map(r => fetch(
         r === 'videos' ? '/api/videos?includeUnpublished=true' :
-          r === 'users' ? `/api/users?guest_id=${guestId}` :
-            r === 'subscriptions' || r === 'payments' || r === 'watch_history' ||
-              r === 'likes' || r === 'bookmarks' || r === 'wallet_transactions' ||
-              r === 'referrals' ? `/api/${r}?user_id=${guestId}` : `/api/${r}`
+        r === 'users' ? `/api/users?guest_id=${guestId}` :
+        ['subscriptions','payments','watch_history','likes','bookmarks','wallet_transactions','referrals'].includes(r)
+          ? `/api/${r}?user_id=${guestId}` : `/api/${r}`
       ).then(x => x.json()).catch(() => []));
       const vals = await Promise.all(calls);
       const next: Record<string, Row[]> = {};
-      resources.forEach((r, i) => next[r] = Array.isArray(vals[i]) ? vals[i] : []);
+      resources.forEach((r, i) => { next[r] = Array.isArray(vals[i]) ? vals[i] : []; });
       setData(next);
-      if (next.users?.[0]) setUser(next.users[0] as UserRow);
-      else {
+      if (next.users?.[0]) {
+        const freshUser = next.users[0] as UserRow;
+        setUser(freshUser);
+        // FIX: persist display_name so header survives hard refresh
+        if (freshUser.display_name) localStorage.setItem(LS_DISPLAY_NAME, freshUser.display_name);
+      } else {
         const cr = await fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guest_id: guestId, display_name: `Viewer ${guestId.slice(-4)}`, email: '', role: 'viewer' })
@@ -284,7 +281,7 @@ function Provider({ children }: { children: ReactNode }) {
         }).then(() => refresh(true));
       }
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: string, session: Session | null) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
       if (session?.user?.email) {
         localStorage.setItem('rr_guest', session.user.id);
         fetch('/api/users', {
@@ -300,10 +297,9 @@ function Provider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [refresh]);
 
-  // ── Expiry check: auto-deactivate expired subscriptions ──
+  // Auto-deactivate expired subscriptions
   useEffect(() => {
-    const subs = data.subscriptions || [];
-    subs.forEach(async (s) => {
+    (data.subscriptions || []).forEach(async s => {
       if (s.status === 'active' && new Date(s.expires_at).getTime() < Date.now()) {
         try {
           await fetch(api('subscriptions'), {
@@ -322,23 +318,32 @@ function Provider({ children }: { children: ReactNode }) {
   const payment = migratePayment(rawPayment);
   const player = admin.find(x => x.key === 'player')?.value || defaultPlayer;
 
-  const allSubs = data.subscriptions || [];
-  const activeSub = (allSubs.find(s => s.status === 'active' && new Date(s.expires_at).getTime() > Date.now()) || null) as Subscription | null;
-  const subscribed = isSubActive(activeSub);
+  // FIX: Feed global bridge so initiatePayment() anywhere can read gateway config
+  useEffect(() => { setPaymentBridge(payment); }, [payment]);
 
-  // Merge DB notifications + local transient notifications
-  const mergedData = {
-    ...data,
-    notifications: [...(data.notifications || []), ...localNotifs]
-  };
+  // FIX: Feed active plans to global bridge so locked-screen can find cheapest plan
+  useEffect(() => {
+    const activePlans = (data.plans || [])
+      .filter((p: any) => p.is_active)
+      .sort((a: any, b: any) => a.sort_order - b.sort_order);
+    (window as any).__RR_PLANS__ = activePlans;
+  }, [data.plans]);
+
+  const allSubs = data.subscriptions || [];
+  const activeSub = (allSubs.find(s =>
+    s.status === 'active' && new Date(s.expires_at).getTime() > Date.now()
+  ) || null) as Subscription | null;
+  const subscribed = isSubActive(activeSub);
 
   return (
     <AppContext.Provider value={{
-      data: mergedData, videos: (data.videos || []) as Video[],
+      data: { ...data, notifications: [...(data.notifications || []), ...localNotifs] },
+      videos: (data.videos || []) as Video[],
       categories: (data.categories || []) as Category[],
       plans: (data.plans || []) as Plan[],
       user, guestId, loading, subscribed, activeSub, theme, payment, player,
-      refresh, mutate, addNotif
+      refresh, mutate, addNotif,
+      setUser: setUser as (u: UserRow | null) => void,
     }}>
       {children}
     </AppContext.Provider>
@@ -352,8 +357,10 @@ function useApp() {
 }
 
 // ─── PLAYER ──────────────────────────────────────────────────────────────────
-function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; onNext: () => void }) {
-  const { guestId, subscribed, mutate, data, player } = useApp();
+function Player({ video, onBack, onNext, onNavigate }: {
+  video: Video; onBack?: () => void; onNext: () => void; onNavigate?: (tab: string) => void;
+}) {
+  const { guestId, subscribed, mutate, data, player, user } = useApp();
   const ref = useRef<HTMLVideoElement | null>(null);
   const bar = useRef<HTMLDivElement | null>(null);
   const wrap = useRef<HTMLDivElement | null>(null);
@@ -378,9 +385,12 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
   const liked = (data.likes || []).some(l => l.video_id === video.id);
   const saved = (data.bookmarks || []).some(b => b.video_id === video.id);
   const p = dur ? Math.min(100, cur / dur * 100) : 0;
+
   const reveal = () => {
     setShow(true); clearTimeout(hide.current);
-    hide.current = window.setTimeout(() => { if (!ref.current?.paused && !menu && !drag) setShow(false); }, 2500);
+    hide.current = window.setTimeout(() => {
+      if (!ref.current?.paused && !menu && !drag) setShow(false);
+    }, 2500);
   };
   const enterFull = async () => { try { await wrap.current?.requestFullscreen?.(); } catch { } };
   const startPlayback = async () => {
@@ -392,6 +402,7 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
   const pausePlayback = () => { ref.current?.pause(); setPlay(false); setShow(true); };
   useEffect(() => { reveal(); resumed.current = false; setErr(''); setCur(0); setDur(0); setPlay(false); }, [video.id]);
   useEffect(() => { const v = ref.current; if (v) { v.volume = vol; v.muted = muted; v.playbackRate = speed; } }, [vol, muted, speed]);
+
   const buffer = () => {
     setWait(true); clearTimeout(buf.current);
     buf.current = window.setTimeout(() => { setWait(false); setErr('Unable to load video'); }, 8000);
@@ -416,13 +427,14 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
       tap.current = 0;
     } else { tap.current = now; reveal(); }
   };
-  const like = async () => liked
+  const like = () => liked
     ? mutate('likes', 'DELETE', { user_id: guestId, video_id: video.id })
     : mutate('likes', 'POST', { user_id: guestId, video_id: video.id });
-  const save = async () => saved
+  const save = () => saved
     ? mutate('bookmarks', 'DELETE', { user_id: guestId, video_id: video.id })
     : mutate('bookmarks', 'POST', { user_id: guestId, video_id: video.id });
 
+  // ── LOCKED SCREEN ──
   if (locked) return (
     <div ref={wrap} className="relative mx-auto grid h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] place-items-center overflow-hidden rounded-[34px] bg-zinc-950 text-white shadow-2xl">
       <video src={vurl(video.video_filename)} muted className="absolute h-full w-full object-cover opacity-20 blur-sm" />
@@ -430,11 +442,24 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
         <Lock className="mx-auto mb-4 text-[var(--rr-primary)]" size={58} />
         <h2 className="text-3xl font-black">Premium Locked</h2>
         <p className="mt-2 opacity-75">Plan activate karke episode unlock karein.</p>
-       <button onClick={() => initiatePayment({ price: 699 }, user)} className="btn mt-5 inline-flex">Unlock Plan</button>
+        <button
+          onClick={() => {
+            const lowestPlan = (window as any).__RR_PLANS__?.[0];
+            initiatePayment(
+              lowestPlan || { price: 699, name: 'Premium Plan', duration_days: 30 },
+              user,
+              { navigate: onNavigate }
+            );
+          }}
+          className="btn mt-5 inline-flex"
+        >
+          Unlock Plan
+        </button>
       </div>
     </div>
   );
 
+  // ── BUNNY PLAYER ──
   if (player?.mode === 'bunny') return (
     <div ref={wrap} className="relative mx-auto h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] overflow-hidden rounded-[34px] bg-black text-white shadow-2xl transform-gpu">
       <iframe src={bunnyIframeUrl(video, player)} title={video.title}
@@ -443,12 +468,16 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
       <div className="pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/75 to-transparent p-4">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="icon pointer-events-auto"><ArrowLeft /></button>
-          <div className="min-w-0"><h2 className="truncate font-black">{video.title}</h2><p className="text-xs text-[var(--rr-primary)]">EP {video.episode_number}</p></div>
+          <div className="min-w-0">
+            <h2 className="truncate font-black">{video.title}</h2>
+            <p className="text-xs text-[var(--rr-primary)]">EP {video.episode_number}</p>
+          </div>
         </div>
       </div>
     </div>
   );
 
+  // ── DEFAULT PLAYER ──
   return (
     <div ref={wrap} onClick={surface} onMouseMove={reveal}
       className="relative mx-auto h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] overflow-hidden rounded-[34px] bg-black text-white shadow-2xl transform-gpu select-none">
@@ -483,6 +512,7 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
             duration: e.currentTarget.duration || 0, completed: false
           }).catch(() => { });
         }} />
+
       {!play && !wait && !err && (
         <button onClick={e => { e.stopPropagation(); startPlayback(); }}
           className="absolute inset-0 z-10 grid place-items-center bg-black/20">
@@ -610,10 +640,10 @@ function HomePage({ go }: { go: (t: string) => void }) {
       </Rows>
       <div className="grid gap-4 md:grid-cols-3">
         <FeatureCard icon="🎬" title="Original Shorts" body="Drama, romance, thriller aur family stories ek mobile-first format me." />
-        <FeatureCard icon="👑" title="Premium Unlock" body="Admin-controlled plans, paywall aur Razorpay-ready payment structure." />
+        <FeatureCard icon="👑" title="Premium Unlock" body="Admin-controlled plans, paywall aur Cashfree-ready payment structure." />
         <FeatureCard icon="📲" title="Install App" body="PWA install se app jaisa home-screen experience paayein." />
       </div>
-      <Info />
+      <AboutSection />
     </section>
   );
 }
@@ -704,9 +734,7 @@ function VideoCard({ v, onClick }: { v: Video; onClick: () => void }) {
   return (
     <button onClick={onClick} className="card group w-56 shrink-0 overflow-hidden text-left transition hover:-translate-y-1 hover:shadow-2xl">
       <div className="relative aspect-[3/4] bg-zinc-200">
-        {v.thumbnail_url
-          ? <img src={v.thumbnail_url} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
-          : <img src={fallbackImages.promo} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />}
+        <img src={v.thumbnail_url || fallbackImages.promo} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
         <span className="absolute left-3 top-3 rounded-full bg-black/55 px-3 py-1 text-xs font-black text-white backdrop-blur">EP {v.episode_number}</span>
         {v.is_premium && <span className="absolute right-3 top-3 rounded-full bg-yellow-300 px-3 py-1 text-xs font-black text-black">PRO</span>}
@@ -722,9 +750,11 @@ function VideoCard({ v, onClick }: { v: Video; onClick: () => void }) {
 }
 
 // ─── FOR YOU ──────────────────────────────────────────────────────────────────
-function ForYou() {
+function ForYou({ go }: { go: (t: string) => void }) {
   const { videos, categories, mutate, guestId } = useApp();
-  const [cat, setCat] = useState('All'), [idx, setIdx] = useState(0), [touch, setTouch] = useState<number | null>(null), [report, setReport] = useState('');
+  const [cat, setCat] = useState('All'), [idx, setIdx] = useState(0);
+  const [touch, setTouch] = useState<number | null>(null);
+  const [report, setReport] = useState('');
   const list = videos.filter(v => v.is_published && (cat === 'All' || v.category === cat));
   const v = list[idx] || list[0];
   useEffect(() => setIdx(0), [cat]);
@@ -742,8 +772,8 @@ function ForYou() {
         <div className="w-full"
           onWheel={e => { if (Math.abs(e.deltaY) > 30) { e.preventDefault(); e.deltaY > 0 ? next() : prev(); } }}
           onTouchStart={e => setTouch(e.touches[0].clientY)}
-          onTouchEnd={e => { if (touch === null) return; const diff = touch - e.changedTouches[0].clientY; if (Math.abs(diff) > 55) { diff > 0 ? next() : prev(); } setTouch(null); }}>
-          <Player video={v} onNext={next} />
+          onTouchEnd={e => { if (touch === null) return; const diff = touch - e.changedTouches[0].clientY; if (Math.abs(diff) > 55) diff > 0 ? next() : prev(); setTouch(null); }}>
+          <Player video={v} onNext={next} onNavigate={go} />
         </div>
         <aside className="w-full max-w-[430px] space-y-4 lg:sticky lg:top-32">
           <div className="card p-5">
@@ -786,6 +816,19 @@ function Plans() {
   const [payErr, setPayErr] = useState('');
   const [txId, setTxId] = useState('');
 
+  // Listen for locked-screen "rr:open-plan" event
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const plan = (e as CustomEvent).detail?.plan as Plan | undefined;
+      const match = plan
+        ? plans.find(p => p.is_active && p.price === plan.price) || plans.find(p => p.is_active)
+        : plans.find(p => p.is_active);
+      if (match) { setSelected(match); setStep('pay'); setPayErr(''); setTxId(''); }
+    };
+    window.addEventListener('rr:open-plan', handler);
+    return () => window.removeEventListener('rr:open-plan', handler);
+  }, [plans]);
+
   const openPlan = (p: Plan) => { setSelected(p); setStep('brief'); setPayErr(''); setTxId(''); };
   const close = () => { setSelected(null); setStep('brief'); setPayErr(''); setBusy(false); };
 
@@ -810,34 +853,76 @@ function Plans() {
     setStep('done');
   };
 
+  // ── Cashfree handler ──
+  const handleCashfree = async (gw: GatewayConfig) => {
+    if (!selected) return;
+    setBusy(true); setPayErr('');
+    try {
+      const loaded = await loadCashfree();
+      if (!loaded) { setPayErr('Cashfree SDK load nahi hua.'); setBusy(false); return; }
+
+      const res = await fetch('/api/cashfree/create-order', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: selected.price, currency: 'INR',
+          planName: selected.name,
+          userName: user?.display_name || '',
+          userEmail: user?.email || '',
+          userId: guestId,
+          appId: gw.keys.appId,
+          secretKey: gw.keys.secretKey,
+          testMode: gw.testMode,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        setPayErr(err.message || 'Order create karne mein problem.'); setBusy(false); return;
+      }
+
+      const { payment_session_id, order_id } = await res.json();
+      if (!payment_session_id) {
+        setPayErr('Payment session ID nahi mila. Backend check karein.'); setBusy(false); return;
+      }
+
+      const cashfree = new window.Cashfree({ mode: gw.testMode ? 'sandbox' : 'production' });
+      cashfree.checkout({ paymentSessionId: payment_session_id, redirectTarget: '_modal' })
+        .then(async (result: any) => {
+          if (result.error) {
+            setPayErr(result.error.message || 'Payment fail ho gaya.'); setBusy(false);
+          } else {
+            const txnId = result.paymentDetails?.paymentMessage || order_id;
+            await activatePlan(selected, 'Cashfree', txnId);
+            setBusy(false);
+          }
+        })
+        .catch((e: any) => { setPayErr(e?.message || 'Cashfree error.'); setBusy(false); });
+    } catch (e: any) { setPayErr(e.message); setBusy(false); }
+  };
+
+  // ── Razorpay handler ──
   const handleRazorpay = async (gw: GatewayConfig) => {
     if (!selected) return;
     setBusy(true); setPayErr('');
     try {
       await openRazorpay({
         keyId: gw.keys.keyId, amount: selected.price,
-        planName: selected.name,
-        userName: user?.display_name || '',
-        userEmail: user?.email || '',
+        planName: selected.name, userName: user?.display_name || '', userEmail: user?.email || '',
         testMode: gw.testMode,
-        onSuccess: async ({ paymentId }) => {
-          await activatePlan(selected, 'Razorpay', paymentId);
-          setBusy(false);
-        },
-        onFailure: (err) => { setPayErr(err); setBusy(false); }
+        onSuccess: async ({ paymentId }) => { await activatePlan(selected, 'Razorpay', paymentId); setBusy(false); },
+        onFailure: err => { setPayErr(err); setBusy(false); }
       });
     } catch (e: any) { setPayErr(e.message); setBusy(false); }
   };
 
+  // ── UPI Manual handler ──
   const handleUpiManual = async (gw: GatewayConfig) => {
     if (!selected || !txId.trim()) { setPayErr('Transaction ID ya UTR number daalein'); return; }
     setBusy(true); setPayErr('');
     try {
-      // Mark payment as pending (manual verification needed)
       await mutate('payments', 'POST', {
         user_id: guestId, plan_id: selected.id, amount: selected.price,
-        gateway: gw.name, status: 'pending',
-        notes: `UPI Manual — UTR: ${txId}`, transaction_id: txId
+        gateway: gw.name, status: 'pending', notes: `UPI Manual — UTR: ${txId}`, transaction_id: txId
       });
       addNotif({
         title: 'Payment Submitted', type: 'info',
@@ -872,9 +957,9 @@ function Plans() {
             )}
             {p.features && typeof p.features === 'object' && (
               <ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">
-                {Object.entries(p.features).map(([k, v]: any) => (
+                {Object.entries(p.features).map(([k, fv]: any) => (
                   <li key={k} className="flex items-center gap-2">
-                    <CheckCircle2 size={14} className="text-green-500 shrink-0" />{v}
+                    <CheckCircle2 size={14} className="text-green-500 shrink-0" />{fv}
                   </li>
                 ))}
               </ul>
@@ -903,13 +988,13 @@ function Plans() {
                   </div>
                   <div className="rounded-3xl bg-zinc-950 text-white p-5">
                     <p className="text-4xl font-black">{money(selected.price)}</p>
-                    <p className="text-white/60 text-sm mt-1">{selected.duration_days} din ka access · Auto-renew nahi</p>
+                    <p className="text-white/60 text-sm mt-1">{selected.duration_days} din ka access</p>
                   </div>
                   {selected.features && typeof selected.features === 'object' && (
                     <ul className="space-y-2">
-                      {Object.entries(selected.features).map(([k, v]: any) => (
+                      {Object.entries(selected.features).map(([k, fv]: any) => (
                         <li key={k} className="flex items-center gap-3 text-sm font-bold">
-                          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-green-100 text-green-600"><CheckCircle2 size={14} /></span>{v}
+                          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-green-100 text-green-600"><CheckCircle2 size={14} /></span>{fv}
                         </li>
                       ))}
                     </ul>
@@ -927,19 +1012,16 @@ function Plans() {
                   <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between">
                     <span>{selected.name}</span><span>{money(selected.price)}</span>
                   </div>
-
                   {payErr && (
                     <div className="rounded-2xl bg-red-50 p-3 text-sm font-bold text-red-700 flex items-center gap-2">
                       <AlertCircle size={16} /> {payErr}
                     </div>
                   )}
-
                   {!hasGateway ? (
                     <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-800 p-6 text-center text-white space-y-3">
                       <div className="text-4xl">🚀</div>
                       <h3 className="text-xl font-black">Payment Gateway</h3>
-                      <p className="text-sm text-white/70">Coming Soon</p>
-                      <p className="text-xs text-white/50 leading-relaxed">Admin panel mein gateway configure karein.</p>
+                      <p className="text-sm text-white/70">Admin panel mein gateway configure karein.</p>
                       {payment.whatsapp && (
                         <a href={`https://wa.me/${payment.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">
@@ -951,6 +1033,7 @@ function Plans() {
                     <GatewayPayBlock
                       gateway={defaultGw!} plan={selected} busy={busy} txId={txId} setTxId={setTxId}
                       payment={payment}
+                      onCashfree={() => handleCashfree(defaultGw!)}
                       onRazorpay={() => handleRazorpay(defaultGw!)}
                       onUpiManual={() => handleUpiManual(defaultGw!)}
                     />
@@ -969,7 +1052,7 @@ function Plans() {
                   </h2>
                   <p className="text-zinc-600">
                     {defaultGw?.type === 'UPI Manual'
-                      ? 'Admin verification ke baad premium activate hoga. WhatsApp par UTR bhejein.'
+                      ? 'Admin verification ke baad premium activate hoga.'
                       : `${selected.name} — ${selected.duration_days} din ke liye active hai.`}
                   </p>
                   {defaultGw?.type === 'UPI Manual' && payment.whatsapp && (
@@ -991,13 +1074,26 @@ function Plans() {
   );
 }
 
-function GatewayPayBlock({
-  gateway, plan, busy, txId, setTxId, payment, onRazorpay, onUpiManual
-}: {
+// ─── GATEWAY PAY BLOCK ────────────────────────────────────────────────────────
+function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfree, onRazorpay, onUpiManual }: {
   gateway: GatewayConfig; plan: Plan; busy: boolean;
   txId: string; setTxId: (v: string) => void; payment: PaymentSettings;
-  onRazorpay: () => void; onUpiManual: () => void;
+  onCashfree: () => void; onRazorpay: () => void; onUpiManual: () => void;
 }) {
+  // ── Cashfree ──
+  if (gateway.type === 'Cashfree') return (
+    <div className="space-y-3">
+      <div className="rounded-2xl bg-indigo-50 p-4 text-sm text-indigo-700 font-bold flex items-center gap-2">
+        <CreditCard size={16} /> Cashfree Secure Checkout
+        {gateway.testMode && <span className="ml-auto rounded-full bg-yellow-200 px-2 py-0.5 text-xs text-yellow-800">SANDBOX</span>}
+      </div>
+      <button type="button" disabled={busy} onClick={onCashfree} className="btn w-full disabled:opacity-60">
+        {busy ? <Loader2 className="animate-spin mx-auto" size={20} /> : `Pay ${money(plan.price)} via Cashfree`}
+      </button>
+    </div>
+  );
+
+  // ── Razorpay ──
   if (gateway.type === 'Razorpay') return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-blue-50 p-4 text-sm text-blue-700 font-bold flex items-center gap-2">
@@ -1010,6 +1106,7 @@ function GatewayPayBlock({
     </div>
   );
 
+  // ── UPI Manual ──
   if (gateway.type === 'UPI Manual') return (
     <div className="space-y-3">
       {gateway.keys.upiQr && (
@@ -1032,7 +1129,7 @@ function GatewayPayBlock({
     </div>
   );
 
-  // Generic / other gateways
+  // ── Generic / other ──
   return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold">
@@ -1049,9 +1146,9 @@ function GatewayPayBlock({
   );
 }
 
-// ─── PROFILE / USER DASHBOARD ─────────────────────────────────────────────────
+// ─── PROFILE ──────────────────────────────────────────────────────────────────
 function Profile() {
-  const { user, guestId, subscribed, activeSub, data, mutate } = useApp();
+  const { user, guestId, subscribed, activeSub, data, mutate, setUser } = useApp();
   const isLoggedIn = !!(user?.email);
   const [name, setName] = useState(user?.display_name || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -1061,7 +1158,11 @@ function Profile() {
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'account' | 'subscription' | 'history'>('account');
 
-  useEffect(() => { setName(user?.display_name || ''); setEmail(user?.email || ''); }, [user?.id]);
+  // FIX: Re-sync when user object updates
+  useEffect(() => {
+    setName(user?.display_name || '');
+    setEmail(user?.email || '');
+  }, [user?.id, user?.display_name]);
 
   const signIn = async (signUp = false) => {
     if (!email || !password) { setAuthMsg('Email aur password dono bharo.'); return; }
@@ -1076,19 +1177,33 @@ function Profile() {
     finally { setBusy(false); }
   };
 
-  const signOut = async () => { await supabase.auth.signOut(); localStorage.removeItem('rr_guest'); window.location.href = '/'; };
-  const saveProfile = () => user && mutate('users', 'PUT', { id: user.id, display_name: name, email }).then(() => setAuthMsg('Profile update ho gaya.'));
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    localStorage.removeItem('rr_guest');
+    localStorage.removeItem(LS_DISPLAY_NAME);
+    window.location.href = '/';
+  };
+
+  // FIX: Instant context + localStorage update — no flicker after save
+  const saveProfile = async () => {
+    if (!user) return;
+    try {
+      await mutate('users', 'PUT', { id: user.id, display_name: name, email });
+      setUser({ ...user, display_name: name, email });
+      localStorage.setItem(LS_DISPLAY_NAME, name);
+      setAuthMsg('Profile update ho gaya ✅');
+    } catch (e: any) { setAuthMsg('Update failed: ' + e.message); }
+  };
 
   const cancelSub = async () => {
-    if (!activeSub) return;
-    if (!confirm('Kya aap subscription cancel karna chahte hain?')) return;
+    if (!activeSub || !confirm('Subscription cancel karna chahte hain?')) return;
     try {
       await mutate('subscriptions', 'PUT', { id: activeSub.id, status: 'cancelled', cancelled_at: new Date().toISOString(), auto_renew: false });
     } catch (e: any) { setAuthMsg(e.message); }
   };
 
   const payments = (data.payments || []).filter(p => p.user_id === guestId);
-  const watchHistory = (data.watch_history || []);
+  const watchHistory = data.watch_history || [];
 
   return (
     <section className="space-y-6">
@@ -1101,7 +1216,8 @@ function Profile() {
           <h1 className="relative mt-5 text-4xl font-black leading-tight md:text-5xl">Login karke premium kahaniyan resume karein.</h1>
           <div className="relative mt-6 grid gap-3 sm:grid-cols-3">
             <div className="rounded-3xl bg-white/10 p-4">
-              <b>{subscribed ? 'Premium' : 'Free'}</b><small className="block text-white/60">Current Plan</small>
+              <b>{subscribed ? 'Premium' : 'Free'}</b>
+              <small className="block text-white/60">Current Plan</small>
               {activeSub && <small className="block text-[var(--rr-primary)] text-xs font-bold">{daysLeft(activeSub)} din bache</small>}
             </div>
             <div className="rounded-3xl bg-white/10 p-4"><b>{(data.bookmarks || []).length}</b><small className="block text-white/60">Saved</small></div>
@@ -1143,7 +1259,6 @@ function Profile() {
         </div>
       </div>
 
-      {/* ── User Dashboard Tabs ── */}
       <div className="card overflow-hidden">
         <div className="flex border-b">
           {(['account', 'subscription', 'history'] as const).map(t => (
@@ -1153,7 +1268,6 @@ function Profile() {
             </button>
           ))}
         </div>
-
         {activeTab === 'account' && (
           <div className="p-5 space-y-3">
             <div className="rounded-2xl bg-zinc-100 p-4 space-y-2 text-sm">
@@ -1163,7 +1277,6 @@ function Profile() {
             </div>
           </div>
         )}
-
         {activeTab === 'subscription' && (
           <div className="p-5 space-y-4">
             {activeSub ? (
@@ -1176,17 +1289,12 @@ function Profile() {
                     <div><p className="opacity-70">Bache hue din</p><p className="font-black">{daysLeft(activeSub)} din</p></div>
                     <div><p className="opacity-70">Purchase</p><p className="font-black">{new Date(activeSub.created_at).toLocaleDateString('en-IN')}</p></div>
                     <div><p className="opacity-70">Expiry</p><p className="font-black">{new Date(activeSub.expires_at).toLocaleDateString('en-IN')}</p></div>
-                    {activeSub.auto_renew !== undefined && (
-                      <div><p className="opacity-70">Auto-Renew</p><p className="font-black">{activeSub.auto_renew ? '✅ On' : '❌ Off'}</p></div>
-                    )}
-                    {activeSub.gateway && (
-                      <div><p className="opacity-70">Gateway</p><p className="font-black">{activeSub.gateway}</p></div>
-                    )}
+                    {activeSub.gateway && <div><p className="opacity-70">Gateway</p><p className="font-black">{activeSub.gateway}</p></div>}
                   </div>
                 </div>
                 {daysLeft(activeSub) <= 5 && (
                   <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-700 flex items-center gap-2">
-                    <Clock size={16} /> Subscription jald expire hone wala hai! Renew karein.
+                    <Clock size={16} /> Subscription jald expire hone wala hai!
                   </div>
                 )}
                 <button onClick={cancelSub} className="w-full rounded-full bg-red-50 py-3 font-black text-red-600 text-sm flex items-center justify-center gap-2">
@@ -1200,7 +1308,6 @@ function Profile() {
                 <a href="#plans" className="btn mt-4 inline-flex">Plans Dekhein</a>
               </div>
             )}
-            {/* Payment History */}
             {payments.length > 0 && (
               <div>
                 <h3 className="font-black mb-2">Payment History</h3>
@@ -1222,7 +1329,6 @@ function Profile() {
             )}
           </div>
         )}
-
         {activeTab === 'history' && (
           <div className="p-5">
             <Rows title="Saved Episodes">
@@ -1303,7 +1409,7 @@ function HelpCenter() {
   );
 }
 
-// ─── PWA INSTALL (FIXED) ──────────────────────────────────────────────────────
+// ─── PWA INSTALL ──────────────────────────────────────────────────────────────
 function PwaInstall() {
   const { guestId, mutate } = useApp();
   const [deferred, setDeferred] = useState<any>(null);
@@ -1327,20 +1433,16 @@ function PwaInstall() {
 
   const install = async () => {
     if (deferred) {
-      setInstalling(true);
-      deferred.prompt();
+      setInstalling(true); deferred.prompt();
       const { outcome } = await deferred.userChoice;
       setInstalling(false);
       if (outcome === 'accepted') {
-        localStorage.setItem('rr_install_completed', '1');
-        setHidden(true);
+        localStorage.setItem('rr_install_completed', '1'); setHidden(true);
         try { await mutate('push_subscriptions', 'POST', { user_id: guestId, endpoint: 'pwa-installed', subscription: { platform: navigator.userAgent }, enabled: true }); } catch { }
       }
     } else if (isIos) { setIosOpen(true); }
     else { setManualOpen(true); }
   };
-
-  const dismissForever = () => { localStorage.setItem('rr_install_closed', '1'); setHidden(true); };
 
   return <>
     {iosOpen && (
@@ -1348,13 +1450,12 @@ function PwaInstall() {
         <motion.div initial={{ scale: .92, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-sm rounded-[34px] bg-white p-6 shadow-2xl">
           <button onClick={() => setIosOpen(false)} className="float-right rounded-full bg-zinc-100 p-2"><X size={18} /></button>
           <h2 className="text-2xl font-black mb-2">iPhone par Install karein</h2>
-          <p className="text-sm text-zinc-500 mb-5">Neeche diye steps follow karein:</p>
-          <ol className="space-y-4 text-sm font-bold">
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Safari toolbar mein <b>Share button</b> (box with arrow ↑) dabao</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span>Scroll karke <b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> button dabao</span></li>
+          <ol className="space-y-4 text-sm font-bold mt-5">
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Safari toolbar mein <b>Share button</b> (↑) dabao</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Add to Home Screen"</b> select karo</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> dabao</span></li>
           </ol>
-          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai.</p>
+          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari mein kaam karta hai.</p>
           <button onClick={() => setIosOpen(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
         </motion.div>
       </div>
@@ -1366,8 +1467,8 @@ function PwaInstall() {
           <h2 className="text-2xl font-black mb-2">App Install karein</h2>
           <ol className="space-y-4 text-sm font-bold">
             <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Address bar ke right mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> ya <b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo — app install ho jaayega!</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> select karo</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo!</span></li>
           </ol>
           <button onClick={() => setManualOpen(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
         </motion.div>
@@ -1377,7 +1478,7 @@ function PwaInstall() {
       className="fixed bottom-24 left-4 z-40 flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-3 font-black text-white shadow-2xl disabled:opacity-60 md:left-auto md:right-6">
       {installing ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />} Install App
     </button>
-    <button onClick={dismissForever} className="fixed bottom-[4.5rem] left-4 z-40 text-xs text-zinc-400 md:left-auto md:right-6">Dismiss</button>
+    <button onClick={() => { localStorage.setItem('rr_install_closed', '1'); setHidden(true); }} className="fixed bottom-[4.5rem] left-4 z-40 text-xs text-zinc-400 md:left-auto md:right-6">Dismiss</button>
   </>;
 }
 
@@ -1478,10 +1579,9 @@ function NotificationStrip() {
     success: 'bg-green-900 text-green-100', warning: 'bg-amber-900 text-amber-100',
     error: 'bg-red-900 text-red-100', info: 'bg-zinc-950 text-white'
   };
-  const cls = colors[n.type || 'info'] || colors.info;
   return (
     <div className="mx-auto mt-4 max-w-6xl px-4">
-      <div className={`flex items-center gap-3 rounded-3xl p-4 shadow-lg ${cls}`}>
+      <div className={`flex items-center gap-3 rounded-3xl p-4 shadow-lg ${colors[n.type || 'info'] || colors.info}`}>
         <Bell className="text-[var(--rr-primary)] shrink-0" />
         <div className="flex-1"><b>{n.title}</b><p className="text-sm opacity-75">{n.message}</p></div>
         <button onClick={() => setDismissed(p => [...p, n.id])} className="opacity-60 hover:opacity-100"><X size={18} /></button>
@@ -1521,8 +1621,7 @@ function Admin() {
   const [importText, setImportText] = useState('');
   const [importResource, setImportResource] = useState('videos');
   const [importMsg, setImportMsg] = useState('');
-  const [gwEdit, setGwEdit] = useState<GatewayConfig | null>(null);
-  const [gwForm, setGwForm] = useState<Partial<GatewayConfig>>({});
+  const [gwForm, setGwForm] = useState<Partial<GatewayConfig & { keys: Record<string, string> }>>({});
 
   useEffect(() => setPay(payment), [payment]);
   useEffect(() => setTh(theme), [theme]);
@@ -1534,17 +1633,14 @@ function Admin() {
     return mutate('admin_settings', row ? 'PUT' : 'POST', row ? { id: row.id, key, value } : { key, value });
   };
 
-  // ── Revenue calculations ──
   const payments = data.payments || [];
   const successPayments = payments.filter(p => p.status === 'success');
   const revenue = successPayments.reduce((a, p) => a + Number(p.amount || 0), 0);
-
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   const dailyRevenue = successPayments.filter(p => new Date(p.created_at).getTime() >= startOfDay).reduce((a, p) => a + Number(p.amount || 0), 0);
   const monthlyRevenue = successPayments.filter(p => new Date(p.created_at).getTime() >= startOfMonth).reduce((a, p) => a + Number(p.amount || 0), 0);
-
   const allSubs = data.subscriptions || [];
   const activeSubs = allSubs.filter(s => s.status === 'active' && new Date(s.expires_at).getTime() > Date.now());
   const expiredSubs = allSubs.filter(s => s.status === 'expired' || (s.status === 'active' && new Date(s.expires_at).getTime() < Date.now()));
@@ -1555,13 +1651,11 @@ function Admin() {
     const w = open('', '_blank');
     w?.document.write(`<h1>ReelRamp Pro Report</h1><p>Total Revenue: ${money(revenue)}</p><p>Daily: ${money(dailyRevenue)}</p><p>Monthly: ${money(monthlyRevenue)}</p><p>Active Subs: ${activeSubs.length}</p><p>Users: ${(data.users || []).length}</p><p>Videos: ${videos.length}</p><script>print()<\/script>`);
   };
-
   const exp = () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     a.download = 'reelramp-backup.json'; a.click();
   };
-
   const doImport = async (dryRun = false) => {
     try {
       const parsed = JSON.parse(importText);
@@ -1576,34 +1670,23 @@ function Admin() {
     } catch (e: any) { setImportMsg(e.message); }
   };
 
-  // Gateway management helpers
   const addGateway = () => {
+    if (!gwForm.name || !gwForm.type) return;
     const newGw: GatewayConfig = {
-      id: `gw_${Date.now()}`, name: gwForm.name || 'New Gateway',
-      type: gwForm.type || 'Razorpay', enabled: true,
-      isDefault: pay.gateways.length === 0, testMode: false,
-      keys: {}, healthStatus: 'unknown', ...gwForm
+      id: `gw_${Date.now()}`, name: gwForm.name, type: gwForm.type,
+      enabled: true, isDefault: pay.gateways.length === 0, testMode: !!gwForm.testMode,
+      keys: gwForm.keys || {}, webhookSecret: gwForm.webhookSecret || '', healthStatus: 'unknown'
     };
-    const updated = { ...pay, gateways: [...pay.gateways, newGw] };
-    setPay(updated); setGwForm({}); setGwEdit(null);
+    setPay({ ...pay, gateways: [...pay.gateways, newGw] }); setGwForm({});
   };
+  const updateGw = (id: string, changes: Partial<GatewayConfig>) =>
+    setPay({ ...pay, gateways: pay.gateways.map(g => g.id === id ? { ...g, ...changes } : g) });
+  const removeGw = (id: string) =>
+    setPay({ ...pay, gateways: pay.gateways.filter(g => g.id !== id) });
+  const setDefaultGw = (id: string) =>
+    setPay({ ...pay, gateways: pay.gateways.map(g => ({ ...g, isDefault: g.id === id })) });
 
-  const updateGateway = (id: string, changes: Partial<GatewayConfig>) => {
-    const updated = { ...pay, gateways: pay.gateways.map(g => g.id === id ? { ...g, ...changes } : g) };
-    setPay(updated);
-  };
-
-  const removeGateway = (id: string) => {
-    const updated = { ...pay, gateways: pay.gateways.filter(g => g.id !== id) };
-    setPay(updated);
-  };
-
-  const setDefault = (id: string) => {
-    const updated = { ...pay, gateways: pay.gateways.map(g => ({ ...g, isDefault: g.id === id })) };
-    setPay(updated);
-  };
-
-  const tabs = ['dashboard', 'videos', 'series', 'categories', 'banners', 'promoVideo', 'promoAnalytics', 'popups', 'notifications', 'plans', 'payments', 'subscriptions', 'users', 'wallet', 'referrals', 'reports', 'errors', 'audit', 'theme', 'gateways', 'player', 'content', 'policies', 'help', 'push', 'support', 'json'];
+  const tabs = ['dashboard','videos','series','categories','banners','promoVideo','promoAnalytics','popups','notifications','plans','payments','subscriptions','users','wallet','referrals','reports','errors','audit','theme','gateways','player','content','policies','help','push','support','json'];
 
   return (
     <main className="min-h-screen bg-orange-50 p-4 md:p-8">
@@ -1612,33 +1695,24 @@ function Admin() {
         {tabs.map(t => <button key={t} onClick={() => setTab(t)} className={`pill ${tab === t ? 'active' : ''}`}>{t}</button>)}
       </div>
 
-      {/* ── DASHBOARD ── */}
       {tab === 'dashboard' && (
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Total Revenue" v={money(revenue)} />
-            <Stat l="Daily Revenue" v={money(dailyRevenue)} />
-            <Stat l="Monthly Revenue" v={money(monthlyRevenue)} />
-            <Stat l="Total Users" v={(data.users || []).length} />
+            <Stat l="Total Revenue" v={money(revenue)} /><Stat l="Daily Revenue" v={money(dailyRevenue)} />
+            <Stat l="Monthly Revenue" v={money(monthlyRevenue)} /><Stat l="Total Users" v={(data.users || []).length} />
           </div>
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Active Subs" v={activeSubs.length} />
-            <Stat l="Expired Subs" v={expiredSubs.length} />
-            <Stat l="Pending Payments" v={pendingPayments.length} />
-            <Stat l="Failed Payments" v={failedPayments.length} />
+            <Stat l="Active Subs" v={activeSubs.length} /><Stat l="Expired Subs" v={expiredSubs.length} />
+            <Stat l="Pending Payments" v={pendingPayments.length} /><Stat l="Failed Payments" v={failedPayments.length} />
           </div>
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Videos" v={videos.length} />
-            <Stat l="Series" v={(data.series || []).length} />
-            <Stat l="Categories" v={(data.categories || []).length} />
-            <Stat l="Support Tickets" v={(data.support_tickets || []).length} />
+            <Stat l="Videos" v={videos.length} /><Stat l="Series" v={(data.series || []).length} />
+            <Stat l="Categories" v={(data.categories || []).length} /><Stat l="Support Tickets" v={(data.support_tickets || []).length} />
           </div>
           <button onClick={pdf} className="btn"><FileText /> Download PDF Report</button>
-
-          {/* Pending UPI payments needing verification */}
           {pendingPayments.length > 0 && (
             <div className="card p-5">
-              <h3 className="font-black text-amber-700 flex items-center gap-2 mb-3"><AlertCircle size={18} /> Pending Payments (Manual Verification Required)</h3>
+              <h3 className="font-black text-amber-700 flex items-center gap-2 mb-3"><AlertCircle size={18} /> Pending Payments</h3>
               <div className="space-y-2">
                 {pendingPayments.map(p => (
                   <div key={p.id} className="rounded-2xl bg-amber-50 p-3 flex justify-between items-center">
@@ -1658,15 +1732,15 @@ function Admin() {
         </div>
       )}
 
-      {tab === 'videos' && <Crud resource="videos" fields={['title', 'description', 'series_title', 'episode_number', 'video_filename', 'bunny_video_id', 'bunny_embed_url', 'thumbnail_url', 'category', 'duration_seconds', 'age_rating', 'publish_at']} checks={['is_premium', 'is_published']} defaults={{ is_published: true, category: categories[0]?.name || 'Drama', age_rating: 'U/A 13+' }} />}
-      {tab === 'series' && <Crud resource="series" fields={['title', 'description', 'poster_url', 'category', 'status', 'sort_order']} checks={['is_featured']} defaults={{ status: 'published' }} />}
-      {tab === 'categories' && <Crud resource="categories" fields={['name', 'slug', 'icon', 'sort_order']} checks={['is_active']} defaults={{ icon: '🎬', is_active: true }} />}
-      {tab === 'banners' && <Crud resource="banners" fields={['title', 'subtitle', 'image_url', 'cta_label', 'cta_action', 'sort_order']} checks={['is_active']} defaults={{ is_active: true, cta_action: 'forYou' }} />}
-      {tab === 'promoVideo' && <Crud resource="promo_campaigns" fields={['title', 'subtitle', 'celebrity_name', 'video_filename', 'poster_url', 'offer_text', 'cta_label', 'cta_action', 'placement', 'show_after_seconds', 'frequency_hours', 'sort_order', 'start_at', 'end_at', 'target']} checks={['is_active']} defaults={{ is_active: true, placement: 'app_open', cta_action: 'plans', show_after_seconds: 2, frequency_hours: 12, target: 'free_users' }} />}
+      {tab === 'videos' && <Crud resource="videos" fields={['title','description','series_title','episode_number','video_filename','bunny_video_id','bunny_embed_url','thumbnail_url','category','duration_seconds','age_rating','publish_at']} checks={['is_premium','is_published']} defaults={{ is_published: true, category: categories[0]?.name || 'Drama', age_rating: 'U/A 13+' }} />}
+      {tab === 'series' && <Crud resource="series" fields={['title','description','poster_url','category','status','sort_order']} checks={['is_featured']} defaults={{ status: 'published' }} />}
+      {tab === 'categories' && <Crud resource="categories" fields={['name','slug','icon','sort_order']} checks={['is_active']} defaults={{ icon: '🎬', is_active: true }} />}
+      {tab === 'banners' && <Crud resource="banners" fields={['title','subtitle','image_url','cta_label','cta_action','sort_order']} checks={['is_active']} defaults={{ is_active: true, cta_action: 'forYou' }} />}
+      {tab === 'promoVideo' && <Crud resource="promo_campaigns" fields={['title','subtitle','celebrity_name','video_filename','poster_url','offer_text','cta_label','cta_action','placement','show_after_seconds','frequency_hours','sort_order','start_at','end_at','target']} checks={['is_active']} defaults={{ is_active: true, placement: 'app_open', cta_action: 'plans', show_after_seconds: 2, frequency_hours: 12, target: 'free_users' }} />}
       {tab === 'promoAnalytics' && <DataTable resource="promo_events" rows={data.promo_events || []} />}
-      {tab === 'popups' && <Crud resource="popup_settings" fields={['title', 'message', 'cta_label', 'cta_url']} checks={['enabled']} defaults={{ enabled: true }} />}
-      {tab === 'notifications' && <Crud resource="notifications" fields={['title', 'message', 'target']} checks={['is_active']} defaults={{ is_active: true, target: 'all' }} />}
-      {tab === 'plans' && <Crud resource="plans" fields={['name', 'price', 'duration_days', 'sort_order', 'plan_type', 'trial_days']} checks={['is_active', 'supports_autorenew']} defaults={{ is_active: true, price: 99, duration_days: 30, plan_type: 'monthly' }} />}
+      {tab === 'popups' && <Crud resource="popup_settings" fields={['title','message','cta_label','cta_url']} checks={['enabled']} defaults={{ enabled: true }} />}
+      {tab === 'notifications' && <Crud resource="notifications" fields={['title','message','target']} checks={['is_active']} defaults={{ is_active: true, target: 'all' }} />}
+      {tab === 'plans' && <Crud resource="plans" fields={['name','price','duration_days','sort_order','plan_type','trial_days']} checks={['is_active','supports_autorenew']} defaults={{ is_active: true, price: 99, duration_days: 30, plan_type: 'monthly' }} />}
       {tab === 'payments' && <DataTable resource="payments" rows={data.payments || []} />}
       {tab === 'subscriptions' && <DataTable resource="subscriptions" rows={data.subscriptions || []} />}
       {tab === 'users' && <DataTable resource="users" rows={data.users || []} />}
@@ -1676,101 +1750,98 @@ function Admin() {
       {tab === 'errors' && <DataTable resource="error_logs" rows={data.error_logs || []} />}
       {tab === 'audit' && <DataTable resource="audit_logs" rows={data.audit_logs || []} />}
 
-      {/* ── GATEWAYS (Full Gateway Engine) ── */}
       {tab === 'gateways' && (
-        <div className="space-y-5">
-          <div className="panel">
-            <h2 className="adminh"><Wallet /> Payment Gateway Engine</h2>
-            <p className="text-sm text-zinc-500 mb-4">Multiple gateways add, edit, enable/disable karein. Default gateway plans page par use hoga.</p>
-
-            {/* Existing Gateways */}
-            <div className="space-y-3 mb-5">
-              {pay.gateways.map(gw => (
-                <div key={gw.id} className={`rounded-3xl border-2 p-4 ${gw.enabled ? 'border-green-200 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`h-3 w-3 rounded-full ${gw.enabled ? 'bg-green-500' : 'bg-zinc-300'}`} />
-                      <b className="font-black">{gw.name}</b>
-                      <span className="text-xs text-zinc-500">({gw.type})</span>
-                      {gw.isDefault && <span className="rounded-full bg-[var(--rr-primary)] px-2 py-0.5 text-xs font-black text-black">DEFAULT</span>}
-                      {gw.testMode && <span className="rounded-full bg-yellow-200 px-2 py-0.5 text-xs font-black text-yellow-800">TEST</span>}
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => updateGateway(gw.id, { enabled: !gw.enabled })} className={`rounded-full px-3 py-1 text-xs font-black ${gw.enabled ? 'bg-zinc-200 text-zinc-700' : 'bg-green-200 text-green-700'}`}>
-                        {gw.enabled ? 'Disable' : 'Enable'}
-                      </button>
-                      {!gw.isDefault && <button onClick={() => setDefault(gw.id)} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">Set Default</button>}
-                      <button onClick={() => removeGateway(gw.id)} className="rounded-full bg-red-100 p-2 text-red-600"><Trash2 size={14} /></button>
-                    </div>
+        <div className="panel space-y-5">
+          <h2 className="adminh"><Wallet /> Payment Gateway Engine</h2>
+          <p className="text-sm text-zinc-500">Multiple gateways add karein. Default gateway Plans page par use hoga.</p>
+          <div className="space-y-3">
+            {pay.gateways.map(gw => (
+              <div key={gw.id} className={`rounded-3xl border-2 p-4 ${gw.enabled ? 'border-green-200 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`h-3 w-3 rounded-full ${gw.enabled ? 'bg-green-500' : 'bg-zinc-300'}`} />
+                    <b className="font-black">{gw.name}</b>
+                    <span className="text-xs text-zinc-500">({gw.type})</span>
+                    {gw.isDefault && <span className="rounded-full bg-[var(--rr-primary)] px-2 py-0.5 text-xs font-black text-black">DEFAULT</span>}
+                    {gw.testMode && <span className="rounded-full bg-yellow-200 px-2 py-0.5 text-xs font-black text-yellow-800">TEST/SANDBOX</span>}
                   </div>
-                  {/* Key preview (masked) */}
-                  {Object.entries(gw.keys).map(([k, v]) => (
-                    <p key={k} className="text-xs text-zinc-500 font-mono">{k}: {k.toLowerCase().includes('secret') ? '••••••••' : String(v).slice(0, 12) + (String(v).length > 12 ? '...' : '')}</p>
-                  ))}
+                  <div className="flex gap-2">
+                    <button onClick={() => updateGw(gw.id, { enabled: !gw.enabled })} className={`rounded-full px-3 py-1 text-xs font-black ${gw.enabled ? 'bg-zinc-200 text-zinc-700' : 'bg-green-200 text-green-700'}`}>
+                      {gw.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    {!gw.isDefault && <button onClick={() => setDefaultGw(gw.id)} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">Set Default</button>}
+                    <button onClick={() => removeGw(gw.id)} className="rounded-full bg-red-100 p-2 text-red-600"><Trash2 size={14} /></button>
+                  </div>
                 </div>
-              ))}
-            </div>
-
-            {/* Add Gateway Form */}
-            <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
-              <h3 className="font-black mb-3 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div><label className="label">Gateway Name *</label><input className="input" value={gwForm.name || ''} onChange={e => setGwForm({ ...gwForm, name: e.target.value })} placeholder="Razorpay Production" /></div>
-                <div>
-                  <label className="label">Gateway Type *</label>
-                  <select className="input" value={gwForm.type || ''} onChange={e => setGwForm({ ...gwForm, type: e.target.value })}>
-                    <option value="">-- Select --</option>
-                    {['Razorpay', 'PayU', 'Cashfree', 'UPI Manual', 'Paytm', 'PhonePe', 'Stripe', 'PayPal', 'Bank Transfer', 'Other'].map(g => <option key={g}>{g}</option>)}
-                  </select>
-                </div>
+                {Object.entries(gw.keys).map(([k, v]) => (
+                  <p key={k} className="text-xs text-zinc-500 font-mono">{k}: {k.toLowerCase().includes('secret') ? '••••••••' : String(v).slice(0, 16) + (String(v).length > 16 ? '...' : '')}</p>
+                ))}
               </div>
-
-              {/* Dynamic key fields based on type */}
-              {(gwForm.type === 'Razorpay' || gwForm.type === 'Cashfree' || gwForm.type === 'PayU') && (
-                <div className="grid gap-3 md:grid-cols-2 mt-3">
-                  <div><label className="label">Key ID / Client ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
-                  <div><label className="label">Key Secret</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} placeholder="Secret" /></div>
-                  <div className="md:col-span-2"><label className="label">Webhook Secret (optional)</label><input className="input" type="password" value={gwForm.webhookSecret || ''} onChange={e => setGwForm({ ...gwForm, webhookSecret: e.target.value })} placeholder="Webhook secret" /></div>
-                </div>
-              )}
-              {gwForm.type === 'UPI Manual' && (
-                <div className="grid gap-3 md:grid-cols-2 mt-3">
-                  <div><label className="label">UPI ID</label><input className="input" value={gwForm.keys?.upiId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiId: e.target.value } })} placeholder="yourname@upi" /></div>
-                  <div><label className="label">QR Code Image URL</label><input className="input" value={gwForm.keys?.upiQr || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiQr: e.target.value } })} placeholder="https://..." /></div>
-                </div>
-              )}
-              {(gwForm.type === 'Stripe' || gwForm.type === 'PayPal') && (
-                <div className="grid gap-3 md:grid-cols-2 mt-3">
-                  <div><label className="label">Publishable / Client Key</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} /></div>
-                  <div><label className="label">Secret / Private Key</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} /></div>
-                </div>
-              )}
-
-              <div className="flex items-center gap-3 mt-3">
-                <label className="flex cursor-pointer items-center gap-2 font-black text-sm">
-                  <input type="checkbox" checked={!!gwForm.testMode} onChange={e => setGwForm({ ...gwForm, testMode: e.target.checked })} className="h-4 w-4" />
-                  Test / Sandbox Mode
-                </label>
-              </div>
-              <button onClick={addGateway} disabled={!gwForm.name || !gwForm.type} className="btn mt-4 disabled:opacity-50">Add Gateway</button>
-            </div>
-
-            {/* Common settings */}
-            <div className="mt-5 space-y-3">
-              <h3 className="font-black">Common Settings</h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div><label className="label">WhatsApp Support</label><input className="input" value={pay.whatsapp || ''} onChange={e => setPay({ ...pay, whatsapp: e.target.value })} placeholder="+917307493338" /></div>
-                <div><label className="label">Monthly Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay({ ...pay, monthlyPrice: Number(e.target.value) })} /></div>
-              </div>
-              <div><label className="label">Payment Instructions (users ko dikhega)</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} placeholder="UPI se payment karein aur UTR WhatsApp par bhejein." /></div>
-            </div>
-
-            <button className="save w-full mt-4" onClick={() => saveSetting('payment', pay)}>💾 Save All Gateway Settings</button>
+            ))}
           </div>
+
+          {/* Add Gateway Form */}
+          <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
+            <h3 className="font-black mb-3 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div><label className="label">Gateway Name *</label><input className="input" value={gwForm.name || ''} onChange={e => setGwForm({ ...gwForm, name: e.target.value })} placeholder="Cashfree Production" /></div>
+              <div>
+                <label className="label">Gateway Type *</label>
+                <select className="input" value={gwForm.type || ''} onChange={e => setGwForm({ ...gwForm, type: e.target.value })}>
+                  <option value="">-- Select --</option>
+                  {['Cashfree','Razorpay','PayU','UPI Manual','Paytm','PhonePe','Stripe','PayPal','Bank Transfer','Other'].map(g => <option key={g}>{g}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Cashfree keys */}
+            {gwForm.type === 'Cashfree' && (
+              <div className="grid gap-3 md:grid-cols-2 mt-3">
+                <div><label className="label">App ID</label><input className="input" value={gwForm.keys?.appId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, appId: e.target.value } })} placeholder="TEST1234567890" /></div>
+                <div><label className="label">Secret Key</label><input className="input" type="password" value={gwForm.keys?.secretKey || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, secretKey: e.target.value } })} placeholder="Secret" /></div>
+                <div className="md:col-span-2 rounded-2xl bg-indigo-50 p-3 text-xs text-indigo-700 font-bold">
+                  ℹ️ Backend mein <code>/api/cashfree/create-order</code> endpoint banana padega jo Cashfree order create kare aur <code>payment_session_id</code> return kare.
+                </div>
+              </div>
+            )}
+            {/* Razorpay / PayU / Cashfree keys */}
+            {(gwForm.type === 'Razorpay' || gwForm.type === 'PayU') && (
+              <div className="grid gap-3 md:grid-cols-2 mt-3">
+                <div><label className="label">Key ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
+                <div><label className="label">Key Secret</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} placeholder="Secret" /></div>
+              </div>
+            )}
+            {gwForm.type === 'UPI Manual' && (
+              <div className="grid gap-3 md:grid-cols-2 mt-3">
+                <div><label className="label">UPI ID</label><input className="input" value={gwForm.keys?.upiId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiId: e.target.value } })} placeholder="yourname@upi" /></div>
+                <div><label className="label">QR Code URL</label><input className="input" value={gwForm.keys?.upiQr || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiQr: e.target.value } })} placeholder="https://..." /></div>
+              </div>
+            )}
+            {(gwForm.type === 'Stripe' || gwForm.type === 'PayPal') && (
+              <div className="grid gap-3 md:grid-cols-2 mt-3">
+                <div><label className="label">Publishable Key</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} /></div>
+                <div><label className="label">Secret Key</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} /></div>
+              </div>
+            )}
+            <label className="flex cursor-pointer items-center gap-2 font-black text-sm mt-3">
+              <input type="checkbox" checked={!!gwForm.testMode} onChange={e => setGwForm({ ...gwForm, testMode: e.target.checked })} className="h-4 w-4" />
+              Test / Sandbox Mode
+            </label>
+            <button onClick={addGateway} disabled={!gwForm.name || !gwForm.type} className="btn mt-4 disabled:opacity-50">Add Gateway</button>
+          </div>
+
+          <div className="space-y-3">
+            <h3 className="font-black">Common Settings</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div><label className="label">WhatsApp Support</label><input className="input" value={pay.whatsapp || ''} onChange={e => setPay({ ...pay, whatsapp: e.target.value })} /></div>
+              <div><label className="label">Monthly Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay({ ...pay, monthlyPrice: Number(e.target.value) })} /></div>
+            </div>
+            <div><label className="label">Payment Instructions</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} /></div>
+          </div>
+          <button className="save w-full" onClick={() => saveSetting('payment', pay)}>💾 Save All Gateway Settings</button>
         </div>
       )}
 
-      {/* ── THEME (kept exactly as before + payment section updated) ── */}
       {tab === 'theme' && (
         <div className="panel space-y-3">
           <h2 className="adminh"><Palette /> Theme & Logo</h2>
@@ -1781,18 +1852,11 @@ function Admin() {
             <div key={k} className="flex items-center gap-3">
               <label className="w-24 text-sm font-black capitalize">{k} Color</label>
               <input type="color" className="h-10 w-16 cursor-pointer rounded-xl border border-zinc-200" value={th[k] || '#000000'} onChange={e => setTh({ ...th, [k]: e.target.value })} />
-              <input className="input flex-1" value={th[k] || ''} onChange={e => setTh({ ...th, [k]: e.target.value })} placeholder="#hex" />
+              <input className="input flex-1" value={th[k] || ''} onChange={e => setTh({ ...th, [k]: e.target.value })} />
             </div>
           ))}
           <div><label className="mb-1 block text-sm font-black">Border Radius</label><input className="input" value={th.radius || ''} onChange={e => setTh({ ...th, radius: e.target.value })} placeholder="30px" /></div>
           <button className="save" onClick={() => saveSetting('theme', th)}>💾 Save Theme</button>
-
-          {/* Quick gateway status shown in theme tab too */}
-          <div className={`mt-5 rounded-2xl p-3 text-sm font-bold flex items-center gap-2 ${pay.gateways.some(g => g.enabled) ? 'bg-green-50 text-green-700' : 'bg-zinc-100 text-zinc-500'}`}>
-            {pay.gateways.some(g => g.enabled)
-              ? <><CheckCircle2 size={16} /> {pay.gateways.filter(g => g.enabled).length} gateway(s) active — Plans page par payment chalega.</>
-              : <><span>⏳</span> Koi gateway active nahi — "Gateways" tab mein configure karein.</>}
-          </div>
         </div>
       )}
 
@@ -1805,16 +1869,16 @@ function Admin() {
             <option value="bunny">Bunny.net Player (iframe embed)</option>
           </select>
           {['bunnyEmbedBase', 'bunnyLibraryId'].map(k => <input key={k} className="input" value={pl[k] || ''} onChange={e => setPl({ ...pl, [k]: e.target.value })} placeholder={k} />)}
-          <label className="flex gap-2 font-bold"><input type="checkbox" checked={pl.autoplay !== false} onChange={e => setPl({ ...pl, autoplay: e.target.checked })} /> Autoplay</label>
+          <label className="flex gap-2 font-bold mt-2"><input type="checkbox" checked={pl.autoplay !== false} onChange={e => setPl({ ...pl, autoplay: e.target.checked })} /> Autoplay</label>
           <label className="flex gap-2 font-bold"><input type="checkbox" checked={!!pl.muted} onChange={e => setPl({ ...pl, muted: e.target.checked })} /> Muted</label>
           <label className="flex gap-2 font-bold"><input type="checkbox" checked={pl.responsive !== false} onChange={e => setPl({ ...pl, responsive: e.target.checked })} /> Responsive</label>
-          <button className="save" onClick={() => saveSetting('player', pl)}>Save Player Settings</button>
+          <button className="save mt-3" onClick={() => saveSetting('player', pl)}>Save Player Settings</button>
         </div>
       )}
 
-      {tab === 'content' && <Crud resource="platform_settings" fields={['site_name', 'hero_title', 'hero_subtitle', 'pwa_message']} checks={['maintenance_mode']} defaults={{ site_name: 'ReelRamp Pro' }} />}
-      {tab === 'policies' && <Crud resource="legal_policies" fields={['title', 'type', 'version', 'body']} checks={['is_published']} defaults={{ version: '1.0', is_published: true }} />}
-      {tab === 'help' && <Crud resource="help_articles" fields={['title', 'body', 'category', 'sort_order']} checks={['is_published']} defaults={{ is_published: true, category: 'General' }} />}
+      {tab === 'content' && <Crud resource="platform_settings" fields={['site_name','hero_title','hero_subtitle','pwa_message']} checks={['maintenance_mode']} defaults={{ site_name: 'ReelRamp Pro' }} />}
+      {tab === 'policies' && <Crud resource="legal_policies" fields={['title','type','version','body']} checks={['is_published']} defaults={{ version: '1.0', is_published: true }} />}
+      {tab === 'help' && <Crud resource="help_articles" fields={['title','body','category','sort_order']} checks={['is_published']} defaults={{ is_published: true, category: 'General' }} />}
       {tab === 'push' && <DataTable resource="push_subscriptions" rows={data.push_subscriptions || []} />}
       {tab === 'support' && <DataTable resource="support_tickets" rows={data.support_tickets || []} />}
       {tab === 'json' && (
@@ -1822,7 +1886,7 @@ function Admin() {
           <h2 className="adminh"><FileJson /> JSON Backup / Restore</h2>
           <button className="save" onClick={exp}>Export Full JSON</button>
           <select className="input" value={importResource} onChange={e => setImportResource(e.target.value)}>{resources.map(r => <option key={r}>{r}</option>)}</select>
-          <textarea className="input min-h-56" value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste JSON array or full backup JSON here" />
+          <textarea className="input min-h-56" value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste JSON here" />
           <div className="flex gap-2">
             <button className="btn" onClick={() => doImport(true)}>Validate</button>
             <button className="btn" onClick={() => doImport(false)}>Import</button>
@@ -1845,7 +1909,7 @@ function Crud({ resource, fields, checks, defaults }: { resource: string; fields
     <div className="grid gap-5 lg:grid-cols-[420px_1fr]">
       <form onSubmit={save} className="panel">
         <h2 className="adminh"><Edit3 /> {resource}</h2>
-        {fields.map(k => k === 'body' || k === 'description' || k === 'message' || k === 'hero_subtitle'
+        {fields.map(k => ['body','description','message','hero_subtitle'].includes(k)
           ? <textarea key={k} className="input min-h-28" value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} placeholder={k} />
           : <input key={k} className="input" value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} placeholder={k} />)}
         {checks?.map(k => <label key={k} className="flex gap-2 font-bold"><input type="checkbox" checked={!!f[k]} onChange={e => setF({ ...f, [k]: e.target.checked })} />{k}</label>)}
@@ -1879,10 +1943,13 @@ function DataTable({ rows, resource, onEdit }: { rows: Row[]; resource: string; 
   );
 }
 
-// ─── MISC COMPONENTS ──────────────────────────────────────────────────────────
-function Stat({ l, v }: { l: string; v: any }) { return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>; }
+// ─── MISC ─────────────────────────────────────────────────────────────────────
+function Stat({ l, v }: { l: string; v: any }) {
+  return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>;
+}
 
-function Info() {
+// Renamed from Info to AboutSection to avoid conflict with lucide-react's Info icon
+function AboutSection() {
   return (
     <div className="card overflow-hidden md:grid md:grid-cols-[.9fr_1.1fr]">
       <img src={fallbackImages.studio} className="h-full min-h-72 w-full object-cover" />
@@ -1897,20 +1964,30 @@ function Info() {
   );
 }
 
-function Empty() { return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50} /><h2 className="text-3xl font-black">No content yet</h2></div>; }
-function Title({ t, s }: { t: string; s: string }) { return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>; }
+function Empty() {
+  return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50} /><h2 className="text-3xl font-black">No content yet</h2></div>;
+}
+function Title({ t, s }: { t: string; s: string }) {
+  return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>;
+}
 
 // ─── SHELL ────────────────────────────────────────────────────────────────────
 function Shell() {
   const { loading, theme, data, user } = useApp();
   const [tab, setTab] = useState('home');
-  const [history_stack, setHistoryStack] = useState<string[]>(['home']);
+  const [historyStack, setHistoryStack] = useState<string[]>(['home']);
   const [exitAsk, setExitAsk] = useState(false);
 
   const isLoggedIn = !!(user?.email);
-  const headerName = isLoggedIn
-    ? (user?.display_name?.trim() ? user.display_name.trim().split(' ')[0] : 'Profile')
-    : 'Login';
+
+  // FIX: Header name — context first, then localStorage fallback (survives hard refresh)
+  const headerName = (() => {
+    const fromCtx = user?.display_name?.trim();
+    if (fromCtx) return fromCtx.split(' ')[0];
+    const fromStorage = localStorage.getItem(LS_DISPLAY_NAME)?.trim();
+    if (fromStorage) return fromStorage.split(' ')[0];
+    return isLoggedIn ? 'Profile' : 'Login';
+  })();
 
   const go = (t: string) => { setTab(t); setHistoryStack(prev => [...prev, t]); };
 
@@ -1926,16 +2003,14 @@ function Shell() {
     const onPop = () => {
       setHistoryStack(prev => {
         if (prev.length > 1) {
-          const newStack = [...prev]; newStack.pop();
-          const prevTab = newStack[newStack.length - 1];
-          setTab(prevTab);
+          const next = [...prev]; next.pop();
+          setTab(next[next.length - 1]);
           history.pushState({ rr: true }, '', location.href);
-          return newStack;
-        } else {
-          setExitAsk(true);
-          history.pushState({ rr: true }, '', location.href);
-          return prev;
+          return next;
         }
+        setExitAsk(true);
+        history.pushState({ rr: true }, '', location.href);
+        return prev;
       });
     };
     window.addEventListener('popstate', onPop);
@@ -1946,15 +2021,16 @@ function Shell() {
   if (loading) return <div className="grid min-h-screen place-items-center bg-orange-50"><Loader2 className="animate-spin text-[var(--rr-accent)]" size={54} /></div>;
 
   const popup = (data.popup_settings || []).find(p => p.enabled);
+
   const page = tab === 'home' ? <HomePage go={go} />
-    : tab === 'forYou' ? <ForYou />
-      : tab === 'series' ? <SeriesPage go={go} />
-        : tab === 'search' ? <SearchPage go={go} />
-          : tab === 'plans' ? <Plans />
-            : tab === 'wallet' ? <WalletReferral />
-              : tab === 'help' ? <HelpCenter />
-                : tab === 'profile' ? <Profile />
-                  : <Policies />;
+    : tab === 'forYou' ? <ForYou go={go} />
+    : tab === 'series' ? <SeriesPage go={go} />
+    : tab === 'search' ? <SearchPage go={go} />
+    : tab === 'plans' ? <Plans />
+    : tab === 'wallet' ? <WalletReferral />
+    : tab === 'help' ? <HelpCenter />
+    : tab === 'profile' ? <Profile />
+    : <Policies />;
 
   return (
     <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
