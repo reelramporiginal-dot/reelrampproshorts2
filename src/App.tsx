@@ -256,7 +256,7 @@ const createCashfreeOrder = async (opts: {
     };
 
     // Use backend proxy to avoid CORS & keep secret safe
-    const res = await fetch('/api/cashfree-create-order', {
+    const res = await fetch('/api/cashfree/create-order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...orderData, testMode: opts.testMode })
