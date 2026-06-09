@@ -1,3 +1,4 @@
+import { initiatePayment } from './paymentHelper';
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -5,7 +6,9 @@ import {
   Gift, Heart, Home, Instagram, Loader2, Lock, Maximize, MessageCircle, Palette,
   Pause, Play, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, Trash2,
   User, Volume2, VolumeX, Wallet, X, Youtube, Bell, CheckCircle2, AlertCircle,
-  CreditCard, Clock, Ban
+  Calendar, CreditCard, TrendingUp, Users, DollarSign, Clock, RotateCcw,
+  BarChart2, Zap, Shield, RefreshCcw, Ban, ChevronRight, Info as InfoIcon,
+  Image, Link, Phone
 } from 'lucide-react';
 import supabase from './lib/supabase';
 import { handleGoogleRedirect, signInWithGoogle } from './lib/googleAuth';
@@ -26,21 +29,23 @@ type Plan = Row & {
   name: string; price: number; duration_days: number; features: any;
   is_active: boolean; sort_order: number; plan_type?: string;
   supports_autorenew?: boolean; trial_days?: number;
+  cf_plan_id?: string;
 };
 type UserRow = Row & {
   guest_id: string; display_name: string; email: string;
-  role: string; is_admin: boolean;
+  role: string; is_admin: boolean; phone?: string; avatar_url?: string;
+  cf_customer_id?: string;
 };
 type Subscription = Row & {
   user_id: string; plan: string; plan_id?: number; status: string;
   expires_at: string; created_at: string; auto_renew?: boolean;
   renewal_date?: string; cancelled_at?: string; gateway?: string;
-  mandate_id?: string;
+  mandate_id?: string; cf_subscription_id?: string;
 };
 type Payment = Row & {
   user_id: string; plan_id?: number; amount: number; gateway: string;
   status: string; notes?: string; created_at: string;
-  transaction_id?: string; refund_status?: string;
+  transaction_id?: string; cf_order_id?: string; cf_payment_id?: string; refund_status?: string;
 };
 type Notification = Row & {
   title: string; message: string; target: string; is_active: boolean;
@@ -58,23 +63,24 @@ type PaymentSettings = {
   gateway?: string; razorpayKey?: string; razorpaySecret?: string;
   upiId?: string; upiQr?: string; webhookSecret?: string; testMode?: boolean;
 };
+type BrandSettings = {
+  brand: string; logoText: string; logoImageUrl: string;
+  primary: string; accent: string; bg: string; radius: string;
+};
 type Ctx = {
   data: Record<string, Row[]>; videos: Video[]; categories: Category[];
   plans: Plan[]; user: UserRow | null; guestId: string; loading: boolean;
-  subscribed: boolean; activeSub: Subscription | null; theme: any;
+  subscribed: boolean; activeSub: Subscription | null; theme: BrandSettings;
   payment: PaymentSettings; player: any;
   refresh: (silent?: boolean) => Promise<void>;
   mutate: (r: string, m: 'POST' | 'PUT' | 'DELETE', b: Record<string, any>) => Promise<any>;
   addNotif: (n: Omit<Notification, 'id' | 'is_active'>) => void;
-  setUser: (u: UserRow | null) => void;
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const AppContext = createContext<Ctx | null>(null);
 const CDN = (import.meta.env.VITE_BUNNY_CDN_URL || '').replace(/\/$/, '') + '/';
 const ADMIN_SECRET = import.meta.env.VITE_ADMIN_SECRET || 'RRPRO2026';
-const LS_DISPLAY_NAME = 'rr_display_name';
-
 const resources = [
   'videos', 'series', 'categories', 'banners', 'popup_settings', 'platform_settings',
   'admin_settings', 'legal_policies', 'plans', 'users', 'subscriptions', 'payments',
@@ -83,9 +89,10 @@ const resources = [
   'wallet_transactions', 'content_reports', 'error_logs', 'help_articles',
   'push_subscriptions'
 ];
-const defaultTheme = {
-  brand: 'ReelRamp Pro', logoText: 'RR', primary: '#c5a26f', accent: '#ff4f8b',
-  bg: '#fff7ed', surface: '#ffffff', text: '#23170f', radius: '30px'
+const defaultTheme: BrandSettings = {
+  brand: 'ReelRamp Pro', logoText: 'RR', logoImageUrl: '',
+  primary: '#c5a26f', accent: '#ff4f8b',
+  bg: '#fff7ed', radius: '30px'
 };
 const defaultPayment: PaymentSettings = {
   gateways: [], whatsapp: '+917307493338', instructions: '',
@@ -111,7 +118,6 @@ const isInstalledApp = () =>
   window.matchMedia?.('(display-mode: standalone)').matches ||
   (navigator as any).standalone === true ||
   localStorage.getItem('rr_install_completed') === '1';
-
 const bunnyIframeUrl = (video: Video, player: any) => {
   if (video.bunny_embed_url) return video.bunny_embed_url;
   const id = video.bunny_video_id || video.video_filename;
@@ -123,6 +129,21 @@ const bunnyIframeUrl = (video: Video, player: any) => {
     responsive: String(player?.responsive !== false)
   });
   return `${base}${lib}/${encodeURIComponent(id || '')}?${qs.toString()}`;
+};
+
+// ── FIX: Get best display name (never show raw email as name) ──
+const getBestDisplayName = (u: UserRow | null, fallback = 'User'): string => {
+  if (!u) return fallback;
+  const dn = u.display_name?.trim() || '';
+  // If display_name IS the email address, extract the part before @
+  if (dn && dn.includes('@')) {
+    return dn.split('@')[0].replace(/[._]/g, ' ').split(' ').map(
+      w => w.charAt(0).toUpperCase() + w.slice(1)
+    ).join(' ');
+  }
+  if (dn) return dn;
+  if (u.email) return u.email.split('@')[0];
+  return fallback;
 };
 
 const migratePayment = (raw: any): PaymentSettings => {
@@ -155,87 +176,167 @@ const migratePayment = (raw: any): PaymentSettings => {
   };
 };
 
-// ─── PAYMENT BRIDGE (merged from paymentHelper.ts) ───────────────────────────
-// Global payment settings reference so initiatePayment() can read gateway config
-// from anywhere (e.g. the locked player screen) without prop-drilling.
-let _paymentBridge: PaymentSettings = defaultPayment;
-
-export function setPaymentBridge(settings: PaymentSettings) {
-  _paymentBridge = settings;
-}
-
-export function initiatePayment(
-  plan: { price: number; name: string; duration_days: number; id?: number },
-  user: UserRow | null,
-  opts?: { navigate?: (tab: string) => void }
-) {
-  // Dispatch an event that the Plans component listens to
-  window.dispatchEvent(new CustomEvent('rr:open-plan', { detail: { plan } }));
-  // Navigate to plans tab if a navigate function is provided
-  if (opts?.navigate) {
-    opts.navigate('plans');
-  }
-}
-
-// ─── RAZORPAY ─────────────────────────────────────────────────────────────────
-declare global { interface Window { Razorpay: any; Cashfree: any } }
+// ─── RAZORPAY INTEGRATION ────────────────────────────────────────────────────
+declare global { interface Window { Razorpay: any } }
 
 const loadRazorpay = (): Promise<boolean> =>
   new Promise(resolve => {
     if (window.Razorpay) return resolve(true);
     const s = document.createElement('script');
     s.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    s.onload = () => resolve(true); s.onerror = () => resolve(false);
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
 
 const openRazorpay = async (opts: {
   keyId: string; amount: number; planName: string; userName: string;
-  userEmail: string; testMode: boolean;
-  onSuccess: (data: { paymentId: string }) => void;
+  userEmail: string; userPhone?: string; testMode: boolean;
+  onSuccess: (data: { paymentId: string; orderId?: string; signature?: string }) => void;
   onFailure: (err: string) => void;
 }) => {
   const loaded = await loadRazorpay();
-  if (!loaded) { opts.onFailure('Razorpay load nahi hua.'); return; }
-  new window.Razorpay({
-    key: opts.keyId, amount: Math.round(opts.amount * 100), currency: 'INR',
+  if (!loaded) { opts.onFailure('Razorpay load nahi hua. Internet check karein.'); return; }
+  const amountPaise = Math.round(opts.amount * 100);
+  const rzp = new window.Razorpay({
+    key: opts.keyId, amount: amountPaise, currency: 'INR',
     name: 'ReelRamp Pro', description: opts.planName,
-    prefill: { name: opts.userName, email: opts.userEmail },
+    prefill: { name: opts.userName || '', email: opts.userEmail || '' },
     theme: { color: '#c5a26f' },
-    handler: (r: any) => opts.onSuccess({ paymentId: r.razorpay_payment_id }),
+    handler: (response: any) => opts.onSuccess({
+      paymentId: response.razorpay_payment_id,
+      orderId: response.razorpay_order_id,
+      signature: response.razorpay_signature
+    }),
     modal: { ondismiss: () => opts.onFailure('Payment cancel ho gaya') }
-  }).open();
+  });
+  rzp.open();
 };
 
-// ─── CASHFREE ─────────────────────────────────────────────────────────────────
-const loadCashfree = (): Promise<boolean> =>
+// ─── CASHFREE INTEGRATION ────────────────────────────────────────────────────
+const loadCashfree = (testMode: boolean): Promise<boolean> =>
   new Promise(resolve => {
-    if (window.Cashfree) return resolve(true);
+    if ((window as any).Cashfree) return resolve(true);
     const s = document.createElement('script');
-    s.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
-    s.onload = () => resolve(true); s.onerror = () => resolve(false);
+    s.src = testMode
+      ? 'https://sdk.cashfree.com/js/v3/cashfree.js'
+      : 'https://sdk.cashfree.com/js/v3/cashfree.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
 
-// ─── SAFE JSON FETCH (Fix 2: handles HTML error pages gracefully) ─────────────
-async function safeJsonFetch(url: string, options?: RequestInit): Promise<{ ok: boolean; status: number; data: any; rawText: string }> {
-  const res = await fetch(url, options);
-  const rawText = await res.text();
-  let data: any = null;
+// Create Cashfree order via your backend API
+const createCashfreeOrder = async (opts: {
+  appId: string; secretKey: string; testMode: boolean;
+  amount: number; planName: string; userId: string;
+  userName: string; userEmail: string; userPhone: string;
+}): Promise<{ orderId: string; paymentSessionId: string } | null> => {
   try {
-    data = JSON.parse(rawText);
-  } catch {
-    console.error(`[safeJsonFetch] Non-JSON response from ${url} (status ${res.status}):`, rawText);
-  }
-  return { ok: res.ok, status: res.status, data, rawText };
-}
+    // Call your Netlify/Vercel function or direct Cashfree API
+    const baseUrl = opts.testMode
+      ? 'https://sandbox.cashfree.com/pg/orders'
+      : 'https://api.cashfree.com/pg/orders';
 
-// ─── SUBSCRIPTION HELPERS ─────────────────────────────────────────────────────
+    const orderData = {
+      order_id: `rrp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      order_amount: opts.amount,
+      order_currency: 'INR',
+      customer_details: {
+        customer_id: opts.userId,
+        customer_name: opts.userName || 'ReelRamp User',
+        customer_email: opts.userEmail || 'user@reelramp.com',
+        customer_phone: opts.userPhone || '9999999999'
+      },
+      order_meta: {
+        return_url: `${window.location.origin}?cf_order={order_id}&cf_payment={payment_id}`,
+        notify_url: `${window.location.origin}/api/cashfree-webhook`
+      },
+      order_note: opts.planName
+    };
+
+    // Use backend proxy to avoid CORS & keep secret safe
+    const res = await fetch('/api/cashfree-create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...orderData, testMode: opts.testMode })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'Order create nahi hua');
+    }
+    const data = await res.json();
+    return { orderId: data.order_id, paymentSessionId: data.payment_session_id };
+  } catch (e: any) {
+    console.error('Cashfree order error:', e);
+    return null;
+  }
+};
+
+const openCashfreeCheckout = async (opts: {
+  appId: string; secretKey: string; testMode: boolean;
+  amount: number; planName: string;
+  userId: string; userName: string; userEmail: string; userPhone: string;
+  onSuccess: (data: { orderId: string; paymentId: string }) => void;
+  onFailure: (err: string) => void;
+}) => {
+  const loaded = await loadCashfree(opts.testMode);
+  if (!loaded) { opts.onFailure('Cashfree load nahi hua. Internet check karein.'); return; }
+
+  const orderData = await createCashfreeOrder(opts);
+  if (!orderData) { opts.onFailure('Order create nahi hua. Dobara try karein.'); return; }
+
+  const cf = new (window as any).Cashfree({ mode: opts.testMode ? 'sandbox' : 'production' });
+  cf.checkout({
+    paymentSessionId: orderData.paymentSessionId,
+    redirectTarget: '_modal',
+    onSuccess: (data: any) => opts.onSuccess({
+      orderId: orderData.orderId,
+      paymentId: data?.transaction?.transactionId || data?.payment?.payment_id || ''
+    }),
+    onFailure: (data: any) => opts.onFailure(data?.transaction?.txMsg || 'Payment fail ho gaya'),
+    onClose: () => opts.onFailure('Payment window band ho gayi')
+  });
+};
+
+// Create Cashfree Subscription (auto-pay mandate)
+const createCashfreeSubscription = async (opts: {
+  testMode: boolean; planName: string; amount: number; intervalDays: number;
+  userId: string; userName: string; userEmail: string; userPhone: string;
+  cfPlanId?: string;
+  onSuccess: (data: { subscriptionId: string; authLink: string }) => void;
+  onFailure: (err: string) => void;
+}) => {
+  try {
+    const res = await fetch('/api/cashfree-create-subscription', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        planName: opts.planName, amount: opts.amount,
+        intervalDays: opts.intervalDays, userId: opts.userId,
+        userName: opts.userName, userEmail: opts.userEmail,
+        userPhone: opts.userPhone, cfPlanId: opts.cfPlanId,
+        testMode: opts.testMode,
+        returnUrl: `${window.location.origin}?cf_sub=success`
+      })
+    });
+    if (!res.ok) throw new Error('Subscription create nahi hua');
+    const data = await res.json();
+    opts.onSuccess({ subscriptionId: data.subscription_id, authLink: data.auth_link });
+  } catch (e: any) {
+    opts.onFailure(e.message || 'Auto-pay setup nahi hua');
+  }
+};
+
+// ─── SUBSCRIPTION HELPERS ────────────────────────────────────────────────────
 const isSubActive = (sub: Subscription | null) =>
   !!sub && sub.status === 'active' && new Date(sub.expires_at).getTime() > Date.now();
 
-const daysLeft = (sub: Subscription | null) =>
-  sub ? Math.max(0, Math.floor((new Date(sub.expires_at).getTime() - Date.now()) / 86400000)) : 0;
+const daysLeft = (sub: Subscription | null) => {
+  if (!sub) return 0;
+  return Math.max(0, Math.floor((new Date(sub.expires_at).getTime() - Date.now()) / 86400000));
+};
 
 // ─── PROVIDER ────────────────────────────────────────────────────────────────
 function Provider({ children }: { children: ReactNode }) {
@@ -246,7 +347,9 @@ function Provider({ children }: { children: ReactNode }) {
   const [guestId] = useState(() => {
     const s = localStorage.getItem('rr_guest');
     if (s) return s;
-    const n = gid(); localStorage.setItem('rr_guest', n); return n;
+    const n = gid();
+    localStorage.setItem('rr_guest', n);
+    return n;
   });
 
   const refresh = useCallback(async (silent = false) => {
@@ -254,35 +357,22 @@ function Provider({ children }: { children: ReactNode }) {
     try {
       const calls = resources.map(r => fetch(
         r === 'videos' ? '/api/videos?includeUnpublished=true' :
-        r === 'users' ? `/api/users?guest_id=${guestId}` :
-        ['subscriptions','payments','watch_history','likes','bookmarks','wallet_transactions','referrals'].includes(r)
-          ? `/api/${r}?user_id=${guestId}` : `/api/${r}`
+          r === 'users' ? `/api/users?guest_id=${guestId}` :
+            r === 'subscriptions' || r === 'payments' || r === 'watch_history' ||
+              r === 'likes' || r === 'bookmarks' || r === 'wallet_transactions' ||
+              r === 'referrals' ? `/api/${r}?user_id=${guestId}` : `/api/${r}`
       ).then(x => x.json()).catch(() => []));
       const vals = await Promise.all(calls);
       const next: Record<string, Row[]> = {};
-      resources.forEach((r, i) => { next[r] = Array.isArray(vals[i]) ? vals[i] : []; });
+      resources.forEach((r, i) => next[r] = Array.isArray(vals[i]) ? vals[i] : []);
       setData(next);
-      if (next.users?.[0]) {
-        const freshUser = next.users[0] as UserRow;
-        // FIX 3: Prioritise localStorage display_name over server value to prevent reset on refresh
-        const storedName = localStorage.getItem(LS_DISPLAY_NAME);
-        if (storedName && storedName.trim()) {
-          freshUser.display_name = storedName.trim();
-        }
-        setUser(freshUser);
-        if (freshUser.display_name) localStorage.setItem(LS_DISPLAY_NAME, freshUser.display_name);
-      } else {
-        const storedName = localStorage.getItem(LS_DISPLAY_NAME);
+      if (next.users?.[0]) setUser(next.users[0] as UserRow);
+      else {
         const cr = await fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            guest_id: guestId,
-            display_name: storedName || `Viewer ${guestId.slice(-4)}`,
-            email: '', role: 'viewer'
-          })
+          body: JSON.stringify({ guest_id: guestId, display_name: `Viewer ${guestId.slice(-4)}`, email: '', role: 'viewer' })
         });
         const u = await cr.json();
-        if (storedName) u.display_name = storedName;
         setUser(u); next.users = [u]; setData({ ...next });
       }
     } finally { setLoading(false); }
@@ -311,28 +401,40 @@ function Provider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('supabase-data-updated', h);
   }, [guestId, refresh]);
 
+  // ── AUTH: Google / Email login — FIX display name ──
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
       if (session?.user?.email) {
         localStorage.setItem('rr_guest', session.user.id);
+        const rawName = session.user.user_metadata?.full_name ||
+          session.user.user_metadata?.name || '';
+        // Never set email as display_name
+        const cleanName = rawName && !rawName.includes('@') ? rawName :
+          session.user.email!.split('@')[0].replace(/[._]/g, ' ')
+            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             guest_id: session.user.id,
-            display_name: session.user.user_metadata?.full_name || session.user.email,
+            display_name: cleanName,
             email: session.user.email, role: 'viewer'
           })
         }).then(() => refresh(true));
       }
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: string, session: Session | null) => {
       if (session?.user?.email) {
         localStorage.setItem('rr_guest', session.user.id);
+        const rawName = session.user.user_metadata?.full_name ||
+          session.user.user_metadata?.name || '';
+        const cleanName = rawName && !rawName.includes('@') ? rawName :
+          session.user.email!.split('@')[0].replace(/[._]/g, ' ')
+            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             guest_id: session.user.id,
-            display_name: session.user.user_metadata?.full_name || session.user.email,
+            display_name: cleanName,
             email: session.user.email, role: 'viewer'
           })
         }).then(() => refresh(true));
@@ -341,9 +443,23 @@ function Provider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [refresh]);
 
-  // Auto-deactivate expired subscriptions
+  // ── Cashfree return URL handler ──
   useEffect(() => {
-    (data.subscriptions || []).forEach(async s => {
+    const params = new URLSearchParams(window.location.search);
+    const cfOrder = params.get('cf_order');
+    const cfSub = params.get('cf_sub');
+    if (cfOrder || cfSub) {
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
+      // Refresh to pick up payment/subscription updates
+      setTimeout(() => refresh(true), 1000);
+    }
+  }, []);
+
+  // ── Auto-deactivate expired subscriptions ──
+  useEffect(() => {
+    const subs = data.subscriptions || [];
+    subs.forEach(async (s) => {
       if (s.status === 'active' && new Date(s.expires_at).getTime() < Date.now()) {
         try {
           await fetch(api('subscriptions'), {
@@ -351,43 +467,34 @@ function Provider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ id: s.id, status: 'expired' })
           });
           refresh(true);
-        } catch { /* silent */ }
+        } catch { }
       }
     });
   }, [data.subscriptions]);
 
   const admin = data.admin_settings || [];
-  const theme = admin.find(x => x.key === 'theme')?.value || defaultTheme;
+  const rawTheme = admin.find(x => x.key === 'theme')?.value || {};
+  const theme: BrandSettings = { ...defaultTheme, ...rawTheme };
   const rawPayment = admin.find(x => x.key === 'payment')?.value;
   const payment = migratePayment(rawPayment);
   const player = admin.find(x => x.key === 'player')?.value || defaultPlayer;
 
-  // Feed global bridge so initiatePayment() anywhere can read gateway config
-  useEffect(() => { setPaymentBridge(payment); }, [payment]);
-
-  // Feed active plans to global bridge so locked-screen can find cheapest plan
-  useEffect(() => {
-    const activePlans = (data.plans || [])
-      .filter((p: any) => p.is_active)
-      .sort((a: any, b: any) => a.sort_order - b.sort_order);
-    (window as any).__RR_PLANS__ = activePlans;
-  }, [data.plans]);
-
   const allSubs = data.subscriptions || [];
-  const activeSub = (allSubs.find(s =>
-    s.status === 'active' && new Date(s.expires_at).getTime() > Date.now()
-  ) || null) as Subscription | null;
+  const activeSub = (allSubs.find(s => s.status === 'active' && new Date(s.expires_at).getTime() > Date.now()) || null) as Subscription | null;
   const subscribed = isSubActive(activeSub);
+
+  const mergedData = {
+    ...data,
+    notifications: [...(data.notifications || []), ...localNotifs]
+  };
 
   return (
     <AppContext.Provider value={{
-      data: { ...data, notifications: [...(data.notifications || []), ...localNotifs] },
-      videos: (data.videos || []) as Video[],
+      data: mergedData, videos: (data.videos || []) as Video[],
       categories: (data.categories || []) as Category[],
       plans: (data.plans || []) as Plan[],
       user, guestId, loading, subscribed, activeSub, theme, payment, player,
-      refresh, mutate, addNotif,
-      setUser: setUser as (u: UserRow | null) => void,
+      refresh, mutate, addNotif
     }}>
       {children}
     </AppContext.Provider>
@@ -401,10 +508,8 @@ function useApp() {
 }
 
 // ─── PLAYER ──────────────────────────────────────────────────────────────────
-function Player({ video, onBack, onNext, onNavigate }: {
-  video: Video; onBack?: () => void; onNext: () => void; onNavigate?: (tab: string) => void;
-}) {
-  const { guestId, subscribed, mutate, data, player, user } = useApp();
+function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; onNext: () => void }) {
+  const { guestId, subscribed, mutate, data, player } = useApp();
   const ref = useRef<HTMLVideoElement | null>(null);
   const bar = useRef<HTMLDivElement | null>(null);
   const wrap = useRef<HTMLDivElement | null>(null);
@@ -429,12 +534,9 @@ function Player({ video, onBack, onNext, onNavigate }: {
   const liked = (data.likes || []).some(l => l.video_id === video.id);
   const saved = (data.bookmarks || []).some(b => b.video_id === video.id);
   const p = dur ? Math.min(100, cur / dur * 100) : 0;
-
   const reveal = () => {
     setShow(true); clearTimeout(hide.current);
-    hide.current = window.setTimeout(() => {
-      if (!ref.current?.paused && !menu && !drag) setShow(false);
-    }, 2500);
+    hide.current = window.setTimeout(() => { if (!ref.current?.paused && !menu && !drag) setShow(false); }, 2500);
   };
   const enterFull = async () => { try { await wrap.current?.requestFullscreen?.(); } catch { } };
   const startPlayback = async () => {
@@ -446,7 +548,6 @@ function Player({ video, onBack, onNext, onNavigate }: {
   const pausePlayback = () => { ref.current?.pause(); setPlay(false); setShow(true); };
   useEffect(() => { reveal(); resumed.current = false; setErr(''); setCur(0); setDur(0); setPlay(false); }, [video.id]);
   useEffect(() => { const v = ref.current; if (v) { v.volume = vol; v.muted = muted; v.playbackRate = speed; } }, [vol, muted, speed]);
-
   const buffer = () => {
     setWait(true); clearTimeout(buf.current);
     buf.current = window.setTimeout(() => { setWait(false); setErr('Unable to load video'); }, 8000);
@@ -471,14 +572,13 @@ function Player({ video, onBack, onNext, onNavigate }: {
       tap.current = 0;
     } else { tap.current = now; reveal(); }
   };
-  const like = () => liked
+  const like = async () => liked
     ? mutate('likes', 'DELETE', { user_id: guestId, video_id: video.id })
     : mutate('likes', 'POST', { user_id: guestId, video_id: video.id });
-  const save = () => saved
+  const save = async () => saved
     ? mutate('bookmarks', 'DELETE', { user_id: guestId, video_id: video.id })
     : mutate('bookmarks', 'POST', { user_id: guestId, video_id: video.id });
 
-  // ── LOCKED SCREEN ──
   if (locked) return (
     <div ref={wrap} className="relative mx-auto grid h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] place-items-center overflow-hidden rounded-[34px] bg-zinc-950 text-white shadow-2xl">
       <video src={vurl(video.video_filename)} muted className="absolute h-full w-full object-cover opacity-20 blur-sm" />
@@ -486,24 +586,11 @@ function Player({ video, onBack, onNext, onNavigate }: {
         <Lock className="mx-auto mb-4 text-[var(--rr-primary)]" size={58} />
         <h2 className="text-3xl font-black">Premium Locked</h2>
         <p className="mt-2 opacity-75">Plan activate karke episode unlock karein.</p>
-        <button
-          onClick={() => {
-            const lowestPlan = (window as any).__RR_PLANS__?.[0];
-            initiatePayment(
-              lowestPlan || { price: 699, name: 'Premium Plan', duration_days: 30 },
-              user,
-              { navigate: onNavigate }
-            );
-          }}
-          className="btn mt-5 inline-flex"
-        >
-          Unlock Plan
-        </button>
+        <button onClick={() => initiatePayment({ price: 699 }, null)} className="btn mt-5 inline-flex">Unlock Plan</button>
       </div>
     </div>
   );
 
-  // ── BUNNY PLAYER ──
   if (player?.mode === 'bunny') return (
     <div ref={wrap} className="relative mx-auto h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] overflow-hidden rounded-[34px] bg-black text-white shadow-2xl transform-gpu">
       <iframe src={bunnyIframeUrl(video, player)} title={video.title}
@@ -512,16 +599,12 @@ function Player({ video, onBack, onNext, onNavigate }: {
       <div className="pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/75 to-transparent p-4">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="icon pointer-events-auto"><ArrowLeft /></button>
-          <div className="min-w-0">
-            <h2 className="truncate font-black">{video.title}</h2>
-            <p className="text-xs text-[var(--rr-primary)]">EP {video.episode_number}</p>
-          </div>
+          <div className="min-w-0"><h2 className="truncate font-black">{video.title}</h2><p className="text-xs text-[var(--rr-primary)]">EP {video.episode_number}</p></div>
         </div>
       </div>
     </div>
   );
 
-  // ── DEFAULT PLAYER ──
   return (
     <div ref={wrap} onClick={surface} onMouseMove={reveal}
       className="relative mx-auto h-[78vh] max-h-[820px] min-h-[560px] w-full max-w-[430px] overflow-hidden rounded-[34px] bg-black text-white shadow-2xl transform-gpu select-none">
@@ -556,7 +639,6 @@ function Player({ video, onBack, onNext, onNavigate }: {
             duration: e.currentTarget.duration || 0, completed: false
           }).catch(() => { });
         }} />
-
       {!play && !wait && !err && (
         <button onClick={e => { e.stopPropagation(); startPlayback(); }}
           className="absolute inset-0 z-10 grid place-items-center bg-black/20">
@@ -684,10 +766,10 @@ function HomePage({ go }: { go: (t: string) => void }) {
       </Rows>
       <div className="grid gap-4 md:grid-cols-3">
         <FeatureCard icon="🎬" title="Original Shorts" body="Drama, romance, thriller aur family stories ek mobile-first format me." />
-        <FeatureCard icon="👑" title="Premium Unlock" body="Admin-controlled plans, paywall aur Cashfree-ready payment structure." />
+        <FeatureCard icon="👑" title="Premium Unlock" body="Admin-controlled plans, paywall aur Cashfree payment + auto-pay." />
         <FeatureCard icon="📲" title="Install App" body="PWA install se app jaisa home-screen experience paayein." />
       </div>
-      <AboutSection />
+      <InfoSection />
     </section>
   );
 }
@@ -717,7 +799,7 @@ function SeriesPage({ go }: { go: (t: string) => void }) {
         {chosen && (
           <div className="card overflow-hidden">
             <div className="grid md:grid-cols-[260px_1fr]">
-              <img src={chosen.poster_url || 'https://images.pexels.com/photos/7991579/pexels-photo-7991579.jpeg?auto=compress&cs=tinysrgb&w=900'} className="h-full min-h-80 w-full object-cover" />
+              <img src={chosen.poster_url || fallbackImages.promo} className="h-full min-h-80 w-full object-cover" />
               <div className="p-6">
                 <p className="font-black text-[var(--rr-accent)]">{chosen.category}</p>
                 <h2 className="text-4xl font-black">{chosen.title}</h2>
@@ -778,7 +860,9 @@ function VideoCard({ v, onClick }: { v: Video; onClick: () => void }) {
   return (
     <button onClick={onClick} className="card group w-56 shrink-0 overflow-hidden text-left transition hover:-translate-y-1 hover:shadow-2xl">
       <div className="relative aspect-[3/4] bg-zinc-200">
-        <img src={v.thumbnail_url || fallbackImages.promo} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+        {v.thumbnail_url
+          ? <img src={v.thumbnail_url} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+          : <img src={fallbackImages.promo} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
         <span className="absolute left-3 top-3 rounded-full bg-black/55 px-3 py-1 text-xs font-black text-white backdrop-blur">EP {v.episode_number}</span>
         {v.is_premium && <span className="absolute right-3 top-3 rounded-full bg-yellow-300 px-3 py-1 text-xs font-black text-black">PRO</span>}
@@ -794,11 +878,9 @@ function VideoCard({ v, onClick }: { v: Video; onClick: () => void }) {
 }
 
 // ─── FOR YOU ──────────────────────────────────────────────────────────────────
-function ForYou({ go }: { go: (t: string) => void }) {
+function ForYou() {
   const { videos, categories, mutate, guestId } = useApp();
-  const [cat, setCat] = useState('All'), [idx, setIdx] = useState(0);
-  const [touch, setTouch] = useState<number | null>(null);
-  const [report, setReport] = useState('');
+  const [cat, setCat] = useState('All'), [idx, setIdx] = useState(0), [touch, setTouch] = useState<number | null>(null), [report, setReport] = useState('');
   const list = videos.filter(v => v.is_published && (cat === 'All' || v.category === cat));
   const v = list[idx] || list[0];
   useEffect(() => setIdx(0), [cat]);
@@ -816,8 +898,8 @@ function ForYou({ go }: { go: (t: string) => void }) {
         <div className="w-full"
           onWheel={e => { if (Math.abs(e.deltaY) > 30) { e.preventDefault(); e.deltaY > 0 ? next() : prev(); } }}
           onTouchStart={e => setTouch(e.touches[0].clientY)}
-          onTouchEnd={e => { if (touch === null) return; const diff = touch - e.changedTouches[0].clientY; if (Math.abs(diff) > 55) diff > 0 ? next() : prev(); setTouch(null); }}>
-          <Player video={v} onNext={next} onNavigate={go} />
+          onTouchEnd={e => { if (touch === null) return; const diff = touch - e.changedTouches[0].clientY; if (Math.abs(diff) > 55) { diff > 0 ? next() : prev(); } setTouch(null); }}>
+          <Player video={v} onNext={next} />
         </div>
         <aside className="w-full max-w-[430px] space-y-4 lg:sticky lg:top-32">
           <div className="card p-5">
@@ -851,44 +933,42 @@ function ForYou({ go }: { go: (t: string) => void }) {
   );
 }
 
-// ─── PLANS / PAYMENT ENGINE ───────────────────────────────────────────────────
+// ─── PLANS / CASHFREE PAYMENT ENGINE ─────────────────────────────────────────
 function Plans() {
   const { plans, payment, guestId, mutate, subscribed, user, addNotif } = useApp();
   const [selected, setSelected] = useState<Plan | null>(null);
-  const [step, setStep] = useState<'brief' | 'pay' | 'done'>('brief');
+  const [step, setStep] = useState<'brief' | 'pay' | 'autopay' | 'done'>('brief');
   const [busy, setBusy] = useState(false);
   const [payErr, setPayErr] = useState('');
   const [txId, setTxId] = useState('');
+  const [useAutoPay, setUseAutoPay] = useState(false);
+  const [phone, setPhone] = useState(user?.phone || '');
 
-  // Listen for locked-screen "rr:open-plan" event
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const plan = (e as CustomEvent).detail?.plan as Plan | undefined;
-      const match = plan
-        ? plans.find(p => p.is_active && p.price === plan.price) || plans.find(p => p.is_active)
-        : plans.find(p => p.is_active);
-      if (match) { setSelected(match); setStep('pay'); setPayErr(''); setTxId(''); }
-    };
-    window.addEventListener('rr:open-plan', handler);
-    return () => window.removeEventListener('rr:open-plan', handler);
-  }, [plans]);
-
-  const openPlan = (p: Plan) => { setSelected(p); setStep('brief'); setPayErr(''); setTxId(''); };
+  const openPlan = (p: Plan) => {
+    setSelected(p); setStep('brief'); setPayErr(''); setTxId('');
+    setUseAutoPay(!!p.supports_autorenew);
+  };
   const close = () => { setSelected(null); setStep('brief'); setPayErr(''); setBusy(false); };
 
-  const activatePlan = async (plan: Plan, gateway: string, transactionId?: string) => {
+  const activatePlan = async (plan: Plan, gateway: string, transactionId?: string, cfSubId?: string) => {
     const expiresAt = new Date(Date.now() + plan.duration_days * 86400000).toISOString();
     await mutate('payments', 'POST', {
       user_id: guestId, plan_id: plan.id, amount: plan.price,
       gateway, status: 'success', notes: `Plan: ${plan.name}`,
-      transaction_id: transactionId || `manual_${Date.now()}`
+      transaction_id: transactionId || `manual_${Date.now()}`,
+      cf_payment_id: transactionId
     });
     await mutate('subscriptions', 'POST', {
       user_id: guestId, plan: plan.name, plan_id: plan.id,
       status: 'active', expires_at: expiresAt,
-      auto_renew: plan.supports_autorenew || false,
-      renewal_date: expiresAt, gateway
+      auto_renew: useAutoPay && !!cfSubId,
+      renewal_date: expiresAt, gateway,
+      cf_subscription_id: cfSubId || null
     });
+    // Save phone if provided
+    if (phone && user?.id) {
+      await mutate('users', 'PUT', { id: user.id, phone }).catch(() => {});
+    }
     addNotif({
       title: 'Plan Activated! 🎉', type: 'success',
       message: `${plan.name} — ${plan.duration_days} din ke liye active hai.`,
@@ -897,77 +977,95 @@ function Plans() {
     setStep('done');
   };
 
-  // ── Cashfree handler (FIX 2: safe JSON parsing) ──
   const handleCashfree = async (gw: GatewayConfig) => {
     if (!selected) return;
+    if (!phone.trim() || phone.length < 10) { setPayErr('Valid mobile number daalein (10 digit)'); return; }
     setBusy(true); setPayErr('');
     try {
-      const loaded = await loadCashfree();
-      if (!loaded) { setPayErr('Cashfree SDK load nahi hua.'); setBusy(false); return; }
-
-      const { ok, data: jsonData, rawText } = await safeJsonFetch('/api/cashfree/create-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: selected.price, currency: 'INR',
-          planName: selected.name,
-          userName: user?.display_name || '',
-          userEmail: user?.email || '',
-          userId: guestId,
-          appId: gw.keys.appId,
-          secretKey: gw.keys.secretKey,
-          testMode: gw.testMode,
-        }),
+      await openCashfreeCheckout({
+        appId: gw.keys.appId || '',
+        secretKey: gw.keys.secretKey || '',
+        testMode: gw.testMode,
+        amount: selected.price,
+        planName: selected.name,
+        userId: guestId,
+        userName: getBestDisplayName(user),
+        userEmail: user?.email || `${guestId}@reelramp.com`,
+        userPhone: phone,
+        onSuccess: async ({ orderId, paymentId }) => {
+          await activatePlan(selected, 'Cashfree', paymentId);
+          setBusy(false);
+        },
+        onFailure: (err) => { setPayErr(err); setBusy(false); }
       });
-
-      if (!ok || !jsonData) {
-        const errMsg = jsonData?.message || (rawText ? `Server error: ${rawText.slice(0, 120)}` : 'Order create karne mein problem.');
-        setPayErr(errMsg); setBusy(false); return;
-      }
-
-      const { payment_session_id, order_id } = jsonData;
-      if (!payment_session_id) {
-        setPayErr('Payment session ID nahi mila. Backend check karein.'); setBusy(false); return;
-      }
-
-      const cashfree = new window.Cashfree({ mode: gw.testMode ? 'sandbox' : 'production' });
-      cashfree.checkout({ paymentSessionId: payment_session_id, redirectTarget: '_modal' })
-        .then(async (result: any) => {
-          if (result.error) {
-            setPayErr(result.error.message || 'Payment fail ho gaya.'); setBusy(false);
-          } else {
-            const txnId = result.paymentDetails?.paymentMessage || order_id;
-            await activatePlan(selected, 'Cashfree', txnId);
-            setBusy(false);
-          }
-        })
-        .catch((e: any) => { setPayErr(e?.message || 'Cashfree error.'); setBusy(false); });
     } catch (e: any) { setPayErr(e.message); setBusy(false); }
   };
 
-  // ── Razorpay handler ──
+  const handleCashfreeAutoPay = async (gw: GatewayConfig) => {
+    if (!selected) return;
+    if (!phone.trim() || phone.length < 10) { setPayErr('Valid mobile number daalein auto-pay ke liye'); return; }
+    setBusy(true); setPayErr('');
+    try {
+      await createCashfreeSubscription({
+        testMode: gw.testMode,
+        planName: selected.name,
+        amount: selected.price,
+        intervalDays: selected.duration_days,
+        userId: guestId,
+        userName: getBestDisplayName(user),
+        userEmail: user?.email || `${guestId}@reelramp.com`,
+        userPhone: phone,
+        cfPlanId: selected.cf_plan_id,
+        onSuccess: async ({ subscriptionId, authLink }) => {
+          // Open auth link for mandate setup
+          window.open(authLink, '_blank');
+          // Record as pending auto-pay subscription
+          await mutate('payments', 'POST', {
+            user_id: guestId, plan_id: selected.id, amount: selected.price,
+            gateway: 'Cashfree Auto-Pay', status: 'pending',
+            notes: `Auto-pay mandate: ${subscriptionId}`,
+            cf_subscription_id: subscriptionId
+          });
+          addNotif({
+            title: 'Auto-Pay Setup Ho Raha Hai', type: 'info',
+            message: 'Mandate authorize karein. Activate hote hi premium milega.',
+            target: 'user', is_active: true
+          });
+          setStep('done');
+          setBusy(false);
+        },
+        onFailure: (err) => { setPayErr(err); setBusy(false); }
+      });
+    } catch (e: any) { setPayErr(e.message); setBusy(false); }
+  };
+
   const handleRazorpay = async (gw: GatewayConfig) => {
     if (!selected) return;
     setBusy(true); setPayErr('');
     try {
       await openRazorpay({
         keyId: gw.keys.keyId, amount: selected.price,
-        planName: selected.name, userName: user?.display_name || '', userEmail: user?.email || '',
+        planName: selected.name,
+        userName: getBestDisplayName(user),
+        userEmail: user?.email || '',
         testMode: gw.testMode,
-        onSuccess: async ({ paymentId }) => { await activatePlan(selected, 'Razorpay', paymentId); setBusy(false); },
-        onFailure: err => { setPayErr(err); setBusy(false); }
+        onSuccess: async ({ paymentId }) => {
+          await activatePlan(selected, 'Razorpay', paymentId);
+          setBusy(false);
+        },
+        onFailure: (err) => { setPayErr(err); setBusy(false); }
       });
     } catch (e: any) { setPayErr(e.message); setBusy(false); }
   };
 
-  // ── UPI Manual handler ──
   const handleUpiManual = async (gw: GatewayConfig) => {
     if (!selected || !txId.trim()) { setPayErr('Transaction ID ya UTR number daalein'); return; }
     setBusy(true); setPayErr('');
     try {
       await mutate('payments', 'POST', {
         user_id: guestId, plan_id: selected.id, amount: selected.price,
-        gateway: gw.name, status: 'pending', notes: `UPI Manual — UTR: ${txId}`, transaction_id: txId
+        gateway: gw.name, status: 'pending',
+        notes: `UPI Manual — UTR: ${txId}`, transaction_id: txId
       });
       addNotif({
         title: 'Payment Submitted', type: 'info',
@@ -1000,11 +1098,14 @@ function Plans() {
             {p.trial_days && p.trial_days > 0 && (
               <p className="text-xs font-black text-green-600 mt-1">✨ {p.trial_days} din free trial</p>
             )}
+            {p.supports_autorenew && (
+              <p className="text-xs font-black text-blue-600 mt-1 flex items-center gap-1"><RefreshCcw size={12} /> Auto-renew available</p>
+            )}
             {p.features && typeof p.features === 'object' && (
               <ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">
-                {Object.entries(p.features).map(([k, fv]: any) => (
+                {Object.entries(p.features).map(([k, v]: any) => (
                   <li key={k} className="flex items-center gap-2">
-                    <CheckCircle2 size={14} className="text-green-500 shrink-0" />{fv}
+                    <CheckCircle2 size={14} className="text-green-500 shrink-0" />{v}
                   </li>
                 ))}
               </ul>
@@ -1020,7 +1121,7 @@ function Plans() {
             className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4 backdrop-blur" onClick={close}>
             <motion.div initial={{ scale: .93, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: .93, y: 24 }}
               onClick={e => e.stopPropagation()}
-              className="w-full max-w-sm rounded-[34px] bg-white shadow-2xl overflow-hidden">
+              className="w-full max-w-sm rounded-[34px] bg-white shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
 
               {step === 'brief' && (
                 <div className="p-7 space-y-4">
@@ -1029,20 +1130,33 @@ function Plans() {
                       <p className="text-xs font-black text-[var(--rr-accent)] uppercase tracking-wider">Plan Details</p>
                       <h2 className="text-3xl font-black mt-1">{selected.name}</h2>
                     </div>
-                    <button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18} /></button>
+                    <button onClick={close} className="rounded-full bg-zinc-100 p-2"><X size={18} /></button>
                   </div>
                   <div className="rounded-3xl bg-zinc-950 text-white p-5">
                     <p className="text-4xl font-black">{money(selected.price)}</p>
                     <p className="text-white/60 text-sm mt-1">{selected.duration_days} din ka access</p>
+                    {selected.trial_days && selected.trial_days > 0 && (
+                      <p className="text-green-400 text-xs font-bold mt-1">✨ {selected.trial_days} din free trial included</p>
+                    )}
                   </div>
                   {selected.features && typeof selected.features === 'object' && (
                     <ul className="space-y-2">
-                      {Object.entries(selected.features).map(([k, fv]: any) => (
+                      {Object.entries(selected.features).map(([k, v]: any) => (
                         <li key={k} className="flex items-center gap-3 text-sm font-bold">
-                          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-green-100 text-green-600"><CheckCircle2 size={14} /></span>{fv}
+                          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-green-100 text-green-600"><CheckCircle2 size={14} /></span>{v}
                         </li>
                       ))}
                     </ul>
+                  )}
+                  {/* Auto-pay toggle */}
+                  {selected.supports_autorenew && (
+                    <label className="flex items-center gap-3 rounded-2xl border-2 border-blue-200 bg-blue-50 p-3 cursor-pointer">
+                      <input type="checkbox" checked={useAutoPay} onChange={e => setUseAutoPay(e.target.checked)} className="h-5 w-5 accent-blue-600" />
+                      <div>
+                        <p className="font-black text-sm text-blue-800">Auto-Pay Enable Karein</p>
+                        <p className="text-xs text-blue-600">Har {selected.duration_days} din baad automatic renew hoga</p>
+                      </div>
+                    </label>
                   )}
                   <button type="button" onClick={() => setStep('pay')} className="btn w-full">Proceed to Payment →</button>
                 </div>
@@ -1052,21 +1166,34 @@ function Plans() {
                 <div className="p-7 space-y-4">
                   <div className="flex justify-between items-center">
                     <h2 className="text-2xl font-black">Payment</h2>
-                    <button onClick={close} className="rounded-full bg-zinc-100 p-2 hover:bg-zinc-200 transition"><X size={18} /></button>
+                    <button onClick={close} className="rounded-full bg-zinc-100 p-2"><X size={18} /></button>
                   </div>
                   <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between">
                     <span>{selected.name}</span><span>{money(selected.price)}</span>
                   </div>
+                  {useAutoPay && (
+                    <div className="rounded-2xl bg-blue-50 p-3 text-xs font-bold text-blue-700 flex items-center gap-2">
+                      <RefreshCcw size={14} /> Auto-pay ON — Har {selected.duration_days} din baad renew hoga
+                    </div>
+                  )}
                   {payErr && (
                     <div className="rounded-2xl bg-red-50 p-3 text-sm font-bold text-red-700 flex items-center gap-2">
                       <AlertCircle size={16} /> {payErr}
+                    </div>
+                  )}
+                  {/* Phone number — required for Cashfree */}
+                  {defaultGw?.type === 'Cashfree' && (
+                    <div>
+                      <label className="label flex items-center gap-1"><Phone size={14} /> Mobile Number (required)</label>
+                      <input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="10-digit mobile number" maxLength={10} />
                     </div>
                   )}
                   {!hasGateway ? (
                     <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-800 p-6 text-center text-white space-y-3">
                       <div className="text-4xl">🚀</div>
                       <h3 className="text-xl font-black">Payment Gateway</h3>
-                      <p className="text-sm text-white/70">Admin panel mein gateway configure karein.</p>
+                      <p className="text-sm text-white/70">Coming Soon</p>
+                      <p className="text-xs text-white/50 leading-relaxed">Admin panel mein gateway configure karein.</p>
                       {payment.whatsapp && (
                         <a href={`https://wa.me/${payment.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">
@@ -1076,9 +1203,9 @@ function Plans() {
                     </div>
                   ) : (
                     <GatewayPayBlock
-                      gateway={defaultGw!} plan={selected} busy={busy} txId={txId} setTxId={setTxId}
-                      payment={payment}
-                      onCashfree={() => handleCashfree(defaultGw!)}
+                      gateway={defaultGw!} plan={selected} busy={busy} txId={txId}
+                      setTxId={setTxId} payment={payment} useAutoPay={useAutoPay}
+                      onCashfree={() => useAutoPay ? handleCashfreeAutoPay(defaultGw!) : handleCashfree(defaultGw!)}
                       onRazorpay={() => handleRazorpay(defaultGw!)}
                       onUpiManual={() => handleUpiManual(defaultGw!)}
                     />
@@ -1093,17 +1220,20 @@ function Plans() {
                     <CheckCircle2 size={48} className="text-green-500" />
                   </div>
                   <h2 className="text-3xl font-black">
-                    {defaultGw?.type === 'UPI Manual' ? 'Payment Submitted!' : 'Plan Activated!'}
+                    {defaultGw?.type === 'UPI Manual' ? 'Payment Submitted!' :
+                      useAutoPay ? 'Auto-Pay Setup!' : 'Plan Activated!'}
                   </h2>
                   <p className="text-zinc-600">
                     {defaultGw?.type === 'UPI Manual'
-                      ? 'Admin verification ke baad premium activate hoga.'
-                      : `${selected.name} — ${selected.duration_days} din ke liye active hai.`}
+                      ? 'Admin verification ke baad premium activate hoga. WhatsApp par UTR bhejein.'
+                      : useAutoPay
+                        ? 'Auto-pay mandate authorize ho gaya. Premium jald hi activate hoga.'
+                        : `${selected.name} — ${selected.duration_days} din ke liye active hai.`}
                   </p>
-                  {defaultGw?.type === 'UPI Manual' && payment.whatsapp && (
+                  {(defaultGw?.type === 'UPI Manual' || useAutoPay) && payment.whatsapp && (
                     <a href={`https://wa.me/${payment.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">
-                      WhatsApp pe screenshot bhejein
+                      WhatsApp pe confirm karein
                     </a>
                   )}
                   <button type="button" onClick={close} className="btn w-full">
@@ -1119,20 +1249,30 @@ function Plans() {
   );
 }
 
-// ─── GATEWAY PAY BLOCK ────────────────────────────────────────────────────────
-function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfree, onRazorpay, onUpiManual }: {
+function GatewayPayBlock({
+  gateway, plan, busy, txId, setTxId, payment, useAutoPay,
+  onCashfree, onRazorpay, onUpiManual
+}: {
   gateway: GatewayConfig; plan: Plan; busy: boolean;
   txId: string; setTxId: (v: string) => void; payment: PaymentSettings;
+  useAutoPay: boolean;
   onCashfree: () => void; onRazorpay: () => void; onUpiManual: () => void;
 }) {
   if (gateway.type === 'Cashfree') return (
     <div className="space-y-3">
-      <div className="rounded-2xl bg-indigo-50 p-4 text-sm text-indigo-700 font-bold flex items-center gap-2">
-        <CreditCard size={16} /> Cashfree Secure Checkout
+      <div className="rounded-2xl bg-orange-50 p-4 text-sm text-orange-700 font-bold flex items-center gap-2">
+        <Zap size={16} /> Cashfree Secure Checkout
         {gateway.testMode && <span className="ml-auto rounded-full bg-yellow-200 px-2 py-0.5 text-xs text-yellow-800">SANDBOX</span>}
       </div>
+      {useAutoPay && plan.supports_autorenew && (
+        <div className="rounded-2xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 font-bold">
+          <RefreshCcw size={12} className="inline mr-1" />
+          Auto-pay mandate setup hoga — ek baar approve karo, har baar automatic renewal.
+        </div>
+      )}
       <button type="button" disabled={busy} onClick={onCashfree} className="btn w-full disabled:opacity-60">
-        {busy ? <Loader2 className="animate-spin mx-auto" size={20} /> : `Pay ${money(plan.price)} via Cashfree`}
+        {busy ? <Loader2 className="animate-spin mx-auto" size={20} /> :
+          useAutoPay ? `Setup Auto-Pay — ${money(plan.price)}` : `Pay ${money(plan.price)} via Cashfree`}
       </button>
     </div>
   );
@@ -1187,22 +1327,24 @@ function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfr
   );
 }
 
-// ─── PROFILE ──────────────────────────────────────────────────────────────────
+// ─── PROFILE / USER DASHBOARD ─────────────────────────────────────────────────
 function Profile() {
-  const { user, guestId, subscribed, activeSub, data, mutate, setUser } = useApp();
+  const { user, guestId, subscribed, activeSub, data, mutate } = useApp();
   const isLoggedIn = !!(user?.email);
-  const [name, setName] = useState(user?.display_name || '');
+  const [name, setName] = useState(getBestDisplayName(user));
   const [email, setEmail] = useState(user?.email || '');
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState(user?.phone || '');
   const [msg, setMsg] = useState('');
   const [authMsg, setAuthMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'account' | 'subscription' | 'history'>('account');
 
   useEffect(() => {
-    setName(user?.display_name || '');
+    setName(getBestDisplayName(user));
     setEmail(user?.email || '');
-  }, [user?.id, user?.display_name]);
+    setPhone(user?.phone || '');
+  }, [user?.id]);
 
   const signIn = async (signUp = false) => {
     if (!email || !password) { setAuthMsg('Email aur password dono bharo.'); return; }
@@ -1217,33 +1359,25 @@ function Profile() {
     finally { setBusy(false); }
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    localStorage.removeItem('rr_guest');
-    localStorage.removeItem(LS_DISPLAY_NAME);
-    window.location.href = '/';
-  };
-
-  // FIX 3: Save display_name to localStorage immediately on profile save
-  const saveProfile = async () => {
-    if (!user) return;
-    try {
-      await mutate('users', 'PUT', { id: user.id, display_name: name, email });
-      setUser({ ...user, display_name: name, email });
-      localStorage.setItem(LS_DISPLAY_NAME, name);
-      setAuthMsg('Profile update ho gaya ✅');
-    } catch (e: any) { setAuthMsg('Update failed: ' + e.message); }
-  };
+  const signOut = async () => { await supabase.auth.signOut(); localStorage.removeItem('rr_guest'); window.location.href = '/'; };
+  const saveProfile = () => user && mutate('users', 'PUT', {
+    id: user.id,
+    display_name: name,
+    email,
+    phone
+  }).then(() => setAuthMsg('Profile update ho gaya.'));
 
   const cancelSub = async () => {
-    if (!activeSub || !confirm('Subscription cancel karna chahte hain?')) return;
+    if (!activeSub) return;
+    if (!confirm('Kya aap subscription cancel karna chahte hain?')) return;
     try {
       await mutate('subscriptions', 'PUT', { id: activeSub.id, status: 'cancelled', cancelled_at: new Date().toISOString(), auto_renew: false });
     } catch (e: any) { setAuthMsg(e.message); }
   };
 
   const payments = (data.payments || []).filter(p => p.user_id === guestId);
-  const watchHistory = data.watch_history || [];
+  const watchHistory = (data.watch_history || []);
+  const displayName = getBestDisplayName(user);
 
   return (
     <section className="space-y-6">
@@ -1256,8 +1390,7 @@ function Profile() {
           <h1 className="relative mt-5 text-4xl font-black leading-tight md:text-5xl">Login karke premium kahaniyan resume karein.</h1>
           <div className="relative mt-6 grid gap-3 sm:grid-cols-3">
             <div className="rounded-3xl bg-white/10 p-4">
-              <b>{subscribed ? 'Premium' : 'Free'}</b>
-              <small className="block text-white/60">Current Plan</small>
+              <b>{subscribed ? 'Premium' : 'Free'}</b><small className="block text-white/60">Current Plan</small>
               {activeSub && <small className="block text-[var(--rr-primary)] text-xs font-bold">{daysLeft(activeSub)} din bache</small>}
             </div>
             <div className="rounded-3xl bg-white/10 p-4"><b>{(data.bookmarks || []).length}</b><small className="block text-white/60">Saved</small></div>
@@ -1268,7 +1401,8 @@ function Profile() {
           <div className="mb-5 flex items-center gap-3">
             <span className="grid h-14 w-14 place-items-center rounded-3xl bg-[var(--rr-primary)]"><User className="text-black" /></span>
             <div>
-              <h2 className="text-2xl font-black">{isLoggedIn ? `Namaste, ${user?.display_name?.trim().split(' ')[0] || 'User'}!` : 'Member Login'}</h2>
+              {/* FIX: Always show display name, never raw email */}
+              <h2 className="text-2xl font-black">{isLoggedIn ? `Namaste, ${displayName.split(' ')[0]}!` : 'Member Login'}</h2>
               <p className="text-sm text-zinc-500">{isLoggedIn ? user?.email : 'Apna account se login karein'}</p>
             </div>
           </div>
@@ -1289,6 +1423,7 @@ function Profile() {
           {isLoggedIn && <>
             <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Display name" />
             <input className="input" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" />
+            <input className="input" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Mobile number" type="tel" />
             <div className="flex flex-wrap gap-2 mt-2">
               <button className="btn" onClick={saveProfile}>Save Profile</button>
               <button className="rounded-full bg-zinc-200 px-5 py-3 font-bold" onClick={signOut}>Logout</button>
@@ -1308,15 +1443,18 @@ function Profile() {
             </button>
           ))}
         </div>
+
         {activeTab === 'account' && (
           <div className="p-5 space-y-3">
             <div className="rounded-2xl bg-zinc-100 p-4 space-y-2 text-sm">
+              <p className="font-black">Name: <span className="font-normal">{displayName}</span></p>
               <p className="font-black">Guest ID: <span className="font-mono text-xs">{guestId}</span></p>
               <p className="font-black">Role: <span className="font-normal">{user?.role || 'viewer'}</span></p>
               <p className="font-black">Status: <span className="font-normal">{subscribed ? '✅ Premium' : '🔓 Free'}</span></p>
             </div>
           </div>
         )}
+
         {activeTab === 'subscription' && (
           <div className="p-5 space-y-4">
             {activeSub ? (
@@ -1329,12 +1467,17 @@ function Profile() {
                     <div><p className="opacity-70">Bache hue din</p><p className="font-black">{daysLeft(activeSub)} din</p></div>
                     <div><p className="opacity-70">Purchase</p><p className="font-black">{new Date(activeSub.created_at).toLocaleDateString('en-IN')}</p></div>
                     <div><p className="opacity-70">Expiry</p><p className="font-black">{new Date(activeSub.expires_at).toLocaleDateString('en-IN')}</p></div>
-                    {activeSub.gateway && <div><p className="opacity-70">Gateway</p><p className="font-black">{activeSub.gateway}</p></div>}
+                    {activeSub.auto_renew !== undefined && (
+                      <div><p className="opacity-70">Auto-Renew</p><p className="font-black">{activeSub.auto_renew ? '✅ On' : '❌ Off'}</p></div>
+                    )}
+                    {activeSub.gateway && (
+                      <div><p className="opacity-70">Gateway</p><p className="font-black">{activeSub.gateway}</p></div>
+                    )}
                   </div>
                 </div>
                 {daysLeft(activeSub) <= 5 && (
                   <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3 text-sm font-bold text-amber-700 flex items-center gap-2">
-                    <Clock size={16} /> Subscription jald expire hone wala hai!
+                    <Clock size={16} /> Subscription jald expire hone wala hai! Renew karein.
                   </div>
                 )}
                 <button onClick={cancelSub} className="w-full rounded-full bg-red-50 py-3 font-black text-red-600 text-sm flex items-center justify-center gap-2">
@@ -1369,6 +1512,7 @@ function Profile() {
             )}
           </div>
         )}
+
         {activeTab === 'history' && (
           <div className="p-5">
             <Rows title="Saved Episodes">
@@ -1402,32 +1546,82 @@ function Profile() {
   );
 }
 
-// ─── WALLET & REFERRAL ────────────────────────────────────────────────────────
+// ─── WALLET & REFERRAL (LIVE) ─────────────────────────────────────────────────
 function WalletReferral() {
-  const { data, guestId, mutate } = useApp();
-  const tx = data.wallet_transactions || [];
-  const balance = tx.filter(t => t.user_id === guestId).reduce((a, t) => a + (t.type === 'debit' ? -Number(t.coins || 0) : Number(t.coins || 0)), 0);
+  const { data, guestId, mutate, user } = useApp();
+  const tx = (data.wallet_transactions || []).filter(t => t.user_id === guestId);
+  const balance = tx.reduce((a, t) => a + (t.type === 'debit' ? -Number(t.coins || 0) : Number(t.coins || 0)), 0);
   const code = `RR${guestId.slice(-5).toUpperCase()}`;
+  const [claiming, setClaiming] = useState(false);
+  const [claimMsg, setClaimMsg] = useState('');
+
+  const claimDaily = async () => {
+    setClaiming(true); setClaimMsg('');
+    const today = new Date().toISOString().slice(0, 10);
+    const alreadyClaimed = tx.some(t => t.reason === 'Daily reward' && t.reference_id === today);
+    if (alreadyClaimed) { setClaimMsg('Aaj ka reward le liya gaya hai! Kal wapas aana.'); setClaiming(false); return; }
+    try {
+      await mutate('wallet_transactions', 'POST', {
+        user_id: guestId, type: 'credit', coins: 10,
+        reason: 'Daily reward', reference_id: today
+      });
+      setClaimMsg('10 coins credit ho gaye! 🎉');
+    } catch (e: any) { setClaimMsg(e.message); }
+    finally { setClaiming(false); }
+  };
+
+  const shareReferral = () => {
+    const msg = `ReelRamp Pro pe dekho premium short films! Mere referral code se signup karo: ${code} — ${window.location.origin}`;
+    if (navigator.share) navigator.share({ text: msg });
+    else navigator.clipboard.writeText(msg).then(() => setClaimMsg('Referral link copy ho gaya!'));
+  };
+
   return (
     <section className="space-y-5">
-      <Title t="Wallet & Referral" s="Coins, rewards and referral growth system." />
+      <Title t="Wallet & Referral" s="Coins, rewards aur referral se earn karo." />
       <div className="grid gap-4 md:grid-cols-2">
         <div className="card p-6">
           <Wallet className="text-yellow-500" size={44} />
           <h2 className="mt-3 text-4xl font-black">{balance} Coins</h2>
-          <p className="text-zinc-500">Welcome bonus, referrals aur future episode unlock ke liye.</p>
-          <button className="btn mt-4" onClick={() => mutate('wallet_transactions', 'POST', {
-            user_id: guestId, type: 'credit', coins: 10, reason: 'Daily reward', reference_id: 'daily'
-          })}>Claim Daily 10</button>
+          <p className="text-zinc-500 text-sm">Daily login, referrals aur rewards se coins kamao.</p>
+          {claimMsg && <p className="mt-2 rounded-2xl bg-green-50 p-3 text-sm font-bold text-green-700">{claimMsg}</p>}
+          <button disabled={claiming} className="btn mt-4 disabled:opacity-60" onClick={claimDaily}>
+            {claiming ? <Loader2 className="animate-spin" size={16} /> : '🎁'} Claim Daily 10 Coins
+          </button>
         </div>
         <div className="card p-6">
           <Gift className="text-[var(--rr-accent)]" size={44} />
           <h2 className="mt-3 text-2xl font-black">Referral Code</h2>
-          <p className="my-3 rounded-2xl bg-zinc-100 p-4 text-2xl font-black">{code}</p>
-          <button className="btn" onClick={() => navigator.clipboard.writeText(code)}>Copy Code</button>
+          <p className="text-sm text-zinc-500 mt-1">Dost ko refer karo — dono ko 50 coins milenge!</p>
+          <p className="my-3 rounded-2xl bg-zinc-100 p-4 text-2xl font-black tracking-widest">{code}</p>
+          <div className="flex gap-2">
+            <button className="btn flex-1" onClick={() => navigator.clipboard.writeText(code).then(() => setClaimMsg('Code copied!'))}>Copy Code</button>
+            <button className="btn flex-1" onClick={shareReferral}>Share</button>
+          </div>
         </div>
       </div>
-      <DataTable resource="wallet_transactions" rows={tx.filter(t => t.user_id === guestId)} />
+
+      {/* Transaction History */}
+      <div className="card p-5">
+        <h3 className="font-black mb-3">Transaction History</h3>
+        {tx.length === 0 ? (
+          <p className="text-zinc-400 text-sm text-center py-4">Koi transaction nahi hai abhi.</p>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {tx.slice().reverse().map(t => (
+              <div key={t.id} className="rounded-2xl bg-zinc-50 p-3 flex justify-between items-center text-sm">
+                <div>
+                  <p className="font-bold">{t.reason || 'Transaction'}</p>
+                  <p className="text-xs text-zinc-400">{new Date(t.created_at).toLocaleDateString('en-IN')}</p>
+                </div>
+                <span className={`font-black text-lg ${t.type === 'credit' ? 'text-green-600' : 'text-red-500'}`}>
+                  {t.type === 'credit' ? '+' : '-'}{t.coins}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -1445,6 +1639,11 @@ function HelpCenter() {
           <p className="mt-3 whitespace-pre-line text-zinc-600">{a.body}</p>
         </article>
       ))}
+      {(data.help_articles || []).filter(a => a.is_published).length === 0 && (
+        <div className="card p-8 text-center">
+          <p className="text-zinc-400">Admin panel se help articles add karein.</p>
+        </div>
+      )}
     </section>
   );
 }
@@ -1473,11 +1672,13 @@ function PwaInstall() {
 
   const install = async () => {
     if (deferred) {
-      setInstalling(true); deferred.prompt();
+      setInstalling(true);
+      deferred.prompt();
       const { outcome } = await deferred.userChoice;
       setInstalling(false);
       if (outcome === 'accepted') {
-        localStorage.setItem('rr_install_completed', '1'); setHidden(true);
+        localStorage.setItem('rr_install_completed', '1');
+        setHidden(true);
         try { await mutate('push_subscriptions', 'POST', { user_id: guestId, endpoint: 'pwa-installed', subscription: { platform: navigator.userAgent }, enabled: true }); } catch { }
       }
     } else if (isIos) { setIosOpen(true); }
@@ -1490,12 +1691,12 @@ function PwaInstall() {
         <motion.div initial={{ scale: .92, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-sm rounded-[34px] bg-white p-6 shadow-2xl">
           <button onClick={() => setIosOpen(false)} className="float-right rounded-full bg-zinc-100 p-2"><X size={18} /></button>
           <h2 className="text-2xl font-black mb-2">iPhone par Install karein</h2>
-          <ol className="space-y-4 text-sm font-bold mt-5">
+          <ol className="space-y-4 text-sm font-bold mt-4">
             <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Safari toolbar mein <b>Share button</b> (↑) dabao</span></li>
             <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Add to Home Screen"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Upar right mein <b>"Add"</b> dabao</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Right mein <b>"Add"</b> dabao</span></li>
           </ol>
-          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari mein kaam karta hai.</p>
+          <p className="mt-4 rounded-2xl bg-amber-50 p-3 text-xs text-amber-700 font-bold">⚠️ Sirf Safari browser mein kaam karta hai.</p>
           <button onClick={() => setIosOpen(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
         </motion.div>
       </div>
@@ -1505,10 +1706,10 @@ function PwaInstall() {
         <motion.div initial={{ scale: .92, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} className="w-full max-w-sm rounded-[34px] bg-white p-6 shadow-2xl">
           <button onClick={() => setManualOpen(false)} className="float-right rounded-full bg-zinc-100 p-2"><X size={18} /></button>
           <h2 className="text-2xl font-black mb-2">App Install karein</h2>
-          <ol className="space-y-4 text-sm font-bold">
+          <ol className="space-y-4 text-sm font-bold mt-4">
             <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">1</span><span>Address bar ke right mein <b>install icon (⊕)</b> ya <b>3-dot menu</b> kholo</span></li>
             <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">2</span><span><b>"Install App"</b> select karo</span></li>
-            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo!</span></li>
+            <li className="flex gap-3 items-start"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--rr-primary)] text-black text-xs font-black">3</span><span>Confirm karo</span></li>
           </ol>
           <button onClick={() => setManualOpen(false)} className="btn mt-4 w-full">Samajh gaya ✓</button>
         </motion.div>
@@ -1619,9 +1820,10 @@ function NotificationStrip() {
     success: 'bg-green-900 text-green-100', warning: 'bg-amber-900 text-amber-100',
     error: 'bg-red-900 text-red-100', info: 'bg-zinc-950 text-white'
   };
+  const cls = colors[n.type || 'info'] || colors.info;
   return (
     <div className="mx-auto mt-4 max-w-6xl px-4">
-      <div className={`flex items-center gap-3 rounded-3xl p-4 shadow-lg ${colors[n.type || 'info'] || colors.info}`}>
+      <div className={`flex items-center gap-3 rounded-3xl p-4 shadow-lg ${cls}`}>
         <Bell className="text-[var(--rr-primary)] shrink-0" />
         <div className="flex-1"><b>{n.title}</b><p className="text-sm opacity-75">{n.message}</p></div>
         <button onClick={() => setDismissed(p => [...p, n.id])} className="opacity-60 hover:opacity-100"><X size={18} /></button>
@@ -1656,12 +1858,12 @@ function Admin() {
   const { data, videos, categories, payment, theme, player, mutate, refresh } = useApp();
   const [tab, setTab] = useState('dashboard');
   const [pay, setPay] = useState<PaymentSettings>(payment);
-  const [th, setTh] = useState(theme);
+  const [th, setTh] = useState<BrandSettings>(theme);
   const [pl, setPl] = useState(player);
   const [importText, setImportText] = useState('');
   const [importResource, setImportResource] = useState('videos');
   const [importMsg, setImportMsg] = useState('');
-  const [gwForm, setGwForm] = useState<Partial<GatewayConfig & { keys: Record<string, string> }>>({});
+  const [gwForm, setGwForm] = useState<Partial<GatewayConfig & { keys: any }>>({});
 
   useEffect(() => setPay(payment), [payment]);
   useEffect(() => setTh(theme), [theme]);
@@ -1691,11 +1893,13 @@ function Admin() {
     const w = open('', '_blank');
     w?.document.write(`<h1>ReelRamp Pro Report</h1><p>Total Revenue: ${money(revenue)}</p><p>Daily: ${money(dailyRevenue)}</p><p>Monthly: ${money(monthlyRevenue)}</p><p>Active Subs: ${activeSubs.length}</p><p>Users: ${(data.users || []).length}</p><p>Videos: ${videos.length}</p><script>print()<\/script>`);
   };
+
   const exp = () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     a.download = 'reelramp-backup.json'; a.click();
   };
+
   const doImport = async (dryRun = false) => {
     try {
       const parsed = JSON.parse(importText);
@@ -1713,52 +1917,61 @@ function Admin() {
   const addGateway = () => {
     if (!gwForm.name || !gwForm.type) return;
     const newGw: GatewayConfig = {
-      id: `gw_${Date.now()}`, name: gwForm.name, type: gwForm.type,
-      enabled: true, isDefault: pay.gateways.length === 0, testMode: !!gwForm.testMode,
-      keys: gwForm.keys || {}, webhookSecret: gwForm.webhookSecret || '', healthStatus: 'unknown'
+      id: `gw_${Date.now()}`, name: gwForm.name,
+      type: gwForm.type, enabled: true,
+      isDefault: pay.gateways.length === 0, testMode: !!gwForm.testMode,
+      keys: gwForm.keys || {}, healthStatus: 'unknown'
     };
-    setPay({ ...pay, gateways: [...pay.gateways, newGw] }); setGwForm({});
+    const updated = { ...pay, gateways: [...pay.gateways, newGw] };
+    setPay(updated); setGwForm({});
   };
-  const updateGw = (id: string, changes: Partial<GatewayConfig>) =>
+  const updateGateway = (id: string, changes: Partial<GatewayConfig>) => {
     setPay({ ...pay, gateways: pay.gateways.map(g => g.id === id ? { ...g, ...changes } : g) });
-  const removeGw = (id: string) =>
-    setPay({ ...pay, gateways: pay.gateways.filter(g => g.id !== id) });
-  const setDefaultGw = (id: string) =>
-    setPay({ ...pay, gateways: pay.gateways.map(g => ({ ...g, isDefault: g.id === id })) });
+  };
+  const removeGateway = (id: string) => setPay({ ...pay, gateways: pay.gateways.filter(g => g.id !== id) });
+  const setDefault = (id: string) => setPay({ ...pay, gateways: pay.gateways.map(g => ({ ...g, isDefault: g.id === id })) });
 
-  const tabs = ['dashboard','videos','series','categories','banners','promoVideo','promoAnalytics','popups','notifications','plans','payments','subscriptions','users','wallet','referrals','reports','errors','audit','theme','gateways','player','content','policies','help','push','support','json'];
+  const tabs = ['dashboard', 'videos', 'series', 'categories', 'banners', 'promoVideo', 'promoAnalytics', 'popups', 'notifications', 'plans', 'payments', 'subscriptions', 'users', 'wallet', 'referrals', 'reports', 'errors', 'audit', 'brand', 'gateways', 'player', 'content', 'policies', 'help', 'push', 'support', 'json'];
 
   return (
     <main className="min-h-screen bg-orange-50 p-4 md:p-8">
-      <Title t="Admin Control Center" s="Content, plans, theme, promo, revenue, legal — sab yahan se." />
-      <div className="my-5 flex gap-2 overflow-x-auto">
-        {tabs.map(t => <button key={t} onClick={() => setTab(t)} className={`pill ${tab === t ? 'active' : ''}`}>{t}</button>)}
+      <Title t="Admin Control Center" s="Content, plans, brand, gateway, revenue — sab yahan se." />
+      <div className="my-5 flex gap-2 overflow-x-auto pb-2">
+        {tabs.map(t => <button key={t} onClick={() => setTab(t)} className={`pill shrink-0 ${tab === t ? 'active' : ''}`}>{t}</button>)}
       </div>
 
+      {/* ── DASHBOARD ── */}
       {tab === 'dashboard' && (
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Total Revenue" v={money(revenue)} /><Stat l="Daily Revenue" v={money(dailyRevenue)} />
-            <Stat l="Monthly Revenue" v={money(monthlyRevenue)} /><Stat l="Total Users" v={(data.users || []).length} />
+            <Stat l="Total Revenue" v={money(revenue)} />
+            <Stat l="Daily Revenue" v={money(dailyRevenue)} />
+            <Stat l="Monthly Revenue" v={money(monthlyRevenue)} />
+            <Stat l="Total Users" v={(data.users || []).length} />
           </div>
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Active Subs" v={activeSubs.length} /><Stat l="Expired Subs" v={expiredSubs.length} />
-            <Stat l="Pending Payments" v={pendingPayments.length} /><Stat l="Failed Payments" v={failedPayments.length} />
+            <Stat l="Active Subs" v={activeSubs.length} />
+            <Stat l="Expired Subs" v={expiredSubs.length} />
+            <Stat l="Pending Payments" v={pendingPayments.length} />
+            <Stat l="Failed Payments" v={failedPayments.length} />
           </div>
           <div className="grid gap-4 md:grid-cols-4">
-            <Stat l="Videos" v={videos.length} /><Stat l="Series" v={(data.series || []).length} />
-            <Stat l="Categories" v={(data.categories || []).length} /><Stat l="Support Tickets" v={(data.support_tickets || []).length} />
+            <Stat l="Videos" v={videos.length} />
+            <Stat l="Series" v={(data.series || []).length} />
+            <Stat l="Categories" v={(data.categories || []).length} />
+            <Stat l="Support Tickets" v={(data.support_tickets || []).length} />
           </div>
           <button onClick={pdf} className="btn"><FileText /> Download PDF Report</button>
           {pendingPayments.length > 0 && (
             <div className="card p-5">
-              <h3 className="font-black text-amber-700 flex items-center gap-2 mb-3"><AlertCircle size={18} /> Pending Payments</h3>
+              <h3 className="font-black text-amber-700 flex items-center gap-2 mb-3"><AlertCircle size={18} /> Pending Payments — Manual Verification Required</h3>
               <div className="space-y-2">
                 {pendingPayments.map(p => (
                   <div key={p.id} className="rounded-2xl bg-amber-50 p-3 flex justify-between items-center">
                     <div>
                       <p className="font-bold text-sm">{money(p.amount)} — {p.gateway}</p>
-                      <p className="text-xs text-zinc-500">User: {p.user_id} · Txn: {p.transaction_id}</p>
+                      <p className="text-xs text-zinc-500">User: {p.user_id} · Txn: {p.transaction_id || p.cf_payment_id}</p>
+                      <p className="text-xs text-zinc-400">{new Date(p.created_at).toLocaleString('en-IN')}</p>
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => mutate('payments', 'PUT', { id: p.id, status: 'success' })} className="rounded-full bg-green-100 px-3 py-1 text-xs font-black text-green-700">Approve</button>
@@ -1772,15 +1985,15 @@ function Admin() {
         </div>
       )}
 
-      {tab === 'videos' && <Crud resource="videos" fields={['title','description','series_title','episode_number','video_filename','bunny_video_id','bunny_embed_url','thumbnail_url','category','duration_seconds','age_rating','publish_at']} checks={['is_premium','is_published']} defaults={{ is_published: true, category: categories[0]?.name || 'Drama', age_rating: 'U/A 13+' }} />}
-      {tab === 'series' && <Crud resource="series" fields={['title','description','poster_url','category','status','sort_order']} checks={['is_featured']} defaults={{ status: 'published' }} />}
-      {tab === 'categories' && <Crud resource="categories" fields={['name','slug','icon','sort_order']} checks={['is_active']} defaults={{ icon: '🎬', is_active: true }} />}
-      {tab === 'banners' && <Crud resource="banners" fields={['title','subtitle','image_url','cta_label','cta_action','sort_order']} checks={['is_active']} defaults={{ is_active: true, cta_action: 'forYou' }} />}
-      {tab === 'promoVideo' && <Crud resource="promo_campaigns" fields={['title','subtitle','celebrity_name','video_filename','poster_url','offer_text','cta_label','cta_action','placement','show_after_seconds','frequency_hours','sort_order','start_at','end_at','target']} checks={['is_active']} defaults={{ is_active: true, placement: 'app_open', cta_action: 'plans', show_after_seconds: 2, frequency_hours: 12, target: 'free_users' }} />}
+      {tab === 'videos' && <Crud resource="videos" fields={['title', 'description', 'series_title', 'episode_number', 'video_filename', 'bunny_video_id', 'bunny_embed_url', 'thumbnail_url', 'category', 'duration_seconds', 'age_rating', 'publish_at']} checks={['is_premium', 'is_published']} defaults={{ is_published: true, category: categories[0]?.name || 'Drama', age_rating: 'U/A 13+' }} />}
+      {tab === 'series' && <Crud resource="series" fields={['title', 'description', 'poster_url', 'category', 'status', 'sort_order']} checks={['is_featured']} defaults={{ status: 'published' }} />}
+      {tab === 'categories' && <Crud resource="categories" fields={['name', 'slug', 'icon', 'sort_order']} checks={['is_active']} defaults={{ icon: '🎬', is_active: true }} />}
+      {tab === 'banners' && <Crud resource="banners" fields={['title', 'subtitle', 'image_url', 'cta_label', 'cta_action', 'sort_order']} checks={['is_active']} defaults={{ is_active: true, cta_action: 'forYou' }} />}
+      {tab === 'promoVideo' && <Crud resource="promo_campaigns" fields={['title', 'subtitle', 'celebrity_name', 'video_filename', 'poster_url', 'offer_text', 'cta_label', 'cta_action', 'placement', 'show_after_seconds', 'frequency_hours', 'sort_order', 'start_at', 'end_at', 'target']} checks={['is_active']} defaults={{ is_active: true, placement: 'app_open', cta_action: 'plans', show_after_seconds: 2, frequency_hours: 12, target: 'free_users' }} />}
       {tab === 'promoAnalytics' && <DataTable resource="promo_events" rows={data.promo_events || []} />}
-      {tab === 'popups' && <Crud resource="popup_settings" fields={['title','message','cta_label','cta_url']} checks={['enabled']} defaults={{ enabled: true }} />}
-      {tab === 'notifications' && <Crud resource="notifications" fields={['title','message','target']} checks={['is_active']} defaults={{ is_active: true, target: 'all' }} />}
-      {tab === 'plans' && <Crud resource="plans" fields={['name','price','duration_days','sort_order','plan_type','trial_days']} checks={['is_active','supports_autorenew']} defaults={{ is_active: true, price: 99, duration_days: 30, plan_type: 'monthly' }} />}
+      {tab === 'popups' && <Crud resource="popup_settings" fields={['title', 'message', 'cta_label', 'cta_url']} checks={['enabled']} defaults={{ enabled: true }} />}
+      {tab === 'notifications' && <Crud resource="notifications" fields={['title', 'message', 'target']} checks={['is_active']} defaults={{ is_active: true, target: 'all' }} />}
+      {tab === 'plans' && <Crud resource="plans" fields={['name', 'price', 'duration_days', 'sort_order', 'plan_type', 'trial_days', 'cf_plan_id']} checks={['is_active', 'supports_autorenew']} defaults={{ is_active: true, price: 99, duration_days: 30, plan_type: 'monthly' }} />}
       {tab === 'payments' && <DataTable resource="payments" rows={data.payments || []} />}
       {tab === 'subscriptions' && <DataTable resource="subscriptions" rows={data.subscriptions || []} />}
       {tab === 'users' && <DataTable resource="users" rows={data.users || []} />}
@@ -1790,110 +2003,204 @@ function Admin() {
       {tab === 'errors' && <DataTable resource="error_logs" rows={data.error_logs || []} />}
       {tab === 'audit' && <DataTable resource="audit_logs" rows={data.audit_logs || []} />}
 
-      {tab === 'gateways' && (
-        <div className="panel space-y-5">
-          <h2 className="adminh"><Wallet /> Payment Gateway Engine</h2>
-          <p className="text-sm text-zinc-500">Multiple gateways add karein. Default gateway Plans page par use hoga.</p>
-          <div className="space-y-3">
-            {pay.gateways.map(gw => (
-              <div key={gw.id} className={`rounded-3xl border-2 p-4 ${gw.enabled ? 'border-green-200 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`h-3 w-3 rounded-full ${gw.enabled ? 'bg-green-500' : 'bg-zinc-300'}`} />
-                    <b className="font-black">{gw.name}</b>
-                    <span className="text-xs text-zinc-500">({gw.type})</span>
-                    {gw.isDefault && <span className="rounded-full bg-[var(--rr-primary)] px-2 py-0.5 text-xs font-black text-black">DEFAULT</span>}
-                    {gw.testMode && <span className="rounded-full bg-yellow-200 px-2 py-0.5 text-xs font-black text-yellow-800">TEST/SANDBOX</span>}
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => updateGw(gw.id, { enabled: !gw.enabled })} className={`rounded-full px-3 py-1 text-xs font-black ${gw.enabled ? 'bg-zinc-200 text-zinc-700' : 'bg-green-200 text-green-700'}`}>
-                      {gw.enabled ? 'Disable' : 'Enable'}
-                    </button>
-                    {!gw.isDefault && <button onClick={() => setDefaultGw(gw.id)} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">Set Default</button>}
-                    <button onClick={() => removeGw(gw.id)} className="rounded-full bg-red-100 p-2 text-red-600"><Trash2 size={14} /></button>
-                  </div>
+      {/* ── BRAND & LOGO ── */}
+      {tab === 'brand' && (
+        <div className="panel space-y-4">
+          <h2 className="adminh"><Palette /> Brand & Logo Settings</h2>
+
+          {/* Logo Image Section */}
+          <div className="rounded-3xl border-2 border-dashed border-[var(--rr-primary)] bg-orange-50 p-5">
+            <h3 className="font-black mb-3 flex items-center gap-2"><Image size={18} /> Logo Image</h3>
+            <div className="grid gap-4 md:grid-cols-2 items-start">
+              <div>
+                <label className="label">Logo Image URL</label>
+                <input className="input" value={th.logoImageUrl || ''} onChange={e => setTh({ ...th, logoImageUrl: e.target.value })} placeholder="https://example.com/logo.png" />
+                <p className="text-xs text-zinc-500 mt-1">
+                  PNG/SVG transparent background best lagti hai. Recommended: 200×60px ya square 100×100px.
+                </p>
+                <label className="label mt-3">Logo Text (Fallback — jab image na ho)</label>
+                <input className="input" value={th.logoText || ''} onChange={e => setTh({ ...th, logoText: e.target.value })} placeholder="RR" />
+              </div>
+              <div className="flex flex-col items-center gap-3">
+                <p className="text-xs font-black text-zinc-500">Preview:</p>
+                <div className="rounded-2xl border bg-white p-4 flex items-center gap-3 w-full">
+                  {th.logoImageUrl ? (
+                    <img src={th.logoImageUrl} alt="Logo" className="h-10 w-auto max-w-[120px] object-contain" onError={e => (e.currentTarget.style.display = 'none')} />
+                  ) : (
+                    <span className="grid h-11 w-11 place-items-center rounded-2xl font-black text-black" style={{ background: th.primary || '#c5a26f' }}>
+                      {th.logoText || 'RR'}
+                    </span>
+                  )}
+                  <b className="text-xl">{th.brand || 'ReelRamp Pro'}</b>
                 </div>
-                {Object.entries(gw.keys).map(([k, v]) => (
-                  <p key={k} className="text-xs text-zinc-500 font-mono">{k}: {k.toLowerCase().includes('secret') ? '••••••••' : String(v).slice(0, 16) + (String(v).length > 16 ? '...' : '')}</p>
-                ))}
+                <p className="text-xs text-zinc-400 text-center">Aisa header mein dikhega</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Brand Name */}
+          <div>
+            <label className="label">Brand Name</label>
+            <input className="input" value={th.brand || ''} onChange={e => setTh({ ...th, brand: e.target.value })} placeholder="ReelRamp Pro" />
+          </div>
+
+          {/* Colors */}
+          <div className="grid gap-4 md:grid-cols-3">
+            {(['primary', 'accent', 'bg'] as const).map(k => (
+              <div key={k} className="space-y-2">
+                <label className="label capitalize">{k} Color</label>
+                <div className="flex items-center gap-2">
+                  <input type="color" className="h-10 w-12 cursor-pointer rounded-xl border border-zinc-200" value={th[k] || '#000000'} onChange={e => setTh({ ...th, [k]: e.target.value })} />
+                  <input className="input flex-1" value={th[k] || ''} onChange={e => setTh({ ...th, [k]: e.target.value })} placeholder="#hex" />
+                </div>
               </div>
             ))}
           </div>
 
-          <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
-            <h3 className="font-black mb-3 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div><label className="label">Gateway Name *</label><input className="input" value={gwForm.name || ''} onChange={e => setGwForm({ ...gwForm, name: e.target.value })} placeholder="Cashfree Production" /></div>
-              <div>
-                <label className="label">Gateway Type *</label>
-                <select className="input" value={gwForm.type || ''} onChange={e => setGwForm({ ...gwForm, type: e.target.value })}>
-                  <option value="">-- Select --</option>
-                  {['Cashfree','Razorpay','PayU','UPI Manual','Paytm','PhonePe','Stripe','PayPal','Bank Transfer','Other'].map(g => <option key={g}>{g}</option>)}
-                </select>
-              </div>
-            </div>
-
-            {gwForm.type === 'Cashfree' && (
-              <div className="grid gap-3 md:grid-cols-2 mt-3">
-                <div><label className="label">App ID</label><input className="input" value={gwForm.keys?.appId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, appId: e.target.value } })} placeholder="TEST1234567890" /></div>
-                <div><label className="label">Secret Key</label><input className="input" type="password" value={gwForm.keys?.secretKey || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, secretKey: e.target.value } })} placeholder="Secret" /></div>
-                <div className="md:col-span-2 rounded-2xl bg-indigo-50 p-3 text-xs text-indigo-700 font-bold">
-                  ℹ️ Backend mein <code>/api/cashfree/create-order</code> endpoint banana padega jo Cashfree order create kare aur <code>payment_session_id</code> return kare.
-                </div>
-              </div>
-            )}
-            {(gwForm.type === 'Razorpay' || gwForm.type === 'PayU') && (
-              <div className="grid gap-3 md:grid-cols-2 mt-3">
-                <div><label className="label">Key ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
-                <div><label className="label">Key Secret</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} placeholder="Secret" /></div>
-              </div>
-            )}
-            {gwForm.type === 'UPI Manual' && (
-              <div className="grid gap-3 md:grid-cols-2 mt-3">
-                <div><label className="label">UPI ID</label><input className="input" value={gwForm.keys?.upiId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiId: e.target.value } })} placeholder="yourname@upi" /></div>
-                <div><label className="label">QR Code URL</label><input className="input" value={gwForm.keys?.upiQr || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiQr: e.target.value } })} placeholder="https://..." /></div>
-              </div>
-            )}
-            {(gwForm.type === 'Stripe' || gwForm.type === 'PayPal') && (
-              <div className="grid gap-3 md:grid-cols-2 mt-3">
-                <div><label className="label">Publishable Key</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} /></div>
-                <div><label className="label">Secret Key</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} /></div>
-              </div>
-            )}
-            <label className="flex cursor-pointer items-center gap-2 font-black text-sm mt-3">
-              <input type="checkbox" checked={!!gwForm.testMode} onChange={e => setGwForm({ ...gwForm, testMode: e.target.checked })} className="h-4 w-4" />
-              Test / Sandbox Mode
-            </label>
-            <button onClick={addGateway} disabled={!gwForm.name || !gwForm.type} className="btn mt-4 disabled:opacity-50">Add Gateway</button>
+          <div>
+            <label className="label">Border Radius</label>
+            <input className="input max-w-xs" value={th.radius || ''} onChange={e => setTh({ ...th, radius: e.target.value })} placeholder="30px" />
           </div>
 
-          <div className="space-y-3">
-            <h3 className="font-black">Common Settings</h3>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div><label className="label">WhatsApp Support</label><input className="input" value={pay.whatsapp || ''} onChange={e => setPay({ ...pay, whatsapp: e.target.value })} /></div>
-              <div><label className="label">Monthly Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay({ ...pay, monthlyPrice: Number(e.target.value) })} /></div>
-            </div>
-            <div><label className="label">Payment Instructions</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} /></div>
+          <button className="save w-full" onClick={() => saveSetting('theme', th)}>💾 Save Brand Settings</button>
+
+          {/* Gateway status quick info */}
+          <div className={`rounded-2xl p-3 text-sm font-bold flex items-center gap-2 ${pay.gateways.some(g => g.enabled) ? 'bg-green-50 text-green-700' : 'bg-zinc-100 text-zinc-500'}`}>
+            {pay.gateways.some(g => g.enabled)
+              ? <><CheckCircle2 size={16} /> {pay.gateways.filter(g => g.enabled).length} payment gateway(s) active</>
+              : <><span>⏳</span> Koi gateway active nahi — "Gateways" tab mein configure karein.</>}
           </div>
-          <button className="save w-full" onClick={() => saveSetting('payment', pay)}>💾 Save All Gateway Settings</button>
         </div>
       )}
 
-      {tab === 'theme' && (
-        <div className="panel space-y-3">
-          <h2 className="adminh"><Palette /> Theme & Logo</h2>
-          {['brand', 'logoText'].map(k => (
-            <div key={k}><label className="mb-1 block text-sm font-black capitalize">{k}</label><input className="input" value={th[k] || ''} onChange={e => setTh({ ...th, [k]: e.target.value })} placeholder={k} /></div>
-          ))}
-          {(['primary', 'accent', 'bg'] as const).map(k => (
-            <div key={k} className="flex items-center gap-3">
-              <label className="w-24 text-sm font-black capitalize">{k} Color</label>
-              <input type="color" className="h-10 w-16 cursor-pointer rounded-xl border border-zinc-200" value={th[k] || '#000000'} onChange={e => setTh({ ...th, [k]: e.target.value })} />
-              <input className="input flex-1" value={th[k] || ''} onChange={e => setTh({ ...th, [k]: e.target.value })} />
+      {/* ── GATEWAYS (Full Cashfree + Multi-Gateway Engine) ── */}
+      {tab === 'gateways' && (
+        <div className="space-y-5">
+          <div className="panel">
+            <h2 className="adminh"><Wallet /> Payment Gateway Engine</h2>
+            <p className="text-sm text-zinc-500 mb-4">Cashfree, Razorpay, UPI Manual — multiple gateways add karein. Default gateway plans page par use hoga.</p>
+
+            {/* Cashfree Quick Setup Guide */}
+            <div className="rounded-3xl bg-gradient-to-br from-orange-50 to-yellow-50 border border-orange-200 p-5 mb-5">
+              <h3 className="font-black text-orange-700 flex items-center gap-2 mb-2"><Zap size={16} /> Cashfree Quick Setup</h3>
+              <ol className="text-sm text-orange-800 space-y-1">
+                <li>1. <a href="https://merchant.cashfree.com" target="_blank" className="underline font-bold">merchant.cashfree.com</a> par account banao</li>
+                <li>2. Developers → API Keys → App ID aur Secret Key copy karo</li>
+                <li>3. Sandbox mein test karo, fir Production keys use karo</li>
+                <li>4. Webhooks → URL set karo: <code className="bg-orange-100 px-1 rounded">{window.location.origin}/api/cashfree-webhook</code></li>
+                <li>5. Subscriptions use karne ke liye: Plans tab mein <b>cf_plan_id</b> fill karo</li>
+              </ol>
             </div>
-          ))}
-          <div><label className="mb-1 block text-sm font-black">Border Radius</label><input className="input" value={th.radius || ''} onChange={e => setTh({ ...th, radius: e.target.value })} placeholder="30px" /></div>
-          <button className="save" onClick={() => saveSetting('theme', th)}>💾 Save Theme</button>
+
+            {/* Existing Gateways */}
+            <div className="space-y-3 mb-5">
+              {pay.gateways.map(gw => (
+                <div key={gw.id} className={`rounded-3xl border-2 p-4 ${gw.enabled ? 'border-green-200 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-3 w-3 rounded-full ${gw.enabled ? 'bg-green-500' : 'bg-zinc-300'}`} />
+                      <b className="font-black">{gw.name}</b>
+                      <span className="text-xs text-zinc-500">({gw.type})</span>
+                      {gw.isDefault && <span className="rounded-full bg-[var(--rr-primary)] px-2 py-0.5 text-xs font-black text-black">DEFAULT</span>}
+                      {gw.testMode && <span className="rounded-full bg-yellow-200 px-2 py-0.5 text-xs font-black text-yellow-800">SANDBOX</span>}
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={() => updateGateway(gw.id, { enabled: !gw.enabled })} className={`rounded-full px-3 py-1 text-xs font-black ${gw.enabled ? 'bg-zinc-200 text-zinc-700' : 'bg-green-200 text-green-700'}`}>
+                        {gw.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                      {!gw.isDefault && <button onClick={() => setDefault(gw.id)} className="rounded-full bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">Set Default</button>}
+                      <button onClick={() => removeGateway(gw.id)} className="rounded-full bg-red-100 p-2 text-red-600"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                  {Object.entries(gw.keys).map(([k, v]) => (
+                    <p key={k} className="text-xs text-zinc-500 font-mono">{k}: {k.toLowerCase().includes('secret') ? '••••••••' : String(v).slice(0, 16) + (String(v).length > 16 ? '...' : '')}</p>
+                  ))}
+                </div>
+              ))}
+              {pay.gateways.length === 0 && (
+                <div className="rounded-3xl bg-zinc-100 p-5 text-center text-zinc-500 text-sm">Koi gateway configure nahi hai. Neeche add karein.</div>
+              )}
+            </div>
+
+            {/* Add Gateway Form */}
+            <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
+              <h3 className="font-black mb-4 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div><label className="label">Gateway Name *</label><input className="input" value={gwForm.name || ''} onChange={e => setGwForm({ ...gwForm, name: e.target.value })} placeholder="Cashfree Production" /></div>
+                <div>
+                  <label className="label">Gateway Type *</label>
+                  <select className="input" value={gwForm.type || ''} onChange={e => setGwForm({ ...gwForm, type: e.target.value, keys: {} })}>
+                    <option value="">-- Select --</option>
+                    {['Cashfree', 'Razorpay', 'PayU', 'Cashfree', 'UPI Manual', 'Paytm', 'PhonePe', 'Stripe', 'PayPal', 'Bank Transfer'].map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Cashfree-specific keys */}
+              {gwForm.type === 'Cashfree' && (
+                <div className="grid gap-3 md:grid-cols-2 mt-3">
+                  <div>
+                    <label className="label">App ID (Client ID)</label>
+                    <input className="input" value={gwForm.keys?.appId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, appId: e.target.value } })} placeholder="TEST1234567890..." />
+                  </div>
+                  <div>
+                    <label className="label">Secret Key</label>
+                    <input className="input" type="password" value={gwForm.keys?.secretKey || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, secretKey: e.target.value } })} placeholder="Secret" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="label">Webhook Secret (optional)</label>
+                    <input className="input" type="password" value={gwForm.webhookSecret || ''} onChange={e => setGwForm({ ...gwForm, webhookSecret: e.target.value })} placeholder="Cashfree webhook secret" />
+                  </div>
+                </div>
+              )}
+
+              {/* Razorpay-specific keys */}
+              {gwForm.type === 'Razorpay' && (
+                <div className="grid gap-3 md:grid-cols-2 mt-3">
+                  <div><label className="label">Key ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
+                  <div><label className="label">Key Secret</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} placeholder="Secret" /></div>
+                </div>
+              )}
+
+              {/* UPI Manual */}
+              {gwForm.type === 'UPI Manual' && (
+                <div className="grid gap-3 md:grid-cols-2 mt-3">
+                  <div><label className="label">UPI ID</label><input className="input" value={gwForm.keys?.upiId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiId: e.target.value } })} placeholder="yourname@upi" /></div>
+                  <div><label className="label">QR Code Image URL</label><input className="input" value={gwForm.keys?.upiQr || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, upiQr: e.target.value } })} placeholder="https://..." /></div>
+                </div>
+              )}
+
+              {/* PayU / Others */}
+              {(gwForm.type === 'PayU' || gwForm.type === 'Stripe' || gwForm.type === 'PayPal') && (
+                <div className="grid gap-3 md:grid-cols-2 mt-3">
+                  <div><label className="label">API Key / Client ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} /></div>
+                  <div><label className="label">Secret Key</label><input className="input" type="password" value={gwForm.keys?.keySecret || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keySecret: e.target.value } })} /></div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 mt-4">
+                <label className="flex cursor-pointer items-center gap-2 font-black text-sm">
+                  <input type="checkbox" checked={!!gwForm.testMode} onChange={e => setGwForm({ ...gwForm, testMode: e.target.checked })} className="h-4 w-4" />
+                  Sandbox / Test Mode
+                </label>
+              </div>
+              <button onClick={addGateway} disabled={!gwForm.name || !gwForm.type} className="btn mt-4 disabled:opacity-50">
+                <Plus size={16} /> Add Gateway
+              </button>
+            </div>
+
+            {/* Common Settings */}
+            <div className="mt-5 space-y-3">
+              <h3 className="font-black">Common Payment Settings</h3>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div><label className="label">WhatsApp Support Number</label><input className="input" value={pay.whatsapp || ''} onChange={e => setPay({ ...pay, whatsapp: e.target.value })} placeholder="+917307493338" /></div>
+                <div><label className="label">Monthly Base Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay({ ...pay, monthlyPrice: Number(e.target.value) })} /></div>
+              </div>
+              <div><label className="label">Payment Instructions (users ko dikhega)</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay({ ...pay, instructions: e.target.value })} placeholder="UPI se payment karein aur UTR WhatsApp par bhejein." /></div>
+            </div>
+
+            <button className="save w-full mt-4" onClick={() => saveSetting('payment', pay)}>💾 Save All Gateway Settings</button>
+          </div>
         </div>
       )}
 
@@ -1913,9 +2220,9 @@ function Admin() {
         </div>
       )}
 
-      {tab === 'content' && <Crud resource="platform_settings" fields={['site_name','hero_title','hero_subtitle','pwa_message']} checks={['maintenance_mode']} defaults={{ site_name: 'ReelRamp Pro' }} />}
-      {tab === 'policies' && <Crud resource="legal_policies" fields={['title','type','version','body']} checks={['is_published']} defaults={{ version: '1.0', is_published: true }} />}
-      {tab === 'help' && <Crud resource="help_articles" fields={['title','body','category','sort_order']} checks={['is_published']} defaults={{ is_published: true, category: 'General' }} />}
+      {tab === 'content' && <Crud resource="platform_settings" fields={['site_name', 'hero_title', 'hero_subtitle', 'pwa_message']} checks={['maintenance_mode']} defaults={{ site_name: 'ReelRamp Pro' }} />}
+      {tab === 'policies' && <Crud resource="legal_policies" fields={['title', 'type', 'version', 'body']} checks={['is_published']} defaults={{ version: '1.0', is_published: true }} />}
+      {tab === 'help' && <Crud resource="help_articles" fields={['title', 'body', 'category', 'sort_order']} checks={['is_published']} defaults={{ is_published: true, category: 'General' }} />}
       {tab === 'push' && <DataTable resource="push_subscriptions" rows={data.push_subscriptions || []} />}
       {tab === 'support' && <DataTable resource="support_tickets" rows={data.support_tickets || []} />}
       {tab === 'json' && (
@@ -1923,7 +2230,7 @@ function Admin() {
           <h2 className="adminh"><FileJson /> JSON Backup / Restore</h2>
           <button className="save" onClick={exp}>Export Full JSON</button>
           <select className="input" value={importResource} onChange={e => setImportResource(e.target.value)}>{resources.map(r => <option key={r}>{r}</option>)}</select>
-          <textarea className="input min-h-56" value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste JSON here" />
+          <textarea className="input min-h-56" value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste JSON array or full backup JSON here" />
           <div className="flex gap-2">
             <button className="btn" onClick={() => doImport(true)}>Validate</button>
             <button className="btn" onClick={() => doImport(false)}>Import</button>
@@ -1946,7 +2253,7 @@ function Crud({ resource, fields, checks, defaults }: { resource: string; fields
     <div className="grid gap-5 lg:grid-cols-[420px_1fr]">
       <form onSubmit={save} className="panel">
         <h2 className="adminh"><Edit3 /> {resource}</h2>
-        {fields.map(k => ['body','description','message','hero_subtitle'].includes(k)
+        {fields.map(k => k === 'body' || k === 'description' || k === 'message' || k === 'hero_subtitle'
           ? <textarea key={k} className="input min-h-28" value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} placeholder={k} />
           : <input key={k} className="input" value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} placeholder={k} />)}
         {checks?.map(k => <label key={k} className="flex gap-2 font-bold"><input type="checkbox" checked={!!f[k]} onChange={e => setF({ ...f, [k]: e.target.checked })} />{k}</label>)}
@@ -1974,18 +2281,17 @@ function DataTable({ rows, resource, onEdit }: { rows: Row[]; resource: string; 
               </td>
             </tr>
           ))}
+          {rows.length === 0 && <tr><td colSpan={10} className="p-6 text-center text-zinc-400">Koi data nahi hai.</td></tr>}
         </tbody>
       </table>
     </div>
   );
 }
 
-// ─── MISC ─────────────────────────────────────────────────────────────────────
-function Stat({ l, v }: { l: string; v: any }) {
-  return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>;
-}
+// ─── MISC COMPONENTS ──────────────────────────────────────────────────────────
+function Stat({ l, v }: { l: string; v: any }) { return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>; }
 
-function AboutSection() {
+function InfoSection() {
   return (
     <div className="card overflow-hidden md:grid md:grid-cols-[.9fr_1.1fr]">
       <img src={fallbackImages.studio} className="h-full min-h-72 w-full object-cover" />
@@ -2000,14 +2306,10 @@ function AboutSection() {
   );
 }
 
-function Empty() {
-  return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50} /><h2 className="text-3xl font-black">No content yet</h2></div>;
-}
-function Title({ t, s }: { t: string; s: string }) {
-  return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>;
-}
+function Empty() { return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50} /><h2 className="text-3xl font-black">No content yet</h2></div>; }
+function Title({ t, s }: { t: string; s: string }) { return <div><p className="font-black text-[var(--rr-accent)]">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600">{s}</p></div>; }
 
-// ─── SHELL ────────────────────────────────────────────────────────────────────
+// ─── SHELL (with Logo Image support) ─────────────────────────────────────────
 function Shell() {
   const { loading, theme, data, user } = useApp();
   const [tab, setTab] = useState('home');
@@ -2015,15 +2317,9 @@ function Shell() {
   const [exitAsk, setExitAsk] = useState(false);
 
   const isLoggedIn = !!(user?.email);
-
-  // FIX 3: Header name — context first, then localStorage fallback (survives hard refresh)
-  const headerName = (() => {
-    const fromCtx = user?.display_name?.trim();
-    if (fromCtx) return fromCtx.split(' ')[0];
-    const fromStorage = localStorage.getItem(LS_DISPLAY_NAME)?.trim();
-    if (fromStorage) return fromStorage.split(' ')[0];
-    return isLoggedIn ? 'Profile' : 'Login';
-  })();
+  // FIX: Use getBestDisplayName everywhere — never show raw email
+  const displayName = getBestDisplayName(user);
+  const headerName = isLoggedIn ? displayName.split(' ')[0] : 'Login';
 
   const go = (t: string) => { setTab(t); setHistoryStack(prev => [...prev, t]); };
 
@@ -2039,14 +2335,16 @@ function Shell() {
     const onPop = () => {
       setHistoryStack(prev => {
         if (prev.length > 1) {
-          const next = [...prev]; next.pop();
-          setTab(next[next.length - 1]);
+          const newStack = [...prev]; newStack.pop();
+          const prevTab = newStack[newStack.length - 1];
+          setTab(prevTab);
           history.pushState({ rr: true }, '', location.href);
-          return next;
+          return newStack;
+        } else {
+          setExitAsk(true);
+          history.pushState({ rr: true }, '', location.href);
+          return prev;
         }
-        setExitAsk(true);
-        history.pushState({ rr: true }, '', location.href);
-        return prev;
       });
     };
     window.addEventListener('popstate', onPop);
@@ -2057,26 +2355,45 @@ function Shell() {
   if (loading) return <div className="grid min-h-screen place-items-center bg-orange-50"><Loader2 className="animate-spin text-[var(--rr-accent)]" size={54} /></div>;
 
   const popup = (data.popup_settings || []).find(p => p.enabled);
-
   const page = tab === 'home' ? <HomePage go={go} />
-    : tab === 'forYou' ? <ForYou go={go} />
-    : tab === 'series' ? <SeriesPage go={go} />
-    : tab === 'search' ? <SearchPage go={go} />
-    : tab === 'plans' ? <Plans />
-    : tab === 'wallet' ? <WalletReferral />
-    : tab === 'help' ? <HelpCenter />
-    : tab === 'profile' ? <Profile />
-    : <Policies />;
+    : tab === 'forYou' ? <ForYou />
+      : tab === 'series' ? <SeriesPage go={go} />
+        : tab === 'search' ? <SearchPage go={go} />
+          : tab === 'plans' ? <Plans />
+            : tab === 'wallet' ? <WalletReferral />
+              : tab === 'help' ? <HelpCenter />
+                : tab === 'profile' ? <Profile />
+                  : <Policies />;
 
   return (
     <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
       <header className="sticky top-0 z-30 border-b border-black/5 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
           <button onClick={() => go('home')} className="flex items-center gap-3">
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black">{theme.logoText || 'RR'}</span>
+            {/* LOGO IMAGE SUPPORT — with fallback to text */}
+            {theme.logoImageUrl ? (
+              <img
+                src={theme.logoImageUrl}
+                alt={theme.brand || 'ReelRamp Pro'}
+                className="h-10 w-auto max-w-[140px] object-contain"
+                onError={e => {
+                  e.currentTarget.style.display = 'none';
+                  const next = e.currentTarget.nextSibling as HTMLElement;
+                  if (next) next.style.display = 'flex';
+                }}
+              />
+            ) : null}
+            {/* Fallback text logo — shown if no image or image fails */}
+            <span
+              className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black"
+              style={{ display: theme.logoImageUrl ? 'none' : 'grid' }}
+            >
+              {theme.logoText || 'RR'}
+            </span>
             <b className="text-xl">{theme.brand || 'ReelRamp Pro'}</b>
           </button>
           <button onClick={() => go('profile')} className={`rounded-full px-5 py-2 font-bold ${isLoggedIn ? 'bg-[var(--rr-primary)] text-black' : 'bg-zinc-950 text-white'}`}>
+            {/* FIX: Show proper name, not email */}
             {headerName}
           </button>
         </div>
