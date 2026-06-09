@@ -1,4 +1,3 @@
-import { initiatePayment, setPaymentBridge } from './paymentHelper';
 import { FormEvent, ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -156,7 +155,29 @@ const migratePayment = (raw: any): PaymentSettings => {
   };
 };
 
-// ─── RAZORPAY (inline, used by Plans component directly) ─────────────────────
+// ─── PAYMENT BRIDGE (merged from paymentHelper.ts) ───────────────────────────
+// Global payment settings reference so initiatePayment() can read gateway config
+// from anywhere (e.g. the locked player screen) without prop-drilling.
+let _paymentBridge: PaymentSettings = defaultPayment;
+
+export function setPaymentBridge(settings: PaymentSettings) {
+  _paymentBridge = settings;
+}
+
+export function initiatePayment(
+  plan: { price: number; name: string; duration_days: number; id?: number },
+  user: UserRow | null,
+  opts?: { navigate?: (tab: string) => void }
+) {
+  // Dispatch an event that the Plans component listens to
+  window.dispatchEvent(new CustomEvent('rr:open-plan', { detail: { plan } }));
+  // Navigate to plans tab if a navigate function is provided
+  if (opts?.navigate) {
+    opts.navigate('plans');
+  }
+}
+
+// ─── RAZORPAY ─────────────────────────────────────────────────────────────────
 declare global { interface Window { Razorpay: any; Cashfree: any } }
 
 const loadRazorpay = (): Promise<boolean> =>
@@ -186,7 +207,7 @@ const openRazorpay = async (opts: {
   }).open();
 };
 
-// ─── CASHFREE (inline, used by Plans component directly) ─────────────────────
+// ─── CASHFREE ─────────────────────────────────────────────────────────────────
 const loadCashfree = (): Promise<boolean> =>
   new Promise(resolve => {
     if (window.Cashfree) return resolve(true);
@@ -195,6 +216,19 @@ const loadCashfree = (): Promise<boolean> =>
     s.onload = () => resolve(true); s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
+
+// ─── SAFE JSON FETCH (Fix 2: handles HTML error pages gracefully) ─────────────
+async function safeJsonFetch(url: string, options?: RequestInit): Promise<{ ok: boolean; status: number; data: any; rawText: string }> {
+  const res = await fetch(url, options);
+  const rawText = await res.text();
+  let data: any = null;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    console.error(`[safeJsonFetch] Non-JSON response from ${url} (status ${res.status}):`, rawText);
+  }
+  return { ok: res.ok, status: res.status, data, rawText };
+}
 
 // ─── SUBSCRIPTION HELPERS ─────────────────────────────────────────────────────
 const isSubActive = (sub: Subscription | null) =>
@@ -230,15 +264,25 @@ function Provider({ children }: { children: ReactNode }) {
       setData(next);
       if (next.users?.[0]) {
         const freshUser = next.users[0] as UserRow;
+        // FIX 3: Prioritise localStorage display_name over server value to prevent reset on refresh
+        const storedName = localStorage.getItem(LS_DISPLAY_NAME);
+        if (storedName && storedName.trim()) {
+          freshUser.display_name = storedName.trim();
+        }
         setUser(freshUser);
-        // FIX: persist display_name so header survives hard refresh
         if (freshUser.display_name) localStorage.setItem(LS_DISPLAY_NAME, freshUser.display_name);
       } else {
+        const storedName = localStorage.getItem(LS_DISPLAY_NAME);
         const cr = await fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guest_id: guestId, display_name: `Viewer ${guestId.slice(-4)}`, email: '', role: 'viewer' })
+          body: JSON.stringify({
+            guest_id: guestId,
+            display_name: storedName || `Viewer ${guestId.slice(-4)}`,
+            email: '', role: 'viewer'
+          })
         });
         const u = await cr.json();
+        if (storedName) u.display_name = storedName;
         setUser(u); next.users = [u]; setData({ ...next });
       }
     } finally { setLoading(false); }
@@ -318,10 +362,10 @@ function Provider({ children }: { children: ReactNode }) {
   const payment = migratePayment(rawPayment);
   const player = admin.find(x => x.key === 'player')?.value || defaultPlayer;
 
-  // FIX: Feed global bridge so initiatePayment() anywhere can read gateway config
+  // Feed global bridge so initiatePayment() anywhere can read gateway config
   useEffect(() => { setPaymentBridge(payment); }, [payment]);
 
-  // FIX: Feed active plans to global bridge so locked-screen can find cheapest plan
+  // Feed active plans to global bridge so locked-screen can find cheapest plan
   useEffect(() => {
     const activePlans = (data.plans || [])
       .filter((p: any) => p.is_active)
@@ -853,7 +897,7 @@ function Plans() {
     setStep('done');
   };
 
-  // ── Cashfree handler ──
+  // ── Cashfree handler (FIX 2: safe JSON parsing) ──
   const handleCashfree = async (gw: GatewayConfig) => {
     if (!selected) return;
     setBusy(true); setPayErr('');
@@ -861,8 +905,9 @@ function Plans() {
       const loaded = await loadCashfree();
       if (!loaded) { setPayErr('Cashfree SDK load nahi hua.'); setBusy(false); return; }
 
-      const res = await fetch('/api/cashfree/create-order', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const { ok, data: jsonData, rawText } = await safeJsonFetch('/api/cashfree/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: selected.price, currency: 'INR',
           planName: selected.name,
@@ -875,12 +920,12 @@ function Plans() {
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        setPayErr(err.message || 'Order create karne mein problem.'); setBusy(false); return;
+      if (!ok || !jsonData) {
+        const errMsg = jsonData?.message || (rawText ? `Server error: ${rawText.slice(0, 120)}` : 'Order create karne mein problem.');
+        setPayErr(errMsg); setBusy(false); return;
       }
 
-      const { payment_session_id, order_id } = await res.json();
+      const { payment_session_id, order_id } = jsonData;
       if (!payment_session_id) {
         setPayErr('Payment session ID nahi mila. Backend check karein.'); setBusy(false); return;
       }
@@ -1080,7 +1125,6 @@ function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfr
   txId: string; setTxId: (v: string) => void; payment: PaymentSettings;
   onCashfree: () => void; onRazorpay: () => void; onUpiManual: () => void;
 }) {
-  // ── Cashfree ──
   if (gateway.type === 'Cashfree') return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-indigo-50 p-4 text-sm text-indigo-700 font-bold flex items-center gap-2">
@@ -1093,7 +1137,6 @@ function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfr
     </div>
   );
 
-  // ── Razorpay ──
   if (gateway.type === 'Razorpay') return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-blue-50 p-4 text-sm text-blue-700 font-bold flex items-center gap-2">
@@ -1106,7 +1149,6 @@ function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfr
     </div>
   );
 
-  // ── UPI Manual ──
   if (gateway.type === 'UPI Manual') return (
     <div className="space-y-3">
       {gateway.keys.upiQr && (
@@ -1129,7 +1171,6 @@ function GatewayPayBlock({ gateway, plan, busy, txId, setTxId, payment, onCashfr
     </div>
   );
 
-  // ── Generic / other ──
   return (
     <div className="space-y-3">
       <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold">
@@ -1158,7 +1199,6 @@ function Profile() {
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'account' | 'subscription' | 'history'>('account');
 
-  // FIX: Re-sync when user object updates
   useEffect(() => {
     setName(user?.display_name || '');
     setEmail(user?.email || '');
@@ -1184,7 +1224,7 @@ function Profile() {
     window.location.href = '/';
   };
 
-  // FIX: Instant context + localStorage update — no flicker after save
+  // FIX 3: Save display_name to localStorage immediately on profile save
   const saveProfile = async () => {
     if (!user) return;
     try {
@@ -1780,7 +1820,6 @@ function Admin() {
             ))}
           </div>
 
-          {/* Add Gateway Form */}
           <div className="rounded-3xl border-2 border-dashed border-zinc-300 p-5">
             <h3 className="font-black mb-3 flex items-center gap-2"><Plus size={18} /> New Gateway Add Karein</h3>
             <div className="grid gap-3 md:grid-cols-2">
@@ -1794,7 +1833,6 @@ function Admin() {
               </div>
             </div>
 
-            {/* Cashfree keys */}
             {gwForm.type === 'Cashfree' && (
               <div className="grid gap-3 md:grid-cols-2 mt-3">
                 <div><label className="label">App ID</label><input className="input" value={gwForm.keys?.appId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, appId: e.target.value } })} placeholder="TEST1234567890" /></div>
@@ -1804,7 +1842,6 @@ function Admin() {
                 </div>
               </div>
             )}
-            {/* Razorpay / PayU / Cashfree keys */}
             {(gwForm.type === 'Razorpay' || gwForm.type === 'PayU') && (
               <div className="grid gap-3 md:grid-cols-2 mt-3">
                 <div><label className="label">Key ID</label><input className="input" value={gwForm.keys?.keyId || ''} onChange={e => setGwForm({ ...gwForm, keys: { ...gwForm.keys, keyId: e.target.value } })} placeholder="rzp_live_..." /></div>
@@ -1948,7 +1985,6 @@ function Stat({ l, v }: { l: string; v: any }) {
   return <div className="card p-5"><p className="text-sm text-zinc-500">{l}</p><b className="text-3xl">{v}</b></div>;
 }
 
-// Renamed from Info to AboutSection to avoid conflict with lucide-react's Info icon
 function AboutSection() {
   return (
     <div className="card overflow-hidden md:grid md:grid-cols-[.9fr_1.1fr]">
@@ -1980,7 +2016,7 @@ function Shell() {
 
   const isLoggedIn = !!(user?.email);
 
-  // FIX: Header name — context first, then localStorage fallback (survives hard refresh)
+  // FIX 3: Header name — context first, then localStorage fallback (survives hard refresh)
   const headerName = (() => {
     const fromCtx = user?.display_name?.trim();
     if (fromCtx) return fromCtx.split(' ')[0];
