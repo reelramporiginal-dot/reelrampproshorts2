@@ -309,7 +309,7 @@ const createCashfreeSubscription = async (opts: {
   onFailure: (err: string) => void;
 }) => {
   try {
-    const res = await fetch('/api/cashfree-create-subscription', {
+    const res = await fetch('/api/cashfree/create-subscription', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
