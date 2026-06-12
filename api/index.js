@@ -32,6 +32,25 @@ const CONFLICT_MAP = {
   watch_history: 'user_id,video_id',
 };
 
+// ── Clean display name: agar email ya empty hai to email se proper name banao ──
+function cleanDisplayName(displayName, email) {
+  const dn = (displayName || '').trim();
+  // Agar display_name khali hai ya email jaisa hai (contains @)
+  if (!dn || dn.includes('@')) {
+    const source = (dn.includes('@') ? dn : email) || '';
+    if (!source) return dn || 'User';
+    const namePart = source.split('@')[0];
+    return namePart
+      .replace(/[._\d]+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ') || 'User';
+  }
+  return dn;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
@@ -91,7 +110,18 @@ export default async function handler(req, res) {
 
       let data, error;
 
-      if (resource === 'likes' || resource === 'bookmarks') {
+      if (resource === 'users') {
+        // ── FIX: display_name kabhi email nahi honi chahiye ──
+        const cleanedBody = { ...body };
+        cleanedBody.display_name = cleanDisplayName(body.display_name, body.email);
+
+        ({ data, error } = await supabase
+          .from(resource)
+          .upsert(cleanedBody, { onConflict: 'guest_id' })
+          .select()
+          .single());
+
+      } else if (resource === 'likes' || resource === 'bookmarks') {
         ({ data, error } = await supabase
           .from(resource)
           .upsert(body, { onConflict: 'user_id,video_id', ignoreDuplicates: true })
@@ -132,6 +162,11 @@ export default async function handler(req, res) {
       const body = req.body;
       if (!body?.id) return res.status(400).json({ error: 'id required for PUT' });
       const { id, ...rest } = body;
+
+      // ── FIX: PUT /api/users mein bhi display_name clean karo ──
+      if (resource === 'users' && 'display_name' in rest) {
+        rest.display_name = cleanDisplayName(rest.display_name, rest.email);
+      }
 
       const { data, error } = await supabase
         .from(resource)
