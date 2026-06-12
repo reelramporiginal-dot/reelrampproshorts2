@@ -256,7 +256,7 @@ const createCashfreeOrder = async (opts: {
     };
 
     // Use backend proxy to avoid CORS & keep secret safe
-    const res = await fetch('/api/cashfree/create-order', {
+    const res = await fetch('/api/cashfree-create-order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...orderData, testMode: opts.testMode })
@@ -309,7 +309,7 @@ const createCashfreeSubscription = async (opts: {
   onFailure: (err: string) => void;
 }) => {
   try {
-    const res = await fetch('/api/cashfree/create-subscription', {
+    const res = await fetch('/api/cashfree-create-subscription', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -355,13 +355,27 @@ function Provider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const calls = resources.map(r => fetch(
+      const fetchWithRetry = async (url: string, retries = 1): Promise<any> => {
+        try {
+          const r = await fetch(url);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return await r.json();
+        } catch (e) {
+          if (retries > 0) {
+            await new Promise(res => setTimeout(res, 700));
+            return fetchWithRetry(url, retries - 1);
+          }
+          return [];
+        }
+      };
+
+      const calls = resources.map(r => fetchWithRetry(
         r === 'videos' ? '/api/videos?includeUnpublished=true' :
           r === 'users' ? `/api/users?guest_id=${guestId}` :
             r === 'subscriptions' || r === 'payments' || r === 'watch_history' ||
               r === 'likes' || r === 'bookmarks' || r === 'wallet_transactions' ||
               r === 'referrals' ? `/api/${r}?user_id=${guestId}` : `/api/${r}`
-      ).then(x => x.json()).catch(() => []));
+      ));
       const vals = await Promise.all(calls);
       const next: Record<string, Row[]> = {};
       resources.forEach((r, i) => next[r] = Array.isArray(vals[i]) ? vals[i] : []);
@@ -937,16 +951,14 @@ function ForYou() {
 function Plans() {
   const { plans, payment, guestId, mutate, subscribed, user, addNotif } = useApp();
   const [selected, setSelected] = useState<Plan | null>(null);
-  const [step, setStep] = useState<'brief' | 'pay' | 'autopay' | 'done'>('brief');
+  const [step, setStep] = useState<'brief' | 'pay' | 'done'>('brief');
   const [busy, setBusy] = useState(false);
   const [payErr, setPayErr] = useState('');
   const [txId, setTxId] = useState('');
-  const [useAutoPay, setUseAutoPay] = useState(false);
   const [phone, setPhone] = useState(user?.phone || '');
 
   const openPlan = (p: Plan) => {
     setSelected(p); setStep('brief'); setPayErr(''); setTxId('');
-    setUseAutoPay(!!p.supports_autorenew);
   };
   const close = () => { setSelected(null); setStep('brief'); setPayErr(''); setBusy(false); };
 
@@ -961,11 +973,10 @@ function Plans() {
     await mutate('subscriptions', 'POST', {
       user_id: guestId, plan: plan.name, plan_id: plan.id,
       status: 'active', expires_at: expiresAt,
-      auto_renew: useAutoPay && !!cfSubId,
+      auto_renew: !!plan.supports_autorenew && !!cfSubId,
       renewal_date: expiresAt, gateway,
       cf_subscription_id: cfSubId || null
     });
-    // Save phone if provided
     if (phone && user?.id) {
       await mutate('users', 'PUT', { id: user.id, phone }).catch(() => {});
     }
@@ -1001,9 +1012,11 @@ function Plans() {
     } catch (e: any) { setPayErr(e.message); setBusy(false); }
   };
 
+  // Silent recurring setup — runs in the background when the plan is
+  // configured for auto-renew (admin decides this, user sees nothing extra).
   const handleCashfreeAutoPay = async (gw: GatewayConfig) => {
     if (!selected) return;
-    if (!phone.trim() || phone.length < 10) { setPayErr('Valid mobile number daalein auto-pay ke liye'); return; }
+    if (!phone.trim() || phone.length < 10) { setPayErr('Valid mobile number daalein (10 digit)'); return; }
     setBusy(true); setPayErr('');
     try {
       await createCashfreeSubscription({
@@ -1017,21 +1030,13 @@ function Plans() {
         userPhone: phone,
         cfPlanId: selected.cf_plan_id,
         onSuccess: async ({ subscriptionId, authLink }) => {
-          // Open auth link for mandate setup
-          window.open(authLink, '_blank');
-          // Record as pending auto-pay subscription
+          if (authLink) window.location.href = authLink;
           await mutate('payments', 'POST', {
             user_id: guestId, plan_id: selected.id, amount: selected.price,
-            gateway: 'Cashfree Auto-Pay', status: 'pending',
-            notes: `Auto-pay mandate: ${subscriptionId}`,
+            gateway: 'Cashfree', status: 'pending',
+            notes: `Subscription: ${subscriptionId}`,
             cf_subscription_id: subscriptionId
           });
-          addNotif({
-            title: 'Auto-Pay Setup Ho Raha Hai', type: 'info',
-            message: 'Mandate authorize karein. Activate hote hi premium milega.',
-            target: 'user', is_active: true
-          });
-          setStep('done');
           setBusy(false);
         },
         onFailure: (err) => { setPayErr(err); setBusy(false); }
@@ -1098,9 +1103,6 @@ function Plans() {
             {p.trial_days && p.trial_days > 0 && (
               <p className="text-xs font-black text-green-600 mt-1">✨ {p.trial_days} din free trial</p>
             )}
-            {p.supports_autorenew && (
-              <p className="text-xs font-black text-blue-600 mt-1 flex items-center gap-1"><RefreshCcw size={12} /> Auto-renew available</p>
-            )}
             {p.features && typeof p.features === 'object' && (
               <ul className="mt-3 space-y-1 text-sm text-zinc-600 flex-1">
                 {Object.entries(p.features).map(([k, v]: any) => (
@@ -1148,16 +1150,6 @@ function Plans() {
                       ))}
                     </ul>
                   )}
-                  {/* Auto-pay toggle */}
-                  {selected.supports_autorenew && (
-                    <label className="flex items-center gap-3 rounded-2xl border-2 border-blue-200 bg-blue-50 p-3 cursor-pointer">
-                      <input type="checkbox" checked={useAutoPay} onChange={e => setUseAutoPay(e.target.checked)} className="h-5 w-5 accent-blue-600" />
-                      <div>
-                        <p className="font-black text-sm text-blue-800">Auto-Pay Enable Karein</p>
-                        <p className="text-xs text-blue-600">Har {selected.duration_days} din baad automatic renew hoga</p>
-                      </div>
-                    </label>
-                  )}
                   <button type="button" onClick={() => setStep('pay')} className="btn w-full">Proceed to Payment →</button>
                 </div>
               )}
@@ -1171,11 +1163,6 @@ function Plans() {
                   <div className="rounded-2xl bg-zinc-100 p-4 text-sm font-bold flex justify-between">
                     <span>{selected.name}</span><span>{money(selected.price)}</span>
                   </div>
-                  {useAutoPay && (
-                    <div className="rounded-2xl bg-blue-50 p-3 text-xs font-bold text-blue-700 flex items-center gap-2">
-                      <RefreshCcw size={14} /> Auto-pay ON — Har {selected.duration_days} din baad renew hoga
-                    </div>
-                  )}
                   {payErr && (
                     <div className="rounded-2xl bg-red-50 p-3 text-sm font-bold text-red-700 flex items-center gap-2">
                       <AlertCircle size={16} /> {payErr}
@@ -1204,8 +1191,8 @@ function Plans() {
                   ) : (
                     <GatewayPayBlock
                       gateway={defaultGw!} plan={selected} busy={busy} txId={txId}
-                      setTxId={setTxId} payment={payment} useAutoPay={useAutoPay}
-                      onCashfree={() => useAutoPay ? handleCashfreeAutoPay(defaultGw!) : handleCashfree(defaultGw!)}
+                      setTxId={setTxId} payment={payment}
+                      onCashfree={() => selected.supports_autorenew ? handleCashfreeAutoPay(defaultGw!) : handleCashfree(defaultGw!)}
                       onRazorpay={() => handleRazorpay(defaultGw!)}
                       onUpiManual={() => handleUpiManual(defaultGw!)}
                     />
@@ -1220,17 +1207,16 @@ function Plans() {
                     <CheckCircle2 size={48} className="text-green-500" />
                   </div>
                   <h2 className="text-3xl font-black">
-                    {defaultGw?.type === 'UPI Manual' ? 'Payment Submitted!' :
-                      useAutoPay ? 'Auto-Pay Setup!' : 'Plan Activated!'}
+                    {defaultGw?.type === 'UPI Manual' ? 'Payment Submitted!' : 'Plan Activated!'}
                   </h2>
                   <p className="text-zinc-600">
                     {defaultGw?.type === 'UPI Manual'
                       ? 'Admin verification ke baad premium activate hoga. WhatsApp par UTR bhejein.'
-                      : useAutoPay
-                        ? 'Auto-pay mandate authorize ho gaya. Premium jald hi activate hoga.'
+                      : selected.supports_autorenew
+                        ? `${selected.name} active ho gaya hai. Aapka premium access shuru ho chuka hai.`
                         : `${selected.name} — ${selected.duration_days} din ke liye active hai.`}
                   </p>
-                  {(defaultGw?.type === 'UPI Manual' || useAutoPay) && payment.whatsapp && (
+                  {defaultGw?.type === 'UPI Manual' && payment.whatsapp && (
                     <a href={`https://wa.me/${payment.whatsapp.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 rounded-full bg-green-500 px-5 py-3 text-sm font-black text-white">
                       WhatsApp pe confirm karein
@@ -1250,12 +1236,11 @@ function Plans() {
 }
 
 function GatewayPayBlock({
-  gateway, plan, busy, txId, setTxId, payment, useAutoPay,
+  gateway, plan, busy, txId, setTxId, payment,
   onCashfree, onRazorpay, onUpiManual
 }: {
   gateway: GatewayConfig; plan: Plan; busy: boolean;
   txId: string; setTxId: (v: string) => void; payment: PaymentSettings;
-  useAutoPay: boolean;
   onCashfree: () => void; onRazorpay: () => void; onUpiManual: () => void;
 }) {
   if (gateway.type === 'Cashfree') return (
@@ -1264,15 +1249,8 @@ function GatewayPayBlock({
         <Zap size={16} /> Cashfree Secure Checkout
         {gateway.testMode && <span className="ml-auto rounded-full bg-yellow-200 px-2 py-0.5 text-xs text-yellow-800">SANDBOX</span>}
       </div>
-      {useAutoPay && plan.supports_autorenew && (
-        <div className="rounded-2xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 font-bold">
-          <RefreshCcw size={12} className="inline mr-1" />
-          Auto-pay mandate setup hoga — ek baar approve karo, har baar automatic renewal.
-        </div>
-      )}
       <button type="button" disabled={busy} onClick={onCashfree} className="btn w-full disabled:opacity-60">
-        {busy ? <Loader2 className="animate-spin mx-auto" size={20} /> :
-          useAutoPay ? `Setup Auto-Pay — ${money(plan.price)}` : `Pay ${money(plan.price)} via Cashfree`}
+        {busy ? <Loader2 className="animate-spin mx-auto" size={20} /> : `Pay ${money(plan.price)} via Cashfree`}
       </button>
     </div>
   );
