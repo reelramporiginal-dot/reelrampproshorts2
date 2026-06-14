@@ -1,11 +1,8 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index.js" }
-  ],
-  "functions": {
-    "api/index.js": {
-      "memory": 512,
-      "maxDuration": 10
-    }
-  }
+    { "source": "/api/cashfree/create-order", "destination": "/api/cashfree/create-order" },
+    { "source": "/api/cashfree/create-subscription", "destination": "/api/cashfree/create-subscription" },
+    { "source": "/api/cashfree/webhook", "destination": "/api/cashfree/webhook" },
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ]
 }
