@@ -1,5 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  // Ye functions App.tsx mein imports ke niche paste karein:
+
+const saveGatewayCredentials = async (provider: string, payload: any) => {
+  const API_BASE = (import.meta as any).env?.VITE_GATEWAY_API || 'http://localhost:4000';
+  const r = await fetch(`${API_BASE}/api/admin/gateways/${provider}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('Failed to save');
+  return r.json();
+};
+
+const validateKeyShape = (provider: string, key: string, secret: string) => {
+  if (!key || !secret) return false;
+  // Basic validation: Stripe keys usually start with pk_ or sk_
+  if (provider === 'stripe' && (!key.startsWith('pk_') || !secret.startsWith('sk_'))) return false;
+  // Razorpay keys usually start with rzp_
+  if (provider === 'razorpay' && !key.startsWith('rzp_')) return false;
+  return key.length > 8 && secret.length > 8;
+};
   verifyGateway,
   saveGatewayCredentials,
   validateKeyShape,
