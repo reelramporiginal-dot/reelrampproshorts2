@@ -307,6 +307,41 @@ const openCashfreeCheckout = async (opts: {
   });
 };
 
+const openCashfreeSubscription = async (opts: {
+  appId: string; secretKey: string; testMode: boolean;
+  planId: string; userId: string; userName: string;
+  userEmail: string; userPhone: string;
+  onSuccess: (data: { subscriptionId: string }) => void;
+  onFailure: (err: string) => void;
+}) => {
+  try {
+    const res = await fetch('/api/cashfree/create-subscription', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plan_id: opts.planId,
+        customer_details: {
+          customer_id: opts.userId,
+          customer_name: opts.userName,
+          customer_email: opts.userEmail,
+          customer_phone: opts.userPhone
+        },
+        return_url: `${window.location.origin}?cf_sub={subscription_id}`,
+        testMode: opts.testMode
+      })
+    });
+    if (!res.ok) throw new Error((await res.json()).message || 'Mandate create nahi hua');
+    const data = await res.json();
+    if (data.sub_auth_url) {
+      window.location.href = data.sub_auth_url; // Direct redirect to secure e-mandate page
+    } else {
+      throw new Error('Mandate URL missing');
+    }
+  } catch (e: any) {
+    opts.onFailure(e.message);
+  }
+};
+
 // ─── SUB HELPERS ─────────────────────────────────────────────────────────────
 const isSubActive = (sub: Subscription | null) =>
   !!sub && sub.status === 'active' && new Date(sub.expires_at).getTime() > Date.now();
@@ -644,7 +679,8 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
   const [vol] = useState(() => Number(localStorage.getItem('rr_vol') || .85));
   const [drag, setDrag] = useState(false);
   const [fx, setFx] = useState<{ t: string; s: string } | null>(null);
-  const locked = video.is_premium && !subscribed;
+  const locked = false; // Bypass static lock to allow 5-second Kuku FM style trial
+  const trialLimit = !subscribed;
   const liked = (data.likes || []).some(l => l.video_id === video.id);
   const saved = (data.bookmarks || []).some(b => b.video_id === video.id);
   const p = dur ? Math.min(100, cur / dur * 100) : 0;
@@ -744,14 +780,22 @@ function Player({ video, onBack, onNext }: { video: Video; onBack?: () => void; 
           onNext();
         }}
         onTimeUpdate={e => {
+          const currentTime = e.currentTarget.currentTime;
+          if (trialLimit && currentTime > 5) {
+            e.currentTarget.pause();
+            setPlay(false);
+            try { document.exitFullscreen().catch(() => {}); } catch(err){}
+            window.dispatchEvent(new CustomEvent('rr-open-plans'));
+            return;
+          }
           const n = Date.now();
           if (n - last.current < 250) return;
           last.current = n;
-          setCur(e.currentTarget.currentTime);
+          setCur(currentTime);
           setDur(e.currentTarget.duration || 0);
           mutate('watch_history', 'POST', {
             user_id: guestId, video_id: video.id,
-            current_position: e.currentTarget.currentTime,
+            current_position: currentTime,
             duration: e.currentTarget.duration || 0, completed: false
           }).catch(() => { });
         }} />
@@ -1106,14 +1150,30 @@ function Plans() {
     if (!phone.trim() || phone.length < 10) { setPayErr('Valid mobile number daalein (10 digit)'); return; }
     setBusy(true); setPayErr('');
     try {
-      await openCashfreeCheckout({
-        appId: gw.keys.appId || '', secretKey: gw.keys.secretKey || '',
-        testMode: gw.testMode, amount: selected.price, planName: selected.name,
-        userId: guestId, userName: getBestDisplayName(user),
-        userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
-        onSuccess: async ({ paymentId }) => { await activatePlan(selected, 'Cashfree', paymentId); setBusy(false); },
-        onFailure: (err) => { setPayErr(err); setBusy(false); }
-      });
+      if (selected.supports_autorenew || selected.name.toLowerCase().includes('trial') || selected.name.toLowerCase().includes('auto')) {
+        // Auto-Pay Mandate Flow
+        await openCashfreeSubscription({
+          appId: gw.keys.appId || '', secretKey: gw.keys.secretKey || '',
+          testMode: gw.testMode, planId: selected.cf_plan_id || 'rr_autopay_399_quarterly',
+          userId: guestId, userName: getBestDisplayName(user),
+          userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
+          onSuccess: async ({ subscriptionId }) => {
+            await activatePlan(selected, 'Cashfree Autopay', subscriptionId, subscriptionId);
+            setBusy(false);
+          },
+          onFailure: (err) => { setPayErr(err); setBusy(false); }
+        });
+      } else {
+        // One-time Payment Flow
+        await openCashfreeCheckout({
+          appId: gw.keys.appId || '', secretKey: gw.keys.secretKey || '',
+          testMode: gw.testMode, amount: selected.price, planName: selected.name,
+          userId: guestId, userName: getBestDisplayName(user),
+          userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
+          onSuccess: async ({ paymentId }) => { await activatePlan(selected, 'Cashfree', paymentId); setBusy(false); },
+          onFailure: (err) => { setPayErr(err); setBusy(false); }
+        });
+      }
     } catch (e: any) { setPayErr(e.message); setBusy(false); }
   };
 
@@ -1783,69 +1843,147 @@ function Policies() {
   );
 }
 
-// ─── PROMO MODAL ──────────────────────────────────────────────────────────────
+// ─── PROMO MODAL — Kuku FM Style Autopay Subscription Overlay ──────────────────
 function PromoVideoModal({ go }: { go: (t: string) => void }) {
   const { data, subscribed } = useApp();
   const [open, setOpen] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [canSkip, setCanSkip] = useState(false);
   const [muted, setMuted] = useState(true);
+  const [selectedGateway, setSelectedGateway] = useState('paytm');
+
   const promo = (data.promo_campaigns || []).find((p: any) => p.is_active && p.placement === 'app_open');
+
   useEffect(() => {
-    if (!promo || subscribed) return;
-    const key = `rr_promo_seen_${promo.id}`;
-    const last = Number(localStorage.getItem(key) || 0);
-    const wait = Number(promo.show_after_seconds || 2) * 1000;
-    const freq = Number(promo.frequency_hours || 12) * 3600000;
-    if (Date.now() - last < freq) return;
-    const t = window.setTimeout(() => { setOpen(true); setProgress(0); setCanSkip(false); localStorage.setItem(key, String(Date.now())); }, wait);
-    return () => window.clearTimeout(t);
-  }, [promo?.id, subscribed]);
+    // Open on load if not subscribed
+    if (!subscribed) {
+      setOpen(true);
+    }
+  }, [subscribed]);
+
+  // Listen for open-plans event to open the promo overlay (acts as paywall)
   useEffect(() => {
-    if (!open) return;
-    setProgress(0); setCanSkip(false);
-    const skip = window.setTimeout(() => setCanSkip(true), 5000);
-    const prog = window.setInterval(() => setProgress(p => Math.min(100, p + 1)), 300);
-    return () => { window.clearTimeout(skip); window.clearInterval(prog); };
-  }, [open]);
-  const close = () => { setOpen(false); setProgress(0); setCanSkip(false); };
-  if (!open || !promo) return null;
+    const h = () => setOpen(true);
+    window.addEventListener('rr-open-plans', h);
+    return () => window.removeEventListener('rr-open-plans', h);
+  }, []);
+
+  if (!open || subscribed) return null;
+
+  const handleStartTrial = () => {
+    setOpen(false);
+    go('plans');
+    // Trigger plans modal automatically
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('rr-open-plans'));
+    }, 300);
+  };
+
   return (
     <AnimatePresence>
-      <motion.div key="promo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] bg-black flex items-center justify-center">
-        <div className="relative w-full h-full max-w-[430px] mx-auto bg-zinc-950">
-          {promo.video_filename
-            ? <video src={vurl(promo.video_filename)} poster={promo.poster_url || undefined} autoPlay muted={muted} playsInline loop className="absolute inset-0 h-full w-full object-cover" />
-            : promo.poster_url
-              ? <img src={promo.poster_url} className="absolute inset-0 h-full w-full object-cover" alt="promo" />
-              : <div className="absolute inset-0 bg-gradient-to-br from-zinc-900 to-black grid place-items-center"><Sparkles size={80} className="text-[var(--rr-primary)]" /></div>}
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/50" />
-          <div className="absolute top-0 inset-x-0 p-4 space-y-3">
-            <div className="h-1 rounded-full bg-white/20 overflow-hidden">
-              <motion.div className="h-full rounded-full bg-[var(--rr-primary)]" style={{ width: `${progress}%` }} />
+      <motion.div key="promo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[80] bg-black flex items-center justify-center overflow-y-auto">
+        <div className="relative w-full h-full max-w-[430px] mx-auto bg-zinc-950 text-white flex flex-col justify-between">
+          
+          {/* Header Back Button */}
+          <div className="absolute top-4 left-4 z-[90] flex items-center justify-between w-full pr-8">
+            <button onClick={() => setOpen(false)} className="icon bg-black/40 hover:bg-black/60"><X size={20} /></button>
+            <span className="text-white/40 text-xs font-bold uppercase tracking-wider">FAQs</span>
+          </div>
+
+          {/* Fullscreen Video / Poster Container */}
+          <div className="relative w-full h-[32vh] overflow-hidden flex-shrink-0">
+            {promo?.video_filename ? (
+              <video src={vurl(promo.video_filename)} poster={promo.poster_url || undefined} autoPlay muted={muted} playsInline loop className="absolute inset-0 h-full w-full object-cover" />
+            ) : promo?.poster_url ? (
+              <img src={promo.poster_url} className="absolute inset-0 h-full w-full object-cover" alt="promo" />
+            ) : (
+              <div className="absolute inset-0 bg-gradient-to-br from-zinc-800 to-zinc-900 grid place-items-center">
+                <Film size={80} className="text-white/20" />
+              </div>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-black/40" />
+            <button onClick={() => setMuted(!muted)} className="absolute bottom-4 right-4 z-[90] h-9 w-9 rounded-full bg-black/40 backdrop-blur grid place-items-center text-white">
+              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </button>
+          </div>
+
+          {/* Kuku FM Styled Content Overlay */}
+          <div className="flex-1 px-6 pb-24 space-y-6 overflow-y-auto">
+            {/* Title / Header */}
+            <div className="text-center space-y-2 mt-2">
+              <h2 className="text-2xl md:text-3xl font-black leading-tight tracking-tight">
+                {promo?.title || 'Watch 1000+ Dramas For ₹99'}
+              </h2>
+              {/* Huge ₹1 Price indicator */}
+              <div className="flex flex-col items-center justify-center">
+                <span className="text-8xl font-black text-white leading-none tracking-tighter">₹1</span>
+                <p className="text-zinc-400 text-xs mt-1">Auto-pays ₹399 every quarter, cancel anytime</p>
+              </div>
             </div>
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-full bg-[var(--rr-primary)] grid place-items-center font-black text-black text-xs">{(promo.celebrity_name || 'RR').slice(0, 2).toUpperCase()}</div>
-                <div><p className="text-white text-xs font-black">{promo.celebrity_name || 'ReelRamp Pro'}</p><p className="text-white/60 text-[10px]">Sponsored</p></div>
+
+            {/* List / Timeline (Kuku FM style) */}
+            <div className="space-y-4 max-w-sm mx-auto relative pl-6 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[2px] before:bg-dashed before:bg-zinc-800">
+              
+              {/* Point 1 */}
+              <div className="relative flex gap-3 items-start">
+                <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10"><Lock size={12} /></span>
+                <div>
+                  <h4 className="font-black text-sm text-white">Start your Trial Plan</h4>
+                  <p className="text-zinc-500 text-xs">Pay ₹1 and unlock all dramas</p>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => setMuted(!muted)} className="h-9 w-9 rounded-full bg-black/40 backdrop-blur grid place-items-center text-white">{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>
-                {canSkip
-                  ? <button onClick={close} className="flex items-center gap-1 rounded-full bg-black/50 backdrop-blur px-3 py-2 text-white text-xs font-black"><X size={14} /> Skip</button>
-                  : <div className="flex items-center gap-1 rounded-full bg-black/40 backdrop-blur px-3 py-2 text-white/60 text-xs font-bold">Skip in {Math.max(0, 5 - Math.floor(progress / 20))}s</div>}
+
+              {/* Point 2 */}
+              <div className="relative flex gap-3 items-start">
+                <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10">★</span>
+                <div>
+                  <h4 className="font-black text-sm text-white">Watch new dramas for 2 days</h4>
+                  <p className="text-zinc-500 text-xs">Romance, revenge and much more</p>
+                </div>
               </div>
+
+              {/* Point 3 */}
+              <div className="relative flex gap-3 items-start">
+                <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10"><Bell size={12} /></span>
+                <div>
+                  <h4 className="font-black text-sm text-white">Notified before autopay</h4>
+                  <p className="text-zinc-500 text-xs">Pay ₹399/3 months after 2 days</p>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Social proof tag */}
+            <div className="flex items-center justify-center gap-2 text-green-500 font-bold text-xs bg-green-500/10 rounded-full py-2 px-4 max-w-xs mx-auto">
+              <Users size={14} /> 5 Crore+ people bought the trial offer till now!
             </div>
           </div>
-          <div className="absolute bottom-0 inset-x-0 p-6 space-y-4">
-            {promo.celebrity_name && <p className="text-[var(--rr-primary)] text-sm font-black">⭐ {promo.celebrity_name} recommends</p>}
-            <h2 className="text-4xl font-black text-white leading-tight">{promo.title}</h2>
-            {(promo.offer_text || promo.subtitle) && <p className="text-white/80 text-base">{promo.offer_text || promo.subtitle}</p>}
-            <div className="grid gap-3 pt-2">
-              <button onClick={() => { close(); go(promo.cta_action || 'plans'); }} className="w-full rounded-full bg-[var(--rr-primary)] py-4 text-black font-black text-lg">{promo.cta_label || 'View Offer'}</button>
-              <button onClick={close} className="w-full rounded-full bg-white/10 backdrop-blur py-3 text-white font-bold">Abhi nahi</button>
+
+          {/* Bottom Sticky Payment Bar */}
+          <div className="absolute bottom-0 inset-x-0 bg-zinc-900 border-t border-zinc-800 p-4 flex items-center justify-between gap-4 z-[90]">
+            {/* Gateway dropdown */}
+            <div className="flex flex-col items-start min-w-[100px]">
+              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Pay via</span>
+              <select 
+                value={selectedGateway} 
+                onChange={e => setSelectedGateway(e.target.value)}
+                className="bg-transparent text-sm font-black text-white outline-none cursor-pointer flex items-center gap-1"
+              >
+                <option value="paytm" className="bg-zinc-900">Paytm</option>
+                <option value="phonepe" className="bg-zinc-900">PhonePe</option>
+                <option value="upi" className="bg-zinc-900">Any UPI</option>
+                <option value="card" className="bg-zinc-900">Debit / Credit</option>
+              </select>
             </div>
+
+            {/* Big Start Trial Button */}
+            <button 
+              onClick={handleStartTrial}
+              className="flex-1 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-700 hover:to-rose-700 text-white font-black py-4 rounded-full text-base transition flex items-center justify-center gap-2 shadow-lg shadow-pink-600/25"
+            >
+              Start Trial <ArrowRight size={18} />
+            </button>
           </div>
+
         </div>
       </motion.div>
     </AnimatePresence>
