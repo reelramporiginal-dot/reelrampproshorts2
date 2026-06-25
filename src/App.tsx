@@ -149,17 +149,25 @@ const bunnyIframeUrl = (video: Video, player: any) => {
 };
 
 const getBestDisplayName = (u: UserRow | null, fallback = 'User'): string => {
-  if (!u) return fallback;
+  // Priority: 1) DB display_name (clean) 2) localStorage cache 3) email prefix 4) fallback
+  const cached = localStorage.getItem('rr_display_name') || '';
+  if (!u) return cached || fallback;
+
   const dn = u.display_name?.trim() || '';
-  if (dn && dn.includes('@')) {
-    return dn.split('@')[0].replace(/[._]/g, ' ').split(' ').map(
-      (w: string) => w.charAt(0).toUpperCase() + w.slice(1)
-    ).join(' ');
+
+  // If DB name is clean (not email, not default viewer), use it
+  if (dn && !dn.includes('@') && !dn.startsWith('Viewer ')) {
+    // Cache it for offline/refresh use
+    localStorage.setItem('rr_display_name', dn);
+    return dn;
   }
-  if (dn) return dn;
-  if (u.email) return u.email.split('@')[0].replace(/[._]/g, ' ').split(' ').map(
-    (w: string) => w.charAt(0).toUpperCase() + w.slice(1)
-  ).join(' ');
+  // Use localStorage cache (survives refresh)
+  if (cached && !cached.includes('@') && !cached.startsWith('Viewer ')) return cached;
+  // Fallback: clean from email
+  if (u.email) {
+    return u.email.split('@')[0].replace(/[._-]/g, ' ')
+      .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').trim();
+  }
   return fallback;
 };
 
@@ -425,28 +433,44 @@ function Provider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('supabase-data-updated', h);
   }, [guestId, refresh]);
 
-  // ── AUTH ──
+  // ── AUTH — Display name ALWAYS from DB, never from email raw ──
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
-      if (session?.user?.email) {
-        localStorage.setItem('rr_guest', session.user.id);
+    const syncUser = async (session: Session | null) => {
+      if (!session?.user?.email) return;
+      localStorage.setItem('rr_guest', session.user.id);
+      // Get existing user from DB first
+      const existing = await fetch(`/api/users?guest_id=${session.user.id}`).then(r => r.json()).catch(() => []);
+      const existingUser = Array.isArray(existing) ? existing[0] : existing;
+      // Only use Google/metadata name if DB has no custom name set
+      const dbName = existingUser?.display_name?.trim() || '';
+      const hasCustomName = dbName && !dbName.includes('@') && !dbName.startsWith('Viewer ');
+      let cleanName = dbName;
+      if (!hasCustomName) {
         const rawName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || '';
-        const cleanName = rawName && !rawName.includes('@') ? rawName :
-          session.user.email!.split('@')[0].replace(/[._]/g, ' ')
-            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-        fetch('/api/users', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ guest_id: session.user.id, display_name: cleanName, email: session.user.email, role: 'viewer' })
-        }).then(() => refresh(true));
+        cleanName = rawName && !rawName.includes('@') ? rawName :
+          session.user.email!.split('@')[0].replace(/[._-]/g, ' ')
+            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').trim();
       }
+      // Save to localStorage so it persists across refreshes
+      localStorage.setItem('rr_display_name', cleanName);
+      await fetch('/api/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guest_id: session.user.id, display_name: cleanName, email: session.user.email, role: 'viewer' })
+      });
+      refresh(true);
+    };
+
+    supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
+      syncUser(session);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
       if (session?.user?.email) {
         localStorage.setItem('rr_guest', session.user.id);
         const rawName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || '';
         const cleanName = rawName && !rawName.includes('@') ? rawName :
-          session.user.email!.split('@')[0].replace(/[._]/g, ' ')
-            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          session.user.email!.split('@')[0].replace(/[._-]/g, ' ')
+            .split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').trim();
+        localStorage.setItem('rr_display_name', cleanName);
         fetch('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guest_id: session.user.id, display_name: cleanName, email: session.user.email, role: 'viewer' })
@@ -1375,7 +1399,10 @@ function Profile() {
 
   const saveProfile = async () => {
     if (!user) return;
-    await mutate('users', 'PUT', { id: user.id, display_name: name, email, phone });
+    if (!name.trim()) { setAuthMsg('❌ Name khali nahi ho sakta.'); return; }
+    // Save to localStorage immediately so refresh pe bhi dikhe
+    localStorage.setItem('rr_display_name', name.trim());
+    await mutate('users', 'PUT', { id: user.id, display_name: name.trim(), email, phone });
     setAuthMsg('✅ Profile update ho gaya.');
     setTimeout(() => setAuthMsg(''), 3000);
   };
@@ -1849,6 +1876,202 @@ function NotificationStrip() {
 }
 
 // ─── ADMIN GATE ───────────────────────────────────────────────────────────────
+// ─── REVENUE REPORT PAGE ─────────────────────────────────────
+function RevenueReportPage({ data, videos, revenue, dailyRevenue, monthlyRevenue, activeSubs, payments, onDownload }: {
+  data: Record<string, Row[]>; videos: Video[]; revenue: number;
+  dailyRevenue: number; monthlyRevenue: number; activeSubs: any[];
+  payments: any[]; onDownload: () => void;
+}) {
+  const series = data.series || [];
+  const views = data.video_views || [];
+  const subs = data.subscriptions || [];
+  const totalViews = views.length || 1;
+
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  const filteredPayments = payments.filter((p: any) => {
+    if (p.status !== 'success') return false;
+    if (dateFrom && new Date(p.created_at) < new Date(dateFrom)) return false;
+    if (dateTo && new Date(p.created_at) > new Date(dateTo + 'T23:59:59')) return false;
+    return true;
+  });
+  const filteredRevenue = filteredPayments.reduce((a: number, p: any) => a + Number(p.amount || 0), 0);
+
+  const seriesStats = series.map((ser: any) => {
+    const eps = videos.filter((v: any) => v.series_title === ser.title);
+    const epIds = eps.map((e: any) => e.id);
+    const serViews = views.filter((vv: any) => epIds.includes(vv.video_id)).length;
+    const sharePct = Number(ser.producer_share_percent || 50);
+    const allocated = Math.round((serViews / totalViews) * revenue);
+    const producerAmt = Math.round(allocated * sharePct / 100);
+    const platformAmt = allocated - producerAmt;
+    return { ...ser, episodes: eps.length, views: serViews, allocated, producerAmt, platformAmt, sharePct };
+  });
+
+  const cancelledSubs = subs.filter((s: any) => s.status === 'cancelled').length;
+  const expiredSubs = subs.filter((s: any) => s.status === 'expired').length;
+  const pendingCount = payments.filter((p: any) => p.status === 'pending').length;
+  const failedCount = payments.filter((p: any) => p.status === 'failed').length;
+
+  return (
+    <div className="space-y-5">
+      <div className="panel">
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+          <div>
+            <h2 className="adminh"><BarChart /> Content Revenue & Producer Share Report</h2>
+            <p className="text-sm text-zinc-500">Producer ko dene ke liye professional PDF report generate karein.</p>
+          </div>
+          <button onClick={onDownload} className="save flex items-center gap-2 text-base px-6 py-3">
+            <Download size={18} /> Download PDF Report
+          </button>
+        </div>
+
+        {/* Date Filter */}
+        <div className="rounded-2xl bg-zinc-50 border p-4 mb-5">
+          <h3 className="font-black text-sm mb-3">📅 Date Range Filter</h3>
+          <div className="grid gap-3 md:grid-cols-3 items-end">
+            <div><label className="label">From Date</label><input type="date" className="input" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></div>
+            <div><label className="label">To Date</label><input type="date" className="input" value={dateTo} onChange={e => setDateTo(e.target.value)} /></div>
+            <div>
+              <p className="label">Filtered Revenue</p>
+              <p className="text-2xl font-black text-green-600">{money(filteredRevenue)}</p>
+              <p className="text-xs text-zinc-500">{filteredPayments.length} transactions</p>
+            </div>
+          </div>
+        </div>
+
+        {/* KPI Cards */}
+        <div className="grid gap-3 md:grid-cols-4 mb-5">
+          <div className="rounded-2xl bg-green-50 border border-green-200 p-4">
+            <p className="text-sm text-green-700 font-bold">Total Revenue</p>
+            <p className="text-3xl font-black text-green-800">{money(revenue)}</p>
+          </div>
+          <div className="rounded-2xl bg-blue-50 border border-blue-200 p-4">
+            <p className="text-sm text-blue-700 font-bold">Today</p>
+            <p className="text-3xl font-black text-blue-800">{money(dailyRevenue)}</p>
+          </div>
+          <div className="rounded-2xl bg-purple-50 border border-purple-200 p-4">
+            <p className="text-sm text-purple-700 font-bold">This Month</p>
+            <p className="text-3xl font-black text-purple-800">{money(monthlyRevenue)}</p>
+          </div>
+          <div className="rounded-2xl bg-orange-50 border border-orange-200 p-4">
+            <p className="text-sm text-orange-700 font-bold">Active Subs</p>
+            <p className="text-3xl font-black text-orange-800">{activeSubs.length}</p>
+          </div>
+        </div>
+
+        {/* More Stats */}
+        <div className="grid gap-3 md:grid-cols-4 mb-5">
+          <div className="rounded-2xl bg-zinc-50 border p-4"><p className="text-sm text-zinc-500">Total Videos</p><p className="text-2xl font-black">{videos.length}</p></div>
+          <div className="rounded-2xl bg-zinc-50 border p-4"><p className="text-sm text-zinc-500">Total Views</p><p className="text-2xl font-black">{views.length}</p></div>
+          <div className="rounded-2xl bg-yellow-50 border border-yellow-200 p-4"><p className="text-sm text-yellow-700">Pending Payments</p><p className="text-2xl font-black text-yellow-800">{pendingCount}</p></div>
+          <div className="rounded-2xl bg-red-50 border border-red-200 p-4"><p className="text-sm text-red-700">Failed Payments</p><p className="text-2xl font-black text-red-800">{failedCount}</p></div>
+        </div>
+
+        {/* Series Breakdown Table */}
+        <h3 className="font-black text-lg mb-3">Series-wise Revenue Share</h3>
+        {seriesStats.length === 0 ? (
+          <div className="rounded-2xl bg-zinc-100 p-8 text-center text-zinc-400">
+            <p>Koi series nahi hai. Admin → Series tab mein add karein.</p>
+            <p className="text-xs mt-1 text-zinc-300">Producer share percentage Series mein "producer_share_percent" field se set hota hai (default: 50%)</p>
+          </div>
+        ) : (
+          <div className="overflow-auto rounded-2xl border">
+            <table className="min-w-full">
+              <thead>
+                <tr className="bg-zinc-950 text-white">
+                  <th className="text-left p-4 font-black">Series Title</th>
+                  <th className="p-4 font-black">Episodes</th>
+                  <th className="p-4 font-black">Views</th>
+                  <th className="p-4 font-black">Allocated Revenue</th>
+                  <th className="p-4 font-black">Producer %</th>
+                  <th className="p-4 font-black text-yellow-300">Producer Share</th>
+                  <th className="p-4 font-black">Platform Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {seriesStats.map((s: any) => (
+                  <tr key={s.id} className="border-b hover:bg-zinc-50">
+                    <td className="p-4 font-black">{s.title}</td>
+                    <td className="p-4 text-center">{s.episodes}</td>
+                    <td className="p-4 text-center">{s.views}</td>
+                    <td className="p-4 text-center font-bold">{money(s.allocated)}</td>
+                    <td className="p-4 text-center">
+                      <span className="rounded-full bg-blue-100 text-blue-700 px-3 py-1 text-xs font-black">{s.sharePct}%</span>
+                    </td>
+                    <td className="p-4 text-center font-black text-amber-700 text-lg">{money(s.producerAmt)}</td>
+                    <td className="p-4 text-center text-zinc-500">{money(s.platformAmt)}</td>
+                  </tr>
+                ))}
+                {/* Total row */}
+                <tr className="bg-zinc-950 text-white font-black">
+                  <td className="p-4">TOTAL</td>
+                  <td className="p-4 text-center">{videos.length}</td>
+                  <td className="p-4 text-center">{views.length}</td>
+                  <td className="p-4 text-center">{money(revenue)}</td>
+                  <td className="p-4 text-center">—</td>
+                  <td className="p-4 text-center text-yellow-300">{money(seriesStats.reduce((a: number, s: any) => a + s.producerAmt, 0))}</td>
+                  <td className="p-4 text-center text-zinc-300">{money(seriesStats.reduce((a: number, s: any) => a + s.platformAmt, 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Subscription Breakdown */}
+        <div className="mt-5">
+          <h3 className="font-black text-lg mb-3">Subscription Summary</h3>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl bg-green-50 border border-green-200 p-4 text-center">
+              <p className="text-green-700 font-bold text-sm">Active</p>
+              <p className="text-3xl font-black text-green-800">{activeSubs.length}</p>
+            </div>
+            <div className="rounded-2xl bg-zinc-100 border p-4 text-center">
+              <p className="text-zinc-600 font-bold text-sm">Expired</p>
+              <p className="text-3xl font-black">{expiredSubs}</p>
+            </div>
+            <div className="rounded-2xl bg-red-50 border border-red-200 p-4 text-center">
+              <p className="text-red-600 font-bold text-sm">Cancelled</p>
+              <p className="text-3xl font-black text-red-700">{cancelledSubs}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Payments */}
+        <div className="mt-5">
+          <h3 className="font-black text-lg mb-3">Recent Successful Payments</h3>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {payments.filter((p: any) => p.status === 'success').slice(0, 20).map((p: any) => (
+              <div key={p.id} className="rounded-2xl bg-zinc-50 p-3 flex justify-between items-center text-sm">
+                <div>
+                  <p className="font-bold">{money(p.amount)} — {p.gateway}</p>
+                  <p className="text-xs text-zinc-400">{new Date(p.created_at).toLocaleString('en-IN')} · {p.transaction_id || 'No Txn ID'}</p>
+                </div>
+                <span className="rounded-full bg-green-100 text-green-700 px-3 py-1 text-xs font-black">Success</span>
+              </div>
+            ))}
+            {payments.filter((p: any) => p.status === 'success').length === 0 && (
+              <p className="text-zinc-400 text-sm text-center py-4">Koi successful payment nahi hai abhi.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-center">
+          <button onClick={onDownload} className="save flex items-center gap-2 text-base px-8 py-4">
+            <Download size={20} /> Download Complete PDF Report
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-2xl bg-zinc-100 p-4 text-xs text-zinc-500">
+          <p className="font-bold mb-1">💡 Note:</p>
+          <p>Revenue allocation views ke basis par pro-rata calculate hoti hai. Producer share percentage Admin → Series tab mein har series ke liye alag set kar sakte hain ("producer_share_percent" field, default: 50%).</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminGate() {
   const [s, setS] = useState('');
   const [ok, setOk] = useState(() => sessionStorage.getItem('rr_admin') === '1');
@@ -2028,7 +2251,7 @@ function Admin() {
 
   const tabs = [
     { id: 'dashboard', label: '📊 Dashboard' },
-    { id: 'revenuReport', label: '📑 Revenue PDF' },
+    { id: 'revenueReport', label: '📑 Revenue PDF' },
     { id: 'videos', label: '🎬 Videos' },
     { id: 'series', label: '📺 Series' },
     { id: 'categories', label: '🏷️ Categories' },
@@ -2088,7 +2311,8 @@ function Admin() {
             <Stat l="Series" v={(data.series || []).length} icon={<Folder size={20} className="text-indigo-500" />} />
           </div>
           <div className="flex gap-3 flex-wrap">
-            <button onClick={exp} className="btn"><FileText size={16} /> Export Backup</button>
+            <button onClick={exp} className="btn"><FileText size={16} /> Export Backup JSON</button>
+            <button onClick={downloadRevenueReportPDF} className="save flex items-center gap-2"><BarChart size={16} /> Download Revenue PDF Report</button>
           </div>
           {pendingPayments.length > 0 && (
             <div className="card p-5">
@@ -2111,6 +2335,20 @@ function Admin() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── REVENUE PDF REPORT TAB ── */}
+      {tab === 'revenueReport' && (
+        <RevenueReportPage
+          data={data}
+          videos={videos}
+          revenue={revenue}
+          dailyRevenue={dailyRevenue}
+          monthlyRevenue={monthlyRevenue}
+          activeSubs={activeSubs}
+          payments={payments}
+          onDownload={downloadRevenueReportPDF}
+        />
       )}
 
       {/* ── VIDEOS ── */}
@@ -2799,6 +3037,37 @@ function InfoSection() {
 function Empty() { return <div className="card p-10 text-center"><Film className="mx-auto text-[var(--rr-accent)]" size={50} /><h2 className="text-3xl font-black mt-4">No content yet</h2><p className="text-zinc-500 mt-2">Admin panel se videos add karein.</p></div>; }
 function Title({ t, s }: { t: string; s: string }) { return <div className="mb-2"><p className="font-black text-[var(--rr-accent)] text-sm">ReelRamp Pro</p><h1 className="text-4xl font-black">{t}</h1><p className="text-zinc-600 text-sm">{s}</p></div>; }
 
+// ─── RR LOGO — Netflix style italic bold ─────────────────────────────────────
+function RRLogo({ primary = '#c5a26f', dark = false }: { primary?: string; dark?: boolean }) {
+  const textColor = dark ? '#ffffff' : '#18181b';
+  return (
+    <svg width="72" height="36" viewBox="0 0 72 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Left R */}
+      <text
+        x="2" y="30"
+        fontFamily="'Arial Black', 'Impact', sans-serif"
+        fontSize="34"
+        fontWeight="900"
+        fontStyle="italic"
+        fill={primary}
+        letterSpacing="-2"
+      >R</text>
+      {/* Right R — slightly offset for depth */}
+      <text
+        x="32" y="30"
+        fontFamily="'Arial Black', 'Impact', sans-serif"
+        fontSize="34"
+        fontWeight="900"
+        fontStyle="italic"
+        fill={textColor}
+        letterSpacing="-2"
+      >R</text>
+      {/* Bottom accent line — Netflix style */}
+      <rect x="2" y="33" width="68" height="3" rx="1.5" fill={primary} />
+    </svg>
+  );
+}
+
 // ─── SHELL ────────────────────────────────────────────────────────────────────
 function Shell() {
   const { loading, theme, data, user } = useApp();
@@ -2841,13 +3110,16 @@ function Shell() {
 
   if (new URLSearchParams(location.search).get('admin') === '1') return <AdminGate />;
   if (loading) return (
-    <div className="grid min-h-screen place-items-center bg-orange-50">
-      <div className="text-center space-y-4">
-        <div className="grid h-16 w-16 place-items-center rounded-3xl bg-[var(--rr-primary)] mx-auto">
-          <span className="text-2xl font-black">RR</span>
-        </div>
-        <Loader2 className="animate-spin text-[var(--rr-accent)] mx-auto" size={40} />
-        <p className="text-zinc-500 font-bold">Loading ReelRamp Pro…</p>
+    <div className="grid min-h-screen place-items-center bg-zinc-950">
+      <div className="text-center space-y-6">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5 }}
+        >
+          <RRLogo primary="#c5a26f" dark={true} />
+        </motion.div>
+        <Loader2 className="animate-spin text-[#c5a26f] mx-auto" size={28} />
       </div>
     </div>
   );
@@ -2867,18 +3139,15 @@ function Shell() {
     <div className="min-h-screen bg-[var(--rr-bg)] text-zinc-950">
       <header className="sticky top-0 z-30 border-b border-black/5 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between p-4">
-          <button onClick={() => go('home')} className="flex items-center gap-3">
+          <button onClick={() => go('home')} className="flex items-center gap-2">
             {theme.logoImageUrl ? (
               <img src={theme.logoImageUrl} alt={theme.brand || 'ReelRamp Pro'}
-                className="h-10 w-auto max-w-[140px] object-contain"
+                className="h-9 w-auto max-w-[130px] object-contain"
                 onError={e => { e.currentTarget.style.display = 'none'; }}
               />
             ) : (
-              <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[var(--rr-primary)] font-black text-lg text-black">
-                {theme.logoText || 'RR'}
-              </span>
+              <RRLogo primary={theme.primary || '#c5a26f'} />
             )}
-            <b className="text-xl hidden sm:block">{theme.brand || 'ReelRamp Pro'}</b>
           </button>
           <div className="flex items-center gap-2">
             <button onClick={() => go('search')} className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100"><Search size={20} /></button>
