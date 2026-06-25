@@ -1,6 +1,6 @@
 {
-  "name": "ReelRamp",
-  "short_name": "ReelRamp",
+  "name": "ReelRamppro",
+  "short_name": "ReelRamppro",
   "description": "Short premium story streaming by ReelRamp Originals Pvt. Ltd.",
   "start_url": "/",
   "scope": "/",
@@ -18,5 +18,7 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "id": "drama",
+  "dir": "auto"
 }
