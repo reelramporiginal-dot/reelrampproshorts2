@@ -1,155 +1,141 @@
 // api/cashfree/create-subscription.js
-// ─────────────────────────────────────────────────────────────────
-// Vercel Serverless Function — Cashfree Subscription / Auto-Pay
-// CommonJS format — same style as create-order.js
-// ─────────────────────────────────────────────────────────────────
+// Vercel Serverless Function to safely create Cashfree Subscription (Auto-Pay e-mandate)
 
-module.exports = async function handler(req, res) {
-
-  // ── CORS ──────────────────────────────────────────────────────
+export default async function handler(req, res) {
+  // CORS Headers
+  res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ message: 'Method not allowed' });
+  }
 
   try {
-    const {
-      planName,
-      amount,
-      intervalDays,
-      userId,
-      userName,
-      userEmail,
-      userPhone,
-      cfPlanId,      // optional: agar Cashfree dashboard mein plan pehle se banaya ho
-      testMode,
-      returnUrl,
-    } = req.body;
+    const { plan_id, customer_details, return_url, testMode } = req.body;
 
-    // ── Validation ────────────────────────────────────────────────
-    if (!amount || isNaN(Number(amount))) {
-      return res.status(400).json({ error: 'Valid amount required' });
-    }
-    if (!userId) {
-      return res.status(400).json({ error: 'userId required' });
+    const app_id = process.env.CASHFREE_APP_ID || '13027093ee54013453fbcb1eb089072031';
+    const secret_key = process.env.CASHFREE_SECRET_KEY || 'cfsk_ma_prod_23c0f05b2c2f34547eee4dc55405f3f1_50516b4a';
+
+    const cleanPhone = (customer_details?.customer_phone || '').replace(/\D/g, '').slice(-10);
+    const cleanEmail = (customer_details?.customer_email || '').trim() || 'user@reelramp.com';
+    const cleanName = (customer_details?.customer_name || '').trim() || 'ReelRamp User';
+    const cleanId = (customer_details?.customer_id || '').trim() || 'guest_user';
+
+    if (cleanPhone.length < 10) {
+      return res.status(400).json({ message: 'Validation failed: Mobile number must be exactly 10 digits.' });
     }
 
-    // ── Keys from Vercel Env ──────────────────────────────────────
-    const appId     = process.env.CASHFREE_APP_ID;
-    const secretKey = process.env.CASHFREE_SECRET_KEY;
+    const isProdKey = secret_key.startsWith('cfsk_ma_prod_') || secret_key.startsWith('cfsk_prod_');
+    const actualTestMode = isProdKey ? false : !!testMode;
 
-    if (!appId || !secretKey) {
-      return res.status(500).json({
-        error: 'Cashfree keys missing! Set CASHFREE_APP_ID aur CASHFREE_SECRET_KEY in Vercel Dashboard.',
-      });
-    }
+    const host = actualTestMode 
+      ? 'sandbox.cashfree.com' 
+      : 'api.cashfree.com';
 
-    const baseUrl = testMode
-      ? 'https://sandbox.cashfree.com/pg'
-      : 'https://api.cashfree.com/pg';
+    // Step 1: Create or fetch a Plan dynamically (Periodic Quarterly or Monthly auto-pay)
+    // Kuku FM style: ₹1 Trial first day, then auto-pay ₹399/quarterly
+    const uniquePlanId = plan_id || `rr_autopay_399_quarterly`;
+    const planUrl = `https://${host}/pg/plans`;
 
-    const appUrl = process.env.APP_URL || process.env.VITE_APP_URL || 'https://reelramppro.vercel.app';
-    const safeUserId = String(userId).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
-
-    // ── STEP 1: Cashfree Plan create karo (agar cfPlanId nahi diya) ──
-    let planId = cfPlanId;
-
-    if (!planId) {
-      const planPayload = {
-        plan_id:          `RRP_${safeUserId}_${Date.now()}`,
-        plan_name:        planName || 'ReelRamp Pro Plan',
-        plan_type:        'PERIODIC',
-        plan_currency:    'INR',
-        plan_max_amount:  Number(amount),
-        plan_max_cycles:  120,   // max 10 saal tak renew
-        plan_intervals:   Number(intervalDays) || 30,
-        plan_interval_type: 'DAY',
-        plan_description: `${planName} — ReelRamp Pro`,
-      };
-
-      const planRes = await fetch(`${baseUrl}/plans`, {
+    // Try to create plan (will succeed if not exists, Cashfree allows creation with unique plan_id)
+    try {
+      await fetch(planUrl, {
         method: 'POST',
         headers: {
-          'Content-Type':    'application/json',
-          'x-api-version':   '2023-08-01',
-          'x-client-id':     appId,
-          'x-client-secret': secretKey,
+          'accept': 'application/json',
+          'content-type': 'application/json',
+          'x-client-id': app_id,
+          'x-client-secret': secret_key,
+          'x-api-version': '2023-08-01'
         },
-        body: JSON.stringify(planPayload),
+        body: JSON.stringify({
+          plan_id: uniquePlanId,
+          plan_name: 'ReelRamp Auto-Pay Trial Offer',
+          plan_type: 'PERIODIC',
+          plan_currency: 'INR',
+          plan_recurring_amount: 399, // Next charging amount after trial
+          plan_max_amount: 399,
+          plan_max_cycles: 99,
+          plan_intervals: 3, // Charged every 3 months (Quarterly)
+          plan_interval_type: 'MONTH',
+          plan_note: '₹1 Trial for 2 days, then auto-pay ₹399 every quarter'
+        })
       });
-
-      const planData = await planRes.json();
-      console.log('Cashfree Plan response:', planRes.status, planData);
-
-      if (!planRes.ok) {
-        // Agar plan already exists (409), uska plan_id use karo
-        if (planRes.status === 409 && planData.plan_id) {
-          planId = planData.plan_id;
-        } else {
-          return res.status(planRes.status).json({
-            error: planData.message || 'Plan create failed',
-            details: planData,
-          });
-        }
-      } else {
-        planId = planData.plan_id;
-      }
+    } catch (e) {
+      console.log('Plan already exists or failed, proceeding to subscription...', e);
     }
 
-    // ── STEP 2: Subscription create karo ─────────────────────────
-    const subId = `RRSUB_${safeUserId}_${Date.now()}`;
+    // Step 2: Create Subscription (Mandate)
+    const subUrl = `https://${host}/pg/subscriptions`;
+    const subscription_id = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    // Calculate expiry (10 years from now)
+    const expiry = new Date();
+    expiry.setFullYear(expiry.getFullYear() + 10);
+
+    // Calculate first charge time (Kuku FM style: e.g. after 2 days of trial)
+    const firstCharge = new Date();
+    firstCharge.setDate(firstCharge.getDate() + 2); // 2 Days trial
 
     const subPayload = {
-      subscription_id:            subId,
-      plan_id:                     planId,
+      subscription_id,
       customer_details: {
-        customer_id:    safeUserId,
-        customer_name:  userName  || 'ReelRamp User',
-        customer_email: userEmail || 'user@reelramp.com',
-        customer_phone: (userPhone || '9999999999').replace(/\D/g, '').slice(-10),
+        customer_id: cleanId,
+        customer_name: cleanName,
+        customer_email: cleanEmail,
+        customer_phone: cleanPhone
+      },
+      plan_details: {
+        plan_id: uniquePlanId
+      },
+      authorization_details: {
+        authorization_amount: 1, // Pay ₹1 today to verify and start trial
+        authorization_amount_refund: false, // Don't refund as it is the trial charge
+        payment_methods: ['upi', 'card'] // Kuku FM style (UPI mandate / Cards)
       },
       subscription_meta: {
-        return_url:  returnUrl || `${appUrl}/?cf_sub=success&sub_id=${subId}`,
-        notify_url:  `${appUrl}/api/cashfree/webhook`,
+        return_url: return_url || `${req.headers.origin || 'https://reelrampro.com'}?cf_sub=${subscription_id}`
       },
-      subscription_first_charge_time: new Date(Date.now() + 60000).toISOString(), // 1 min baad
-      subscription_expiry_time:        new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000).toISOString(),
+      subscription_expiry_time: expiry.toISOString().split('.')[0] + '+05:30',
+      subscription_first_charge_time: firstCharge.toISOString().split('.')[0] + '+05:30'
     };
 
-    const subRes = await fetch(`${baseUrl}/subscriptions`, {
+    const response = await fetch(subUrl, {
       method: 'POST',
       headers: {
-        'Content-Type':    'application/json',
-        'x-api-version':   '2023-08-01',
-        'x-client-id':     appId,
-        'x-client-secret': secretKey,
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'x-client-id': app_id,
+        'x-client-secret': secret_key,
+        'x-api-version': '2023-08-01'
       },
-      body: JSON.stringify(subPayload),
+      body: JSON.stringify(subPayload)
     });
 
-    const subData = await subRes.json();
-    console.log('Cashfree Subscription response:', subRes.status, subData);
+    const data = await response.json();
 
-    if (!subRes.ok) {
-      return res.status(subRes.status).json({
-        error: subData.message || 'Subscription create failed',
-        details: subData,
-      });
+    if (!response.ok) {
+      console.error('Cashfree subscription creation error payload:', data);
+      throw new Error(data.message || 'Failed to create subscription on Cashfree');
     }
 
-    // ── Success ───────────────────────────────────────────────────
     return res.status(200).json({
-      subscription_id: subData.subscription_id || subId,
-      plan_id:         planId,
-      auth_link:       subData.authorization_details?.authorization_url || subData.auth_link || '',
-      status:          subData.subscription_status || 'INITIALIZED',
+      subscription_id: data.subscription_id,
+      sub_auth_url: data.subscription_meta?.sub_auth_url || data.sub_auth_url || '',
+      session_id: data.session_id || ''
     });
 
-  } catch (err) {
-    console.error('create-subscription crash:', err);
-    return res.status(500).json({
-      error: err.message || 'Internal server error',
-    });
+  } catch (error) {
+    console.error('Cashfree subscription error:', error);
+    return res.status(500).json({ message: error.message });
   }
-};
+}
