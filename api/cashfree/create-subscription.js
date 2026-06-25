@@ -50,14 +50,15 @@ export default async function handler(req, res) {
       interval_type = 'MONTH' 
     } = req.body;
 
-    // Step 1: Create or fetch a Plan dynamically (Periodic Quarterly or Monthly auto-pay)
-    // Kuku FM style: ₹1 Trial first day, then auto-pay ₹399/quarterly
-    const uniquePlanId = plan_id || `rr_autopay_${recurring_price}_${intervals}_${interval_type.toLowerCase()}`;
+    // Step 1: Create a FRESH unique Plan every time (guaranteed to exist!)
+    // This completely eliminates "Plan does not exist" error.
     const planUrl = `https://${host}/pg/plans`;
+    // Generate a brand-new unique plan id with timestamp so it ALWAYS gets created fresh
+    let uniquePlanId = `rr_plan_${recurring_price}_${intervals}${interval_type.charAt(0)}_${Date.now()}`;
 
-    // Try to create plan (will succeed if not exists, Cashfree allows creation with unique plan_id)
+    let planCreated = false;
     try {
-      await fetch(planUrl, {
+      const planRes = await fetch(planUrl, {
         method: 'POST',
         headers: {
           'accept': 'application/json',
@@ -68,19 +69,30 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           plan_id: uniquePlanId,
-          plan_name: `ReelRamp Auto-Pay Trial Offer ₹${trial_price}`,
+          plan_name: `ReelRamp Auto-Pay ₹${recurring_price}`,
           plan_type: 'PERIODIC',
           plan_currency: 'INR',
-          plan_recurring_amount: Number(recurring_price), // Next charging amount after trial
+          plan_recurring_amount: Number(recurring_price),
           plan_max_amount: Number(recurring_price),
           plan_max_cycles: 99,
-          plan_intervals: Number(intervals), 
+          plan_intervals: Number(intervals),
           plan_interval_type: interval_type,
-          plan_note: `₹${trial_price} Trial for ${trial_days} days, then auto-pay ₹${recurring_price} recurring`
+          plan_note: `Trial then auto-pay ₹${recurring_price}`
         })
       });
+      const planData = await planRes.json();
+      console.log('Plan creation response:', planRes.status, planData);
+      // Confirm plan exists — if created OR already active, mark as good
+      if (planRes.ok || planData.plan_status === 'ACTIVE' || (planData.plan_id)) {
+        planCreated = true;
+        if (planData.plan_id) uniquePlanId = planData.plan_id;
+      }
     } catch (e) {
-      console.log('Plan already exists or failed, proceeding to subscription...', e);
+      console.log('Plan creation network error:', e);
+    }
+
+    if (!planCreated) {
+      return res.status(400).json({ message: 'Cashfree plan create nahi ho paya. Keys ya account check karein. (Plan setup failed)' });
     }
 
     // Step 2: Create Subscription (Mandate)
