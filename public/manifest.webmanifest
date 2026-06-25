@@ -1,1 +1,22 @@
-{"name":"ReelRamp Pro","short_name":"ReelRamp","description":"Short premium story streaming by ReelRamp Originals Pvt. Ltd.","start_url":"/","scope":"/","display":"standalone","orientation":"portrait","background_color":"#fff7ed","theme_color":"#c5a26f","icons":[{"src":"/favicon.svg","sizes":"64x64","type":"image/svg+xml"}]}
+{
+  "name": "ReelRamp",
+  "short_name": "ReelRamp",
+  "description": "Short premium story streaming by ReelRamp Originals Pvt. Ltd.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
