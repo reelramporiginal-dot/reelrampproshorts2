@@ -311,6 +311,9 @@ const openCashfreeSubscription = async (opts: {
   appId: string; secretKey: string; testMode: boolean;
   planId: string; userId: string; userName: string;
   userEmail: string; userPhone: string;
+  trialPrice?: number; recurringPrice?: number;
+  trialDays?: number; intervals?: number;
+  intervalType?: string;
   onSuccess: (data: { subscriptionId: string }) => void;
   onFailure: (err: string) => void;
 }) => {
@@ -326,6 +329,11 @@ const openCashfreeSubscription = async (opts: {
           customer_email: opts.userEmail,
           customer_phone: opts.userPhone
         },
+        trial_price: opts.trialPrice || 1,
+        recurring_price: opts.recurringPrice || 399,
+        trial_days: opts.trialDays || 2,
+        intervals: opts.intervals || 3,
+        interval_type: opts.intervalType || 'MONTH',
         return_url: `${window.location.origin}?cf_sub={subscription_id}`,
         testMode: opts.testMode
       })
@@ -1152,11 +1160,21 @@ function Plans() {
     try {
       if (selected.supports_autorenew || selected.name.toLowerCase().includes('trial') || selected.name.toLowerCase().includes('auto')) {
         // Auto-Pay Mandate Flow
+        // Read features / options if set
+        const recurringPrice = Number(selected.features?.recurring_price || 399);
+        const trialDays = Number(selected.trial_days || 2);
+        const trialPrice = Number(selected.price || 1);
+
         await openCashfreeSubscription({
           appId: gw.keys.appId || '', secretKey: gw.keys.secretKey || '',
-          testMode: gw.testMode, planId: selected.cf_plan_id || 'rr_autopay_399_quarterly',
+          testMode: gw.testMode, planId: selected.cf_plan_id || `rr_autopay_${recurringPrice}_3_month`,
           userId: guestId, userName: getBestDisplayName(user),
           userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
+          trialPrice,
+          recurringPrice,
+          trialDays,
+          intervals: 3, // quarterly (3 months)
+          intervalType: 'MONTH',
           onSuccess: async ({ subscriptionId }) => {
             await activatePlan(selected, 'Cashfree Autopay', subscriptionId, subscriptionId);
             setBusy(false);
@@ -1845,10 +1863,29 @@ function Policies() {
 
 // ─── PROMO MODAL — Kuku FM Style Autopay Subscription Overlay ──────────────────
 function PromoVideoModal({ go }: { go: (t: string) => void }) {
-  const { data, subscribed } = useApp();
+  const { data, subscribed, user, guestId, payment, mutate, addNotif } = useApp();
+  void go; // Kept used optionally
   const [open, setOpen] = useState(false);
   const [muted, setMuted] = useState(true);
   const [selectedGateway, setSelectedGateway] = useState('paytm');
+  
+  // Inline Checkout states
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Find the active trial plan dynamically from the database
+  const activeTrialPlan = (data.plans || []).find(
+    (p: any) => p.is_active && (p.supports_autorenew || p.name.toLowerCase().includes('trial') || p.name.toLowerCase().includes('auto'))
+  );
+
+  // Read pricing details from activeTrialPlan or fall back to default ₹1 trial / ₹399 quarterly
+  const trialPrice = activeTrialPlan ? Number(activeTrialPlan.price) : 1;
+  const trialDays = activeTrialPlan ? Number(activeTrialPlan.trial_days || 2) : 2;
+  const recurringPrice = activeTrialPlan?.features?.recurring_price 
+    ? Number(activeTrialPlan.features.recurring_price) 
+    : (activeTrialPlan ? Number(activeTrialPlan.price) * 4 : 399); // dynamic calculation or fallback
 
   const promo = (data.promo_campaigns || []).find((p: any) => p.is_active && p.placement === 'app_open');
 
@@ -1868,13 +1905,72 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
 
   if (!open || subscribed) return null;
 
-  const handleStartTrial = () => {
-    setOpen(false);
-    go('plans');
-    // Trigger plans modal automatically
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('rr-open-plans'));
-    }, 300);
+  const handleStartTrialClick = () => {
+    setShowCheckout(true);
+  };
+
+  const handlePayTrial = async () => {
+    if (!phone.trim() || phone.length < 10) { setErr('Valid mobile number daalein (10 digit)'); return; }
+    setBusy(true); setErr('');
+
+    const defaultGw = payment.gateways.find(g => g.enabled && g.isDefault) || payment.gateways.find(g => g.enabled);
+    if (!defaultGw) {
+      setErr('Payment gateway configure nahi hai. Admin panel mein set karein.');
+      setBusy(false);
+      return;
+    }
+
+    try {
+      // Trigger Cashfree Subscription flow directly!
+      await openCashfreeSubscription({
+        appId: defaultGw.keys.appId || '',
+        secretKey: defaultGw.keys.secretKey || '',
+        testMode: defaultGw.testMode,
+        planId: activeTrialPlan?.cf_plan_id || `rr_autopay_${recurringPrice}_3_month`,
+        userId: guestId,
+        userName: getBestDisplayName(user),
+        userEmail: user?.email || `${guestId}@reelramp.com`,
+        userPhone: phone,
+        trialPrice,
+        recurringPrice,
+        trialDays,
+        intervals: 3, // quarterly (charged every 3 months)
+        intervalType: 'MONTH',
+        onSuccess: async ({ subscriptionId }) => {
+          // Activate Plan in Supabase
+          const expiresAt = new Date(Date.now() + (activeTrialPlan?.duration_days || 90) * 86400000).toISOString();
+          
+          await mutate('payments', 'POST', {
+            user_id: guestId, plan_id: activeTrialPlan?.id || 1, amount: trialPrice,
+            gateway: 'Cashfree Autopay', status: 'success', notes: `Auto-Pay Trial Start: ${activeTrialPlan?.name || 'Trial Plan'}`,
+            transaction_id: subscriptionId, cf_payment_id: subscriptionId
+          });
+
+          await mutate('subscriptions', 'POST', {
+            user_id: guestId, plan: activeTrialPlan?.name || 'Trial Plan', plan_id: activeTrialPlan?.id || 1,
+            status: 'active', expires_at: expiresAt, auto_renew: true,
+            renewal_date: expiresAt, gateway: 'Cashfree Autopay', cf_subscription_id: subscriptionId
+          });
+
+          if (phone && user?.id) await mutate('users', 'PUT', { id: user.id, phone }).catch(() => { });
+
+          addNotif({
+            title: 'Trial Plan Activated! 🎉', type: 'success',
+            message: `${activeTrialPlan?.name || 'Trial Plan'} successfully active ho gaya hai.`,
+            target: 'user', is_active: true
+          });
+
+          setOpen(false);
+          setShowCheckout(false);
+          setBusy(false);
+          window.location.reload(); // Refresh app to instantly unlock everything
+        },
+        onFailure: (err) => { setErr(err); setBusy(false); }
+      });
+    } catch (e: any) {
+      setErr(e.message);
+      setBusy(false);
+    }
   };
 
   return (
@@ -1885,7 +1981,7 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
           
           {/* Header Back Button */}
           <div className="absolute top-4 left-4 z-[90] flex items-center justify-between w-full pr-8">
-            <button onClick={() => setOpen(false)} className="icon bg-black/40 hover:bg-black/60"><X size={20} /></button>
+            <button onClick={() => { setOpen(false); setShowCheckout(false); }} className="icon bg-black/40 hover:bg-black/60"><X size={20} /></button>
             <span className="text-white/40 text-xs font-bold uppercase tracking-wider">FAQs</span>
           </div>
 
@@ -1911,12 +2007,12 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
             {/* Title / Header */}
             <div className="text-center space-y-2 mt-2">
               <h2 className="text-2xl md:text-3xl font-black leading-tight tracking-tight">
-                {promo?.title || 'Watch 1000+ Dramas For ₹99'}
+                {promo?.title || `Watch 1000+ Dramas For ₹${recurringPrice}`}
               </h2>
               {/* Huge ₹1 Price indicator */}
               <div className="flex flex-col items-center justify-center">
-                <span className="text-8xl font-black text-white leading-none tracking-tighter">₹1</span>
-                <p className="text-zinc-400 text-xs mt-1">Auto-pays ₹399 every quarter, cancel anytime</p>
+                <span className="text-8xl font-black text-white leading-none tracking-tighter">₹{trialPrice}</span>
+                <p className="text-zinc-400 text-xs mt-1">Auto-pays ₹{recurringPrice} every quarter, cancel anytime</p>
               </div>
             </div>
 
@@ -1928,7 +2024,7 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
                 <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10"><Lock size={12} /></span>
                 <div>
                   <h4 className="font-black text-sm text-white">Start your Trial Plan</h4>
-                  <p className="text-zinc-500 text-xs">Pay ₹1 and unlock all dramas</p>
+                  <p className="text-zinc-500 text-xs">Pay ₹{trialPrice} and unlock all dramas</p>
                 </div>
               </div>
 
@@ -1936,7 +2032,7 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
               <div className="relative flex gap-3 items-start">
                 <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10">★</span>
                 <div>
-                  <h4 className="font-black text-sm text-white">Watch new dramas for 2 days</h4>
+                  <h4 className="font-black text-sm text-white">Watch new dramas for {trialDays} days</h4>
                   <p className="text-zinc-500 text-xs">Romance, revenge and much more</p>
                 </div>
               </div>
@@ -1946,7 +2042,7 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
                 <span className="absolute -left-6 grid h-6 w-6 place-items-center rounded-full bg-zinc-900 text-zinc-500 border border-zinc-800 z-10"><Bell size={12} /></span>
                 <div>
                   <h4 className="font-black text-sm text-white">Notified before autopay</h4>
-                  <p className="text-zinc-500 text-xs">Pay ₹399/3 months after 2 days</p>
+                  <p className="text-zinc-500 text-xs">Pay ₹{recurringPrice}/3 months after {trialDays} days</p>
                 </div>
               </div>
 
@@ -1977,12 +2073,52 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
 
             {/* Big Start Trial Button */}
             <button 
-              onClick={handleStartTrial}
+              onClick={handleStartTrialClick}
               className="flex-1 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-700 hover:to-rose-700 text-white font-black py-4 rounded-full text-base transition flex items-center justify-center gap-2 shadow-lg shadow-pink-600/25"
             >
               Start Trial <ArrowRight size={18} />
             </button>
           </div>
+
+          {/* Inline Checkout Form Overlay (to avoid infinite loops) */}
+          <AnimatePresence>
+            {showCheckout && (
+              <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25 }}
+                className="absolute inset-x-0 bottom-0 bg-zinc-900 border-t border-zinc-800 rounded-t-[34px] p-6 z-[100] space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xl font-black text-white">Billing Information</h3>
+                  <button onClick={() => setShowCheckout(false)} className="rounded-full bg-zinc-800 p-2 text-white/60 hover:text-white"><X size={16} /></button>
+                </div>
+                
+                <div className="rounded-2xl bg-zinc-800 p-4 flex justify-between items-center text-sm">
+                  <div>
+                    <p className="font-bold text-white">{activeTrialPlan?.name || 'Trial Autopay Plan'}</p>
+                    <p className="text-xs text-zinc-400">Pay ₹{trialPrice} now, then auto-pay ₹{recurringPrice} after {trialDays} days</p>
+                  </div>
+                  <span className="text-lg font-black text-green-400">₹{trialPrice}</span>
+                </div>
+
+                {err && (
+                  <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs font-bold text-red-400 flex items-center gap-2">
+                    <AlertCircle size={14} /> {err}
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="label flex items-center gap-1 text-zinc-400"><Phone size={12} /> Mobile Number (required for Auto-Pay)</label>
+                  <input className="input bg-zinc-800 text-white border-zinc-700 focus:border-pink-500 focus:ring-0" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="10-digit mobile number" maxLength={10} />
+                </div>
+
+                <button 
+                  disabled={busy}
+                  onClick={handlePayTrial}
+                  className="w-full bg-gradient-to-r from-pink-600 to-rose-600 text-white font-black py-4 rounded-full text-base flex items-center justify-center gap-2 disabled:opacity-60 shadow-lg shadow-pink-600/25"
+                >
+                  {busy ? <Loader2 className="animate-spin" size={20} /> : <>Proceed to Paytm / UPI <ArrowRight size={18} /></>}
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
         </div>
       </motion.div>
