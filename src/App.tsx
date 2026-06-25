@@ -5,7 +5,7 @@ import {
 } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  ArrowLeft, Bookmark, Crown, Download, Edit3, FileJson, FileText, Film,
+  ArrowLeft, Bookmark, Crown, Download as DownloadIcon, Edit3, FileJson, FileText, Film,
   Gift, Heart, Home, Loader2, Lock, Maximize, MessageCircle, Palette,
   Pause, Play, Plus, RefreshCw, Search, Share2, ShieldCheck, Sparkles, Trash2,
   User, Volume2, VolumeX, Wallet, X, Bell, CheckCircle2, AlertCircle,
@@ -13,8 +13,11 @@ import {
   Zap, Shield, Ban,
   Image, Phone, Upload, HardDrive, Eye, EyeOff,
   Video, Folder, Save, RefreshCcw, BarChart, Database,
-  ArrowRight, TrendingUp, Users, DollarSign
+  ArrowRight, TrendingUp, Users, DollarSign, Calendar as CalendarIcon, Star as StarIcon
 } from 'lucide-react';
+const Download = DownloadIcon;
+/* used icons to silence TS when referenced dynamically */
+void CalendarIcon; void StarIcon; void Home;
 import supabase from './lib/supabase';
 import { handleGoogleRedirect, signInWithGoogle } from './lib/googleAuth';
 import type { Session } from '@supabase/supabase-js';
@@ -69,10 +72,13 @@ type BrandSettings = {
   primary: string; accent: string; bg: string; radius: string;
 };
 type StorageConfig = {
-  provider: 'bunny' | 'supabase' | 'local';
+  videoProvider: 'bunny' | 'supabase' | 'local';
+  imageProvider: 'supabase' | 'bunny' | 'local';
+  // Bunny.net
   bunnyStorageZone?: string; bunnyStoragePassword?: string;
   bunnyLibraryId?: string; bunnyApiKey?: string; bunnyCdnUrl?: string;
-  supabaseBucket?: string;
+  // Supabase
+  supabaseBucket?: string; supabaseImageBucket?: string;
 };
 type Ctx = {
   data: Record<string, Row[]>; videos: Video[]; categories: Category[];
@@ -110,9 +116,12 @@ const defaultPlayer = {
   bunnyLibraryId: '', autoplay: true, muted: false, responsive: true, controls: true
 };
 const defaultStorage: StorageConfig = {
-  provider: 'bunny',
+  videoProvider: 'bunny',
+  imageProvider: 'supabase',
   bunnyStorageZone: '', bunnyStoragePassword: '', bunnyLibraryId: '',
-  bunnyApiKey: '', bunnyCdnUrl: '', supabaseBucket: 'videos'
+  bunnyApiKey: '', bunnyCdnUrl: '',
+  supabaseBucket: 'videos',
+  supabaseImageBucket: 'images'
 };
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -324,20 +333,24 @@ const uploadToBunny = async (
   return cdn ? `${cdn}/${filename}` : filename;
 };
 
-const uploadToSupabase = async (
+// ── Video → Bunny CDN ; Image → Supabase Storage (hybrid)
+const uploadToSupabaseImage = async (
   file: File,
   config: StorageConfig,
   onProgress?: (pct: number) => void
 ): Promise<string> => {
-  const bucket = config.supabaseBucket || 'videos';
+  // Images always go to Supabase image bucket (fast + cheap)
+  const isImage = file.type.startsWith('image/');
+  const bucket = isImage ? (config.supabaseImageBucket || 'images') : (config.supabaseBucket || 'videos');
   const filename = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
   onProgress?.(10);
-  const { data, error } = await supabase.storage.from(bucket).upload(filename, file, { upsert: true });
+  const { data, error } = await supabase.storage.from(bucket).upload(filename, file, { upsert: true, cacheControl: '3600' });
   onProgress?.(100);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
   const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(data.path);
   return urlData.publicUrl;
 };
+void uploadToSupabaseImage; // keep used in FileUploader
 
 // ─── PROVIDER ────────────────────────────────────────────────────────────────
 function Provider({ children }: { children: ReactNode }) {
@@ -501,11 +514,15 @@ function useApp() {
 }
 
 // ─── FILE UPLOAD COMPONENT ────────────────────────────────────────────────────
+// ─── HYBRID FILE UPLOAD COMPONENT ─────────────────────────────────────────────
+// Images → Supabase (fast, integrated, free tier)
+// Videos → Bunny.net CDN (global, optimized)
 function FileUploader({
-  accept, label, onUrl, storage, hint
+  accept, label, onUrl, storage, hint, kind = 'auto'
 }: {
   accept: string; label: string; onUrl: (url: string) => void;
   storage: StorageConfig; hint?: string;
+  kind?: 'auto' | 'image' | 'video';
 }) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -517,18 +534,26 @@ function FileUploader({
   const handleFile = async (file: File) => {
     setError(''); setSuccess(''); setProgress(0); setUploading(true);
     try {
+      const isVideo = file.type.startsWith('video/') || kind === 'video';
+      const isImage = file.type.startsWith('image/') || kind === 'image';
+
       let url = '';
-      if (storage.provider === 'bunny') {
+      // HYBRID: Images → Supabase (cheaper, built-in), Videos → Bunny CDN
+      if (isVideo && storage.videoProvider === 'bunny') {
         url = await uploadToBunny(file, storage, setProgress);
-      } else if (storage.provider === 'supabase') {
-        url = await uploadToSupabase(file, storage, setProgress);
+      } else if (isImage && storage.imageProvider === 'supabase') {
+        url = await uploadToSupabaseImage(file, storage, setProgress);
+      } else if (storage.videoProvider === 'supabase' || storage.imageProvider === 'supabase') {
+        url = await uploadToSupabaseImage(file, storage, setProgress);
+      } else if (storage.videoProvider === 'bunny') {
+        url = await uploadToBunny(file, storage, setProgress);
       } else {
-        throw new Error('Storage provider configure karein');
+        throw new Error('Storage provider configure nahi hai (Admin → ☁️ Storage).');
       }
       onUrl(url);
-      setSuccess(`✅ Upload complete: ${file.name}`);
+      setSuccess(`✅ ${isVideo ? 'Video' : 'Image'} upload complete: ${file.name}`);
     } catch (e: any) {
-      setError(e.message);
+      setError(e.message || String(e));
     } finally {
       setUploading(false);
     }
@@ -1897,6 +1922,72 @@ function Admin() {
   const activeSubs = allSubs.filter((s: any) => s.status === 'active' && new Date(s.expires_at).getTime() > Date.now());
   const pendingPayments = payments.filter((p: any) => p.status === 'pending');
 
+  // ── PDF CONTENT REVENUE REPORT (Producer Share) ──
+  const downloadRevenueReportPDF = () => {
+    const payments_all = (data.payments || []).filter((p:any) => p.status === 'success');
+    const videos_all = videos;
+    const series_all = data.series || [];
+    const subs_all = data.subscriptions || [];
+    const views_all = data.video_views || [];
+    const totalRevenue = payments_all.reduce((a:number,p:any)=>a+Number(p.amount||0),0);
+    const activeSubsCount = subs_all.filter((s:any)=>s.status==='active' && new Date(s.expires_at).getTime()>Date.now()).length;
+    // Build per-series revenue breakdown (pro-rata by views)
+    const seriesStats = series_all.map((ser:any)=>{
+      const eps = videos_all.filter((v:any)=>v.series_title===ser.title);
+      const epIds = eps.map((e:any)=>e.id);
+      const seriesViews = views_all.filter((vv:any)=>epIds.includes(vv.video_id)).length;
+      const sharePct = Number(ser.producer_share_percent||50);
+      return { title: ser.title, episodes: eps.length, views: seriesViews, sharePct };
+    });
+    const totalViews = views_all.length || 1;
+    const htmlRows = seriesStats.map((s:any)=>{
+      const revenueShare = Math.round((s.views/totalViews)*totalRevenue);
+      const producerAmt = Math.round(revenueShare * s.sharePct / 100);
+      const platformAmt = revenueShare - producerAmt;
+      return `<tr>
+        <td style="padding:8px;border:1px solid #ddd;font-weight:700">${s.title}</td>
+        <td style="padding:8px;border:1px solid #ddd">${s.episodes}</td>
+        <td style="padding:8px;border:1px solid #ddd">${s.views}</td>
+        <td style="padding:8px;border:1px solid #ddd">₹${revenueShare.toLocaleString('en-IN')}</td>
+        <td style="padding:8px;border:1px solid #ddd">${s.sharePct}%</td>
+        <td style="padding:8px;border:1px solid #ddd;font-weight:700;color:#b45309">₹${producerAmt.toLocaleString('en-IN')}</td>
+        <td style="padding:8px;border:1px solid #ddd">₹${platformAmt.toLocaleString('en-IN')}</td>
+      </tr>`;
+    }).join('');
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>ReelRamp Content Revenue Report</title>
+    <style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h1{margin:0}table{border-collapse:collapse;width:100%;margin-top:18px}th{background:#111;color:#fff;padding:10px;text-align:left}td{font-size:13px}.head{display:flex;align-items:center;gap:16px}.badge{background:#c5a26f;padding:6px 14px;border-radius:999px;font-weight:900}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}.stat{border:1px solid #eee;border-radius:16px;padding:14px}.stat b{font-size:22px} .footer{margin-top:24px;font-size:12px;color:#666}</style>
+    </head><body>
+    <div class="head"><div style="width:52px;height:52px;background:#c5a26f;border-radius:16px;display:grid;place-items:center;font-weight:900;font-size:22px">RR</div>
+    <div><h1>ReelRamp Pro</h1><div>Content Revenue & Producer Share Report</div></div>
+    <div style="margin-left:auto"><span class="badge">${new Date().toLocaleDateString('en-IN')}</span></div></div>
+
+    <div class="stats">
+      <div class="stat"><div>Total Revenue</div><b>₹${totalRevenue.toLocaleString('en-IN')}</b></div>
+      <div class="stat"><div>Active Subscriptions</div><b>${activeSubsCount}</b></div>
+      <div class="stat"><div>Total Videos</div><b>${videos_all.length}</b></div>
+      <div class="stat"><div>Content Series</div><b>${series_all.length}</b></div>
+    </div>
+
+    <h2 style="margin-top:28px">Series-wise Revenue Share</h2>
+    <table>
+      <thead><tr><th>Series</th><th>Episodes</th><th>Views</th><th>Allocated Revenue</th><th>Producer %</th><th>Producer Share</th><th>Platform Share</th></tr></thead>
+      <tbody>${htmlRows || '<tr><td colspan="7" style="padding:16px;text-align:center;color:#888">No series data available.</td></tr>'}</tbody>
+    </table>
+
+    <div class="footer">
+      <p><b>ReelRamp Originals Pvt. Ltd.</b><br>
+      FF Shop No. 6, Arohi Arcade, Munshipulia, Lucknow - 226016<br>
+      reelramporiginal@gmail.com · +91 7307493338</p>
+      <p>Generated: ${new Date().toLocaleString('en-IN')}</p>
+      <p><i>Note: Revenue allocation is calculated pro-rata based on content views. Producer share percentage is configurable per series in Admin → Series.</i></p>
+    </div>
+    <script>window.onload=()=>window.print()</script>
+    </body></html>`;
+    const w = window.open('','_blank');
+    if (w) { w.document.write(html); w.document.close(); }
+  };
+
   const exp = () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
@@ -1937,6 +2028,7 @@ function Admin() {
 
   const tabs = [
     { id: 'dashboard', label: '📊 Dashboard' },
+    { id: 'revenuReport', label: '📑 Revenue PDF' },
     { id: 'videos', label: '🎬 Videos' },
     { id: 'series', label: '📺 Series' },
     { id: 'categories', label: '🏷️ Categories' },
@@ -2247,50 +2339,98 @@ function Admin() {
         </div>
       )}
 
-      {/* ── STORAGE ── */}
+      {/* ── STORAGE (Hybrid setup: Images → Supabase, Videos → Bunny.net) ── */}
       {tab === 'storage' && (
         <div className="panel space-y-5">
           <h2 className="adminh"><HardDrive /> Storage & CDN Settings</h2>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            {(['bunny', 'supabase', 'local'] as const).map(p => (
-              <button key={p} onClick={() => setSt(prev => ({ ...prev, provider: p }))}
-                className={`rounded-3xl border-2 p-5 text-left transition ${st.provider === p ? 'border-[var(--rr-primary)] bg-orange-50' : 'border-zinc-200 bg-white hover:border-zinc-300'}`}>
-                <div className="text-2xl mb-2">{p === 'bunny' ? '🐰' : p === 'supabase' ? '⚡' : '💾'}</div>
-                <h3 className="font-black capitalize">{p === 'bunny' ? 'Bunny.net CDN' : p === 'supabase' ? 'Supabase Storage' : 'Local / URL'}</h3>
-                <p className="text-xs text-zinc-500 mt-1">{p === 'bunny' ? 'Best for video — global CDN' : p === 'supabase' ? 'Supabase bucket' : 'Direct URLs use karein'}</p>
-              </button>
-            ))}
+          <div className="rounded-3xl bg-gradient-to-br from-orange-50 to-blue-50 border-2 border-orange-200 p-5">
+            <h3 className="font-black text-lg mb-3">🛠 Hybrid Storage Setup</h3>
+            <div className="grid gap-3 md:grid-cols-2 text-sm">
+              <div className="rounded-2xl bg-white p-4">
+                <p className="font-black text-blue-700">🖼️ Images → Supabase Storage</p>
+                <p className="text-zinc-600 mt-1">Logos, thumbnails, banners, posters — Supabase se fast load & free tier.</p>
+              </div>
+              <div className="rounded-2xl bg-white p-4">
+                <p className="font-black text-orange-700">🎬 Videos → Bunny.net CDN</p>
+                <p className="text-zinc-600 mt-1">Large video files — Bunny Stream se global fast delivery.</p>
+              </div>
+            </div>
           </div>
 
-          {st.provider === 'bunny' && (
-            <div className="rounded-3xl bg-orange-50 border border-orange-200 p-5 space-y-4">
-              <h3 className="font-black text-orange-800 flex items-center gap-2"><Zap size={16} /> Bunny.net Configuration</h3>
-              <div className="rounded-2xl bg-white p-4 text-sm space-y-1">
-                <p className="font-black text-orange-700">Setup Guide:</p>
-                <p>1. <a href="https://panel.bunny.net" target="_blank" className="underline">panel.bunny.net</a> → Storage Zones → New Zone</p>
-                <p>2. Storage Zone name aur password copy karein</p>
-                <p>3. Pull Zone banao → CDN URL copy karein</p>
-                <p>4. Stream Library banao → Library ID copy karein</p>
+          {/* Video Provider */}
+          <div className="rounded-3xl border border-zinc-200 p-5">
+            <h3 className="font-black mb-3 flex items-center gap-2">🎬 Video Storage Provider</h3>
+            <div className="grid gap-3 md:grid-cols-3">
+              {(['bunny','supabase','local'] as const).map(p=>(
+                <button key={p} type="button" onClick={()=>setSt(s=>({...s, videoProvider:p}))}
+                  className={`rounded-2xl border-2 p-4 text-left ${st.videoProvider===p?'border-[var(--rr-primary)] bg-orange-50':'border-zinc-200 bg-white hover:border-zinc-300'}`}>
+                  <div className="font-black capitalize">{p==='bunny'?'🐰 Bunny.net':p==='supabase'?'⚡ Supabase':'🔗 Direct URL'}</div>
+                  <p className="text-xs text-zinc-500 mt-0.5">{p==='bunny'?'Global CDN, best for video':p==='supabase'?'Supabase bucket':'Manual URL input'}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Image Provider */}
+          <div className="rounded-3xl border border-zinc-200 p-5">
+            <h3 className="font-black mb-3 flex items-center gap-2">🖼️ Image Storage Provider</h3>
+            <div className="grid gap-3 md:grid-cols-3">
+              {(['supabase','bunny','local'] as const).map(p=>(
+                <button key={p} type="button" onClick={()=>setSt(s=>({...s, imageProvider:p}))}
+                  className={`rounded-2xl border-2 p-4 text-left ${st.imageProvider===p?'border-[var(--rr-primary)] bg-blue-50':'border-zinc-200 bg-white hover:border-zinc-300'}`}>
+                  <div className="font-black capitalize">{p==='supabase'?'⚡ Supabase (Recommended)':p==='bunny'?'🐰 Bunny Storage':'🔗 Direct URL'}</div>
+                  <p className="text-xs text-zinc-500 mt-0.5">{p==='supabase'?'Fast integrated free tier':p==='bunny'?'Bunny storage':'Manual URL input'}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Bunny.net Configuration */}
+          <div className="rounded-3xl bg-orange-50 border border-orange-200 p-5 space-y-4">
+            <h3 className="font-black text-orange-800 flex items-center gap-2"><Zap size={16} /> Bunny.net Configuration (Video)</h3>
+            <div className="rounded-2xl bg-white p-4 text-sm">
+              <p className="font-black text-orange-700">Setup Guide:</p>
+              <ol className="list-decimal list-inside space-y-1 text-zinc-600 mt-2">
+                <li><a href="https://panel.bunny.net" target="_blank" rel="noopener noreferrer" className="underline text-orange-600 font-bold">panel.bunny.net</a> → Storage Zones → Add New Zone</li>
+                <li>Storage Zone name + Access Password copy karo</li>
+                <li>Pull Zone banao (CDN URL milega)</li>
+                <li>Stream Library banao (Library ID + API key milenge)</li>
+              </ol>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div><label className="label">Storage Zone Name</label><input className="input" value={st.bunnyStorageZone || ''} onChange={e=>setSt(s=>({...s, bunnyStorageZone:e.target.value}))} placeholder="reelramp-videos" /></div>
+              <div><label className="label">Storage Zone Password</label><input className="input" type="password" value={st.bunnyStoragePassword || ''} onChange={e=>setSt(s=>({...s, bunnyStoragePassword:e.target.value}))} placeholder="AccessKey from Bunny panel" /></div>
+              <div><label className="label">CDN Pull Zone URL</label><input className="input" value={st.bunnyCdnUrl || ''} onChange={e=>setSt(s=>({...s, bunnyCdnUrl:e.target.value}))} placeholder="https://reelramp.b-cdn.net" /></div>
+              <div><label className="label">Stream Library ID</label><input className="input" value={st.bunnyLibraryId || ''} onChange={e=>setSt(s=>({...s, bunnyLibraryId:e.target.value}))} placeholder="12345" /></div>
+              <div className="md:col-span-2"><label className="label">Bunny Stream API Key (optional)</label><input className="input" type="password" value={st.bunnyApiKey || ''} onChange={e=>setSt(s=>({...s, bunnyApiKey:e.target.value}))} placeholder="API key for Stream API" /></div>
+            </div>
+          </div>
+
+          {/* Supabase Storage Configuration */}
+          <div className="rounded-3xl bg-blue-50 border border-blue-200 p-5 space-y-4">
+            <h3 className="font-black text-blue-800 flex items-center gap-2"><Database size={16} /> Supabase Storage (Images)</h3>
+            <div className="rounded-2xl bg-white p-4 text-sm">
+              <p className="font-black text-blue-700">Setup:</p>
+              <ol className="list-decimal list-inside space-y-1 text-zinc-600 mt-2">
+                <li>Supabase Dashboard → Storage → Create Buckets: <code className="bg-zinc-100 px-1 rounded">images</code> & <code className="bg-zinc-100 px-1 rounded">videos</code></li>
+                <li>Buckets ko Public set karo (Settings → Public buckets)</li>
+                <li>RLS policies enable karo: <code className="bg-zinc-100 px-1 rounded text-xs">true</code> (open read + insert)</li>
+              </ol>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="label">Image Bucket Name</label>
+                <input className="input" value={st.supabaseImageBucket || 'images'} onChange={e=>setSt(s=>({...s, supabaseImageBucket:e.target.value}))} placeholder="images" />
               </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div><label className="label">Storage Zone Name</label><input className="input" value={st.bunnyStorageZone || ''} onChange={e => setSt(prev => ({ ...prev, bunnyStorageZone: e.target.value }))} placeholder="my-zone" /></div>
-                <div><label className="label">Storage Zone Password (FTP)</label><input className="input" type="password" value={st.bunnyStoragePassword || ''} onChange={e => setSt(prev => ({ ...prev, bunnyStoragePassword: e.target.value }))} placeholder="Password" /></div>
-                <div><label className="label">CDN Pull Zone URL</label><input className="input" value={st.bunnyCdnUrl || ''} onChange={e => setSt(prev => ({ ...prev, bunnyCdnUrl: e.target.value }))} placeholder="https://myzone.b-cdn.net" /></div>
-                <div><label className="label">Stream Library ID</label><input className="input" value={st.bunnyLibraryId || ''} onChange={e => setSt(prev => ({ ...prev, bunnyLibraryId: e.target.value }))} placeholder="12345" /></div>
-                <div className="md:col-span-2"><label className="label">Bunny API Key (optional)</label><input className="input" type="password" value={st.bunnyApiKey || ''} onChange={e => setSt(prev => ({ ...prev, bunnyApiKey: e.target.value }))} placeholder="API key for advanced operations" /></div>
+              <div>
+                <label className="label">Video Fallback Bucket</label>
+                <input className="input" value={st.supabaseBucket || 'videos'} onChange={e=>setSt(s=>({...s, supabaseBucket:e.target.value}))} placeholder="videos" />
               </div>
             </div>
-          )}
+          </div>
 
-          {st.provider === 'supabase' && (
-            <div className="rounded-3xl bg-blue-50 border border-blue-200 p-5 space-y-4">
-              <h3 className="font-black text-blue-800 flex items-center gap-2"><Database size={16} /> Supabase Storage</h3>
-              <div><label className="label">Storage Bucket Name</label><input className="input" value={st.supabaseBucket || ''} onChange={e => setSt(prev => ({ ...prev, supabaseBucket: e.target.value }))} placeholder="videos" /></div>
-            </div>
-          )}
-
-          <button disabled={saveBusy} className="save w-full disabled:opacity-60" onClick={() => saveSetting('storage', st)}>
+          <button disabled={saveBusy} type="button" className="save w-full disabled:opacity-60" onClick={() => saveSetting('storage', st)}>
             {saveBusy ? <Loader2 className="animate-spin" size={18} /> : <Save size={16} />} Save Storage Settings
           </button>
         </div>
@@ -2390,16 +2530,19 @@ function VideoManager({ storage, categories }: { storage: StorageConfig; categor
 
         {/* Video Upload */}
         <div className="rounded-3xl bg-zinc-50 border border-zinc-200 p-4 space-y-3">
-          <h3 className="font-black text-sm flex items-center gap-2"><Upload size={16} /> Video File</h3>
-          {storage.provider !== 'local' ? (
+          <h3 className="font-black text-sm flex items-center gap-2"><Upload size={16} /> Video File — {storage.videoProvider === 'bunny' ? '🐰 Bunny.net CDN' : storage.videoProvider === 'supabase' ? '⚡ Supabase' : 'URL only'}</h3>
+          {storage.videoProvider !== 'local' ? (
             <FileUploader
               accept="video/*"
               label="Video Upload"
               storage={storage}
+              kind="video"
               onUrl={url => setForm((prev: any) => ({ ...prev, video_filename: url }))}
-              hint="MP4 format best. Max 500MB."
+              hint={storage.videoProvider === 'bunny' ? 'Bunny CDN: MP4 best. Auto CDN.' : 'Supabase bucket upload'}
             />
-          ) : null}
+          ) : (
+            <p className="text-xs text-zinc-500">Admin → ☁️ Storage tab mein provider configure karein.</p>
+          )}
           <div>
             <label className="label">Video URL / Filename</label>
             <input className="input font-mono text-xs" value={form.video_filename || ''} onChange={e => setForm((prev: any) => ({ ...prev, video_filename: e.target.value }))} placeholder="https://... ya filename.mp4" />
@@ -2416,14 +2559,15 @@ function VideoManager({ storage, categories }: { storage: StorageConfig; categor
 
         {/* Thumbnail Upload */}
         <div className="rounded-3xl bg-zinc-50 border border-zinc-200 p-4 space-y-3">
-          <h3 className="font-black text-sm flex items-center gap-2"><Image size={16} /> Thumbnail</h3>
-          {storage.provider !== 'local' && (
+          <h3 className="font-black text-sm flex items-center gap-2"><Image size={16} /> Thumbnail — {storage.imageProvider === 'supabase' ? '⚡ Supabase' : storage.imageProvider === 'bunny' ? '🐰 Bunny' : 'URL'}</h3>
+          {storage.imageProvider !== 'local' && (
             <FileUploader
               accept="image/*"
               label="Thumbnail Upload"
               storage={storage}
+              kind="image"
               onUrl={url => setForm((prev: any) => ({ ...prev, thumbnail_url: url }))}
-              hint="3:4 ratio best. JPG/PNG."
+              hint="3:4 ratio best. JPG/PNG. Auto → Supabase."
             />
           )}
           <div>
@@ -2554,14 +2698,14 @@ function Crud({
         {fields.map(k => {
           if (imageFields.includes(k)) return (
             <div key={k} className="space-y-2">
-              <FileUploader accept="image/*" label={k} storage={storageConfig} onUrl={url => setF((prev: any) => ({ ...prev, [k]: url }))} hint="Image upload" />
+              <FileUploader accept="image/*" label={k} storage={storageConfig} kind="image" onUrl={url => setF((prev: any) => ({ ...prev, [k]: url }))} hint="Image → Supabase" />
               <input className="input text-xs" value={f[k] || ''} onChange={e => setF((prev: any) => ({ ...prev, [k]: e.target.value }))} placeholder={`${k} URL`} />
               {f[k] && <img src={f[k]} alt="" className="h-24 rounded-xl object-cover border" />}
             </div>
           );
           if (videoFields.includes(k)) return (
             <div key={k} className="space-y-2">
-              <FileUploader accept="video/*" label={k} storage={storageConfig} onUrl={url => setF((prev: any) => ({ ...prev, [k]: url }))} hint="Video upload" />
+              <FileUploader accept="video/*" label={k} storage={storageConfig} kind="video" onUrl={url => setF((prev: any) => ({ ...prev, [k]: url }))} hint="Video → Bunny CDN" />
               <input className="input text-xs font-mono" value={f[k] || ''} onChange={e => setF((prev: any) => ({ ...prev, [k]: e.target.value }))} placeholder={`${k} URL`} />
             </div>
           );
