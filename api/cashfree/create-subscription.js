@@ -41,9 +41,18 @@ export default async function handler(req, res) {
       ? 'sandbox.cashfree.com' 
       : 'api.cashfree.com';
 
+    // Dynamic trial setup from body or fallback to ₹1, ₹399 quarterly
+    const { 
+      trial_price = 1, 
+      recurring_price = 399, 
+      trial_days = 2, 
+      intervals = 3, 
+      interval_type = 'MONTH' 
+    } = req.body;
+
     // Step 1: Create or fetch a Plan dynamically (Periodic Quarterly or Monthly auto-pay)
     // Kuku FM style: ₹1 Trial first day, then auto-pay ₹399/quarterly
-    const uniquePlanId = plan_id || `rr_autopay_399_quarterly`;
+    const uniquePlanId = plan_id || `rr_autopay_${recurring_price}_${intervals}_${interval_type.toLowerCase()}`;
     const planUrl = `https://${host}/pg/plans`;
 
     // Try to create plan (will succeed if not exists, Cashfree allows creation with unique plan_id)
@@ -59,15 +68,15 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           plan_id: uniquePlanId,
-          plan_name: 'ReelRamp Auto-Pay Trial Offer',
+          plan_name: `ReelRamp Auto-Pay Trial Offer ₹${trial_price}`,
           plan_type: 'PERIODIC',
           plan_currency: 'INR',
-          plan_recurring_amount: 399, // Next charging amount after trial
-          plan_max_amount: 399,
+          plan_recurring_amount: Number(recurring_price), // Next charging amount after trial
+          plan_max_amount: Number(recurring_price),
           plan_max_cycles: 99,
-          plan_intervals: 3, // Charged every 3 months (Quarterly)
-          plan_interval_type: 'MONTH',
-          plan_note: '₹1 Trial for 2 days, then auto-pay ₹399 every quarter'
+          plan_intervals: Number(intervals), 
+          plan_interval_type: interval_type,
+          plan_note: `₹${trial_price} Trial for ${trial_days} days, then auto-pay ₹${recurring_price} recurring`
         })
       });
     } catch (e) {
@@ -82,9 +91,9 @@ export default async function handler(req, res) {
     const expiry = new Date();
     expiry.setFullYear(expiry.getFullYear() + 10);
 
-    // Calculate first charge time (Kuku FM style: e.g. after 2 days of trial)
+    // Calculate first charge time (Kuku FM style: e.g. after trial days)
     const firstCharge = new Date();
-    firstCharge.setDate(firstCharge.getDate() + 2); // 2 Days trial
+    firstCharge.setDate(firstCharge.getDate() + Number(trial_days));
 
     const subPayload = {
       subscription_id,
@@ -98,7 +107,7 @@ export default async function handler(req, res) {
         plan_id: uniquePlanId
       },
       authorization_details: {
-        authorization_amount: 1, // Pay ₹1 today to verify and start trial
+        authorization_amount: Number(trial_price), // Pay trial price today to verify and start trial
         authorization_amount_refund: false, // Don't refund as it is the trial charge
         payment_methods: ['upi', 'card'] // Kuku FM style (UPI mandate / Cards)
       },
