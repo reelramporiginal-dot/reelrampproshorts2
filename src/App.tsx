@@ -1880,12 +1880,14 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
     (p: any) => p.is_active && (p.supports_autorenew || p.name.toLowerCase().includes('trial') || p.name.toLowerCase().includes('auto'))
   );
 
-  // Read pricing details from activeTrialPlan or fall back to default ₹1 trial / ₹399 quarterly
-  const trialPrice = activeTrialPlan ? Number(activeTrialPlan.price) : 1;
-  const trialDays = activeTrialPlan ? Number(activeTrialPlan.trial_days || 2) : 2;
-  const recurringPrice = activeTrialPlan?.features?.recurring_price 
+  // Read pricing details from activeTrialPlan dynamically or fall back STRICTLY to ₹1 trial / ₹399 quarterly
+  // This avoids accidental selection of normal 699 plans as trial!
+  const isTrialPlan = activeTrialPlan && (activeTrialPlan.supports_autorenew || activeTrialPlan.name.toLowerCase().includes('trial') || activeTrialPlan.name.toLowerCase().includes('auto'));
+  const trialPrice = isTrialPlan ? Number(activeTrialPlan.price) : 1;
+  const trialDays = isTrialPlan ? Number(activeTrialPlan.trial_days || 2) : 2;
+  const recurringPrice = isTrialPlan && activeTrialPlan?.features?.recurring_price 
     ? Number(activeTrialPlan.features.recurring_price) 
-    : (activeTrialPlan ? Number(activeTrialPlan.price) * 4 : 399); // dynamic calculation or fallback
+    : 399; // Strict Kuku FM style auto-pay standard fallback of ₹399/quarterly
 
   const promo = (data.promo_campaigns || []).find((p: any) => p.is_active && p.placement === 'app_open');
 
@@ -1920,56 +1922,81 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
       return;
     }
 
-    try {
-      // Trigger Cashfree Subscription flow directly!
-      await openCashfreeSubscription({
-        appId: defaultGw.keys.appId || '',
-        secretKey: defaultGw.keys.secretKey || '',
-        testMode: defaultGw.testMode,
-        planId: activeTrialPlan?.cf_plan_id || `rr_autopay_${recurringPrice}_3_month`,
-        userId: guestId,
-        userName: getBestDisplayName(user),
-        userEmail: user?.email || `${guestId}@reelramp.com`,
-        userPhone: phone,
-        trialPrice,
-        recurringPrice,
-        trialDays,
-        intervals: 3, // quarterly (charged every 3 months)
-        intervalType: 'MONTH',
-        onSuccess: async ({ subscriptionId }) => {
-          // Activate Plan in Supabase
-          const expiresAt = new Date(Date.now() + (activeTrialPlan?.duration_days || 90) * 86400000).toISOString();
-          
-          await mutate('payments', 'POST', {
-            user_id: guestId, plan_id: activeTrialPlan?.id || 1, amount: trialPrice,
-            gateway: 'Cashfree Autopay', status: 'success', notes: `Auto-Pay Trial Start: ${activeTrialPlan?.name || 'Trial Plan'}`,
-            transaction_id: subscriptionId, cf_payment_id: subscriptionId
-          });
+    const planName = isTrialPlan ? activeTrialPlan.name : '1 Day Trial Offer';
+    const planId = isTrialPlan ? activeTrialPlan.id : 1;
+    const planDuration = isTrialPlan ? (activeTrialPlan.duration_days || 90) : 90;
 
-          await mutate('subscriptions', 'POST', {
-            user_id: guestId, plan: activeTrialPlan?.name || 'Trial Plan', plan_id: activeTrialPlan?.id || 1,
-            status: 'active', expires_at: expiresAt, auto_renew: true,
-            renewal_date: expiresAt, gateway: 'Cashfree Autopay', cf_subscription_id: subscriptionId
-          });
+    // Common activation after any successful payment
+    const activate = async (txnId: string, gatewayLabel: string, autoRenew: boolean) => {
+      const expiresAt = new Date(Date.now() + planDuration * 86400000).toISOString();
+      await mutate('payments', 'POST', {
+        user_id: guestId, plan_id: planId, amount: trialPrice,
+        gateway: gatewayLabel, status: 'success', notes: `Trial Start: ${planName}`,
+        transaction_id: txnId, cf_payment_id: txnId
+      });
+      await mutate('subscriptions', 'POST', {
+        user_id: guestId, plan: planName, plan_id: planId,
+        status: 'active', expires_at: expiresAt, auto_renew: autoRenew,
+        renewal_date: expiresAt, gateway: gatewayLabel, cf_subscription_id: autoRenew ? txnId : null
+      });
+      if (phone && user?.id) await mutate('users', 'PUT', { id: user.id, phone }).catch(() => { });
+      addNotif({
+        title: 'Plan Activated! 🎉', type: 'success',
+        message: `${planName} successfully active ho gaya hai.`,
+        target: 'user', is_active: true
+      });
+      setOpen(false); setShowCheckout(false); setBusy(false);
+      window.location.reload();
+    };
 
-          if (phone && user?.id) await mutate('users', 'PUT', { id: user.id, phone }).catch(() => { });
-
-          addNotif({
-            title: 'Trial Plan Activated! 🎉', type: 'success',
-            message: `${activeTrialPlan?.name || 'Trial Plan'} successfully active ho gaya hai.`,
-            target: 'user', is_active: true
-          });
-
-          setOpen(false);
-          setShowCheckout(false);
-          setBusy(false);
-          window.location.reload(); // Refresh app to instantly unlock everything
-        },
+    // Fallback: one-time ₹trial payment if autopay/subscription not available
+    const fallbackOneTime = async () => {
+      setErr('Auto-Pay available nahi — ek baar ka payment use kar rahe hain…');
+      await openCashfreeCheckout({
+        appId: defaultGw.keys.appId || '', secretKey: defaultGw.keys.secretKey || '',
+        testMode: defaultGw.testMode, amount: trialPrice, planName,
+        userId: guestId, userName: getBestDisplayName(user),
+        userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
+        onSuccess: async ({ paymentId }) => { await activate(paymentId, 'Cashfree', false); },
         onFailure: (err) => { setErr(err); setBusy(false); }
       });
-    } catch (e: any) {
-      setErr(e.message);
-      setBusy(false);
+    };
+
+    // Check if Auto-Pay is enabled by admin (default: OFF until Cashfree subscriptions active)
+    const autopayEnabled = !!(payment as any).autopayEnabled;
+
+    if (autopayEnabled) {
+      // Try Cashfree Subscription (Auto-Pay) first, fallback to one-time
+      try {
+        await openCashfreeSubscription({
+          appId: defaultGw.keys.appId || '',
+          secretKey: defaultGw.keys.secretKey || '',
+          testMode: defaultGw.testMode,
+          planId: `rr_autopay_${recurringPrice}_3_month`,
+          userId: guestId,
+          userName: getBestDisplayName(user),
+          userEmail: user?.email || `${guestId}@reelramp.com`,
+          userPhone: phone,
+          trialPrice, recurringPrice, trialDays,
+          intervals: 3, intervalType: 'MONTH',
+          onSuccess: async ({ subscriptionId }) => { await activate(subscriptionId, 'Cashfree Autopay', true); },
+          onFailure: async (_err) => { await fallbackOneTime(); }
+        });
+      } catch (e: any) {
+        try { await fallbackOneTime(); } catch { setErr(e.message); setBusy(false); }
+      }
+    } else {
+      // Auto-Pay not yet enabled — use simple ₹trial one-time payment (works immediately!)
+      try {
+        await openCashfreeCheckout({
+          appId: defaultGw.keys.appId || '', secretKey: defaultGw.keys.secretKey || '',
+          testMode: defaultGw.testMode, amount: trialPrice, planName,
+          userId: guestId, userName: getBestDisplayName(user),
+          userEmail: user?.email || `${guestId}@reelramp.com`, userPhone: phone,
+          onSuccess: async ({ paymentId }) => { await activate(paymentId, 'Cashfree', false); },
+          onFailure: (err) => { setErr(err); setBusy(false); }
+        });
+      } catch (e: any) { setErr(e.message); setBusy(false); }
     }
   };
 
@@ -2092,7 +2119,7 @@ function PromoVideoModal({ go }: { go: (t: string) => void }) {
                 
                 <div className="rounded-2xl bg-zinc-800 p-4 flex justify-between items-center text-sm">
                   <div>
-                    <p className="font-bold text-white">{activeTrialPlan?.name || 'Trial Autopay Plan'}</p>
+                    <p className="font-bold text-white">{isTrialPlan ? activeTrialPlan.name : '1 Day Trial Offer'}</p>
                     <p className="text-xs text-zinc-400">Pay ₹{trialPrice} now, then auto-pay ₹{recurringPrice} after {trialDays} days</p>
                   </div>
                   <span className="text-lg font-black text-green-400">₹{trialPrice}</span>
@@ -2842,6 +2869,22 @@ function Admin() {
                 <div><label className="label">Monthly Base Price (₹)</label><input className="input" type="number" value={pay.monthlyPrice || ''} onChange={e => setPay(prev => ({ ...prev, monthlyPrice: Number(e.target.value) }))} /></div>
               </div>
               <div><label className="label">Payment Instructions</label><textarea className="input min-h-20" value={pay.instructions || ''} onChange={e => setPay(prev => ({ ...prev, instructions: e.target.value }))} placeholder="UPI se payment karein aur UTR WhatsApp par bhejein." /></div>
+
+              {/* Auto-Pay Toggle */}
+              <div className={`rounded-2xl border-2 p-4 ${(pay as any).autopayEnabled ? 'border-green-300 bg-green-50' : 'border-zinc-200 bg-zinc-50'}`}>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input type="checkbox" checked={!!(pay as any).autopayEnabled}
+                    onChange={e => setPay(prev => ({ ...(prev as any), autopayEnabled: e.target.checked }))}
+                    className="h-5 w-5 mt-0.5" />
+                  <div>
+                    <p className="font-black text-sm">🔄 Auto-Pay (Subscription / eNACH) Enable karein</p>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      <b>OFF rakho</b> jab tak Cashfree par Subscriptions activate na ho — tab ₹1 trial ek-baar ka payment se chalega.
+                      Jab Cashfree Subscriptions enable ho jaye, toh yahan <b>ON</b> kar do — auto-pay khud chalu ho jayega!
+                    </p>
+                  </div>
+                </label>
+              </div>
             </div>
 
             <button disabled={saveBusy} className="save w-full mt-4 disabled:opacity-60" onClick={() => saveSetting('payment', pay)}>
