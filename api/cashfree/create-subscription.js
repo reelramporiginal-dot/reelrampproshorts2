@@ -1,163 +1,96 @@
-// api/cashfree/create-subscription.js
-// Vercel Serverless Function to safely create Cashfree Subscription (Auto-Pay e-mandate)
+// Creates a Cashfree auto-pay mandate. Recurring price must match an active plan; trial is capped.
+import { supabase } from '../_lib/supabase.js';
+import { setCors, getUser, fail } from '../_lib/auth.js';
+import { cfHost, cfHeaders, safeReturnUrl, cleanPhone } from '../_lib/cashfree.js';
+
+const INTERVAL_TYPES = ['DAY', 'WEEK', 'MONTH', 'YEAR'];
+const MAX_TRIAL_PRICE = 10;
+const MAX_TRIAL_DAYS = 7;
 
 export default async function handler(req, res) {
-  // CORS Headers
-    const o=req.headers.origin,al=(process.env.ALLOWED_ORIGINS||'').split(',');
-  if(o&&al.includes(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin');}
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
+  setCors(req, res);
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return fail(res, 405, 'Method not allowed');
 
   try {
-    const { plan_id, customer_details, return_url, testMode } = req.body;
+    const user = await getUser(req);
+    if (!user) return fail(res, 401, 'Login required');
 
-    const app_id = process.env.CASHFREE_APP_ID;
-    const secret_key = process.env.CASHFREE_SECRET_KEY;
+    const b = req.body || {};
+    const phone = cleanPhone(b.customer_details?.customer_phone);
+    if (phone.length < 10) return fail(res, 400, 'Mobile number must be exactly 10 digits.');
 
-    const cleanPhone = (customer_details?.customer_phone || '').replace(/\D/g, '').slice(-10);
-    const cleanEmail = (customer_details?.customer_email || '').trim() || 'user@reelramp.com';
-    const cleanName = (customer_details?.customer_name || '').trim() || 'ReelRamp User';
-    const cleanId = (customer_details?.customer_id || '').trim() || 'guest_user';
+    const appId = process.env.CASHFREE_APP_ID;
+    const secret = process.env.CASHFREE_SECRET_KEY;
+    if (!appId || !secret) return fail(res, 500, 'Payment gateway not configured');
 
-    if (cleanPhone.length < 10) {
-      return res.status(400).json({ message: 'Validation failed: Mobile number must be exactly 10 digits.' });
-    }
+    const recurring = Number(b.recurring_price);
+    const { data: plan } = await supabase.from('plans').select('*').eq('price', recurring).eq('is_active', true).limit(1).maybeSingle();
+    if (!plan) return fail(res, 400, 'Unknown plan or price');
 
-    if (!app_id || !secret_key) return res.status(500).json({ error: 'Payment gateway not configured' });
-    const isProdKey = secret_key.startsWith('cfsk_ma_prod_') || secret_key.startsWith('cfsk_prod_');
-    const actualTestMode = isProdKey ? false : !!testMode;
+    const trialPrice = Math.min(Math.max(Number(b.trial_price ?? 1), 1), MAX_TRIAL_PRICE);
+    const trialDays = Math.min(Math.max(parseInt(b.trial_days ?? 2, 10) || 0, 0), MAX_TRIAL_DAYS);
+    const intervals = Math.min(Math.max(parseInt(b.intervals ?? 1, 10) || 1, 1), 12);
+    const intervalType = INTERVAL_TYPES.includes(String(b.interval_type)) ? String(b.interval_type) : 'MONTH';
 
-    const host = actualTestMode 
-      ? 'sandbox.cashfree.com' 
-      : 'api.cashfree.com';
+    const host = cfHost(secret, b.testMode);
+    const hdr = cfHeaders(appId, secret);
 
-    // Dynamic trial setup from body or fallback to ₹1, ₹399 quarterly
-    const { 
-      trial_price = 1, 
-      recurring_price = 399, 
-      trial_days = 2, 
-      intervals = 3, 
-      interval_type = 'MONTH' 
-    } = req.body;
-
-    // Step 1: Create a FRESH unique Plan every time (guaranteed to exist!)
-    // This completely eliminates "Plan does not exist" error.
-    const planUrl = `https://${host}/pg/plans`;
-    // Generate a brand-new unique plan id with timestamp so it ALWAYS gets created fresh
-    let uniquePlanId = `rr_plan_${recurring_price}_${intervals}${interval_type.charAt(0)}_${Date.now()}`;
-
-    let planCreated = false;
-    try {
-      const planRes = await fetch(planUrl, {
-        method: 'POST',
-        headers: {
-          'accept': 'application/json',
-          'content-type': 'application/json',
-          'x-client-id': app_id,
-          'x-client-secret': secret_key,
-          'x-api-version': '2023-08-01'
-        },
-        body: JSON.stringify({
-          plan_id: uniquePlanId,
-          plan_name: `ReelRamp Auto-Pay ₹${recurring_price}`,
-          plan_type: 'PERIODIC',
-          plan_currency: 'INR',
-          plan_recurring_amount: Number(recurring_price),
-          plan_max_amount: Number(recurring_price),
-          plan_max_cycles: 99,
-          plan_intervals: Number(intervals),
-          plan_interval_type: interval_type,
-          plan_note: `Trial then auto-pay ₹${recurring_price}`
-        })
-      });
-      const planData = await planRes.json();
-      console.log('Plan creation response:', planRes.status, planData);
-      // Confirm plan exists — if created OR already active, mark as good
-      if (planRes.ok || planData.plan_status === 'ACTIVE' || (planData.plan_id)) {
-        planCreated = true;
-        if (planData.plan_id) uniquePlanId = planData.plan_id;
-      }
-    } catch (e) {
-      console.log('Plan creation network error:', e);
-    }
-
-    if (!planCreated) {
-      return res.status(400).json({ message: 'Cashfree plan create nahi ho paya. Keys ya account check karein. (Plan setup failed)' });
-    }
-
-    // Step 2: Create Subscription (Mandate)
-    const subUrl = `https://${host}/pg/subscriptions`;
-    const subscription_id = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-
-    // Calculate expiry (10 years from now)
-    const expiry = new Date();
-    expiry.setFullYear(expiry.getFullYear() + 10);
-
-    // Calculate first charge time (Kuku FM style: e.g. after trial days)
-    const firstCharge = new Date();
-    firstCharge.setDate(firstCharge.getDate() + Number(trial_days));
-
-    const subPayload = {
-      subscription_id,
-      customer_details: {
-        customer_id: cleanId,
-        customer_name: cleanName,
-        customer_email: cleanEmail,
-        customer_phone: cleanPhone
-      },
-      plan_details: {
-        plan_id: uniquePlanId
-      },
-      authorization_details: {
-        authorization_amount: Number(trial_price), // Pay trial price today to verify and start trial
-        authorization_amount_refund: false, // Don't refund as it is the trial charge
-        payment_methods: ['upi', 'card'] // Kuku FM style (UPI mandate / Cards)
-      },
-      subscription_meta: {
-        return_url: return_url || `${req.headers.origin || 'https://reelrampro.com'}?cf_sub=${subscription_id}`
-      },
-      subscription_expiry_time: expiry.toISOString().split('.')[0] + '+05:30',
-      subscription_first_charge_time: firstCharge.toISOString().split('.')[0] + '+05:30'
-    };
-
-    const response = await fetch(subUrl, {
-      method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'content-type': 'application/json',
-        'x-client-id': app_id,
-        'x-client-secret': secret_key,
-        'x-api-version': '2023-08-01'
-      },
-      body: JSON.stringify(subPayload)
+    const planId = `rr_plan_${recurring}_${intervals}${intervalType[0]}`;
+    const planRes = await fetch(`https://${host}/pg/plans`, {
+      method: 'POST', headers: hdr,
+      body: JSON.stringify({
+        plan_id: planId, plan_name: `ReelRamp Auto-Pay ${recurring}`, plan_type: 'PERIODIC', plan_currency: 'INR',
+        plan_recurring_amount: recurring, plan_max_amount: recurring, plan_max_cycles: 99,
+        plan_intervals: intervals, plan_interval_type: intervalType,
+      }),
     });
+    const planData = await planRes.json().catch(() => ({}));
+    // Plan id is deterministic now; "already exists" is fine.
+    const planOk = planRes.ok || planRes.status === 409 || /exist/i.test(String(planData?.message || ''));
+    if (!planOk) return fail(res, 502, 'Cashfree plan setup failed');
 
-    const data = await response.json();
+    const subId = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const expiry = new Date(); expiry.setFullYear(expiry.getFullYear() + 10);
+    const first = new Date(); first.setDate(first.getDate() + trialDays);
+    const iso = d => d.toISOString().split('.')[0] + '+05:30';
 
-    if (!response.ok) {
-      console.error('Cashfree subscription creation error payload:', data);
-      throw new Error(data.message || 'Failed to create subscription on Cashfree');
+    const { error: insErr } = await supabase.from('subscriptions').insert({
+      user_id: user.id, plan: plan.name, plan_id: plan.id, status: 'pending', expires_at: null,
+      provider: 'cashfree', provider_ref: subId, amount: recurring, trial_days: trialDays,
+    });
+    if (insErr) return fail(res, 500, 'Could not record subscription');
+
+    const r = await fetch(`https://${host}/pg/subscriptions`, {
+      method: 'POST', headers: hdr,
+      body: JSON.stringify({
+        subscription_id: subId,
+        customer_details: {
+          customer_id: user.id,
+          customer_name: String(b.customer_details?.customer_name || 'ReelRamp User').slice(0, 80),
+          customer_email: user.email || 'user@reelramp.com',
+          customer_phone: phone,
+        },
+        plan_details: { plan_id: planId },
+        authorization_details: { authorization_amount: trialPrice, authorization_amount_refund: false, payment_methods: ['upi', 'card'] },
+        subscription_meta: { return_url: safeReturnUrl(b.return_url, `?cf_sub=${subId}`) },
+        subscription_expiry_time: iso(expiry),
+        subscription_first_charge_time: iso(first),
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      await supabase.from('subscriptions').update({ status: 'failed' }).eq('provider_ref', subId);
+      console.error('cashfree subscription error:', data?.message);
+      return fail(res, 502, data?.message || 'Subscription create failed');
     }
-
     return res.status(200).json({
       subscription_id: data.subscription_id,
       sub_auth_url: data.subscription_meta?.sub_auth_url || data.sub_auth_url || '',
-      session_id: data.session_id || ''
+      session_id: data.session_id || '',
     });
-
-  } catch (error) {
-    console.error('Cashfree subscription error:', error);
-    return res.status(500).json({ message: error.message });
+  } catch (e) {
+    console.error('create-subscription error:', e.message);
+    return fail(res, 500, 'Internal server error');
   }
 }
