@@ -1,1 +1,20 @@
+@import url('https://fonts.googleapis.com/css2?family=Hind:wght@400;500;600;700&family=Tiro+Devanagari+Hindi&display=swap');
+
+/* Midnight Gold. Scoped to .rr2 so the legacy app is not affected. */
+.rr2 {
+  --bg: #0B0B10; --s1: #14141B; --s2: #1C1C26; --line: rgba(255,255,255,.09);
+  --tx: #F5F3EE; --dim: #C3C0C9; --gold: #C5A26F; --hi: #E8CB94; --lo: #8C6F3F;
+  --ember: #FF4F6D; --ok: #3DDC97; --ease: cubic-bezier(.2,.8,.2,1);
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--tx);
+  font-family: Hind, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  padding-top: env(safe-area-inset-top, 0px);
+  -webkit-tap-highlight-color: transparent;
+}
+.rr2 *, .rr2 *::before, .rr2 *::after { box-sizing: border-box; }
+.rr2 h1, .rr2 h2, .rr2 h3 { font-family: 'Tiro Devanagari Hindi', Georgia, serif; font-weight: 400; margin: 0; }
+.rr2 button { font-family: inherit; }
 
