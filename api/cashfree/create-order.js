@@ -1,98 +1,75 @@
-// api/cashfree/create-order.js
-// Vercel Serverless Function to safely create Cashfree Order
+// Creates a Cashfree order. Price comes from the `plans` table, never from the browser.
+import { supabase } from '../_lib/supabase.js';
+import { setCors, getUser, fail } from '../_lib/auth.js';
+import { cfHost, cfHeaders, safeReturnUrl, appUrl, cleanPhone } from '../_lib/cashfree.js';
 
 export default async function handler(req, res) {
-  // CORS Headers
-    const o=req.headers.origin,al=(process.env.ALLOWED_ORIGINS||'').split(',');
-  if(o&&al.includes(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin');}
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
+  setCors(req, res);
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return fail(res, 405, 'Method not allowed');
 
   try {
-    const { order_id, order_amount, order_currency, customer_details, order_meta, order_note, testMode } = req.body;
+    const user = await getUser(req);
+    if (!user) return fail(res, 401, 'Login required');
 
-    // Sanitize customer details - strictly formatted for Cashfree
-    const cleanPhone = (customer_details?.customer_phone || '').replace(/\D/g, '').slice(-10);
-    const cleanEmail = (customer_details?.customer_email || '').trim() || 'user@reelramp.com';
-    const cleanName = (customer_details?.customer_name || '').trim() || 'ReelRamp User';
-    const cleanId = (customer_details?.customer_id || '').trim() || 'guest_user';
+    const b = req.body || {};
+    const phone = cleanPhone(b.customer_details?.customer_phone);
+    if (phone.length < 10) return fail(res, 400, 'Mobile number must be exactly 10 digits.');
 
-    const sanitizedDetails = {
-      customer_id: cleanId,
-      customer_name: cleanName,
-      customer_email: cleanEmail,
-      customer_phone: cleanPhone
-    };
-
-    if (cleanPhone.length < 10) {
-      return res.status(400).json({ message: 'Validation failed: Mobile number must be exactly 10 digits without country code or spaces.' });
+    // Resolve plan: explicit plan_id, else an exact match on an active plan's price.
+    let plan = null;
+    if (b.plan_id) {
+      ({ data: plan } = await supabase.from('plans').select('*').eq('id', b.plan_id).eq('is_active', true).maybeSingle());
+    } else {
+      const amt = Number(b.order_amount);
+      if (Number.isFinite(amt) && amt > 0) {
+        ({ data: plan } = await supabase.from('plans').select('*').eq('price', amt).eq('is_active', true).limit(1).maybeSingle());
+      }
     }
+    if (!plan) return fail(res, 400, 'Unknown plan or price');
 
-    // Keys environment variables se aayengi (safest way!)
-    // Agar env vars blank hain, toh default keys used directly as secure backup
-    const app_id = process.env.CASHFREE_APP_ID;
-    const secret_key = process.env.CASHFREE_SECRET_KEY;
+    const appId = process.env.CASHFREE_APP_ID;
+    const secret = process.env.CASHFREE_SECRET_KEY;
+    if (!appId || !secret) return fail(res, 500, 'Payment gateway not configured');
+    if (!appUrl()) return fail(res, 500, 'APP_URL not configured');
 
-    // Enforce production mode if keys are live production keys
-    if (!app_id || !secret_key) return res.status(500).json({ error: 'Payment gateway not configured' });
-    const isProdKey = secret_key.startsWith('cfsk_ma_prod_') || secret_key.startsWith('cfsk_prod_');
-    const actualTestMode = isProdKey ? false : !!testMode;
+    const orderId = `rrp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    const host = actualTestMode 
-      ? 'sandbox.cashfree.com' 
-      : 'api.cashfree.com';
-
-    const url = `https://${host}/pg/orders`;
+    const { error: insErr } = await supabase.from('payments').insert({
+      user_id: user.id, plan_id: plan.id, amount: plan.price, gateway: 'cashfree',
+      status: 'pending', transaction_id: orderId, notes: String(plan.name || '').slice(0, 120),
+    });
+    if (insErr) return fail(res, 500, 'Could not record payment');
 
     const payload = {
-      order_id,
-      order_amount: Number(order_amount),
-      order_currency,
-      customer_details: sanitizedDetails,
-      order_meta: {
-        return_url: order_meta?.return_url || '',
-        notify_url: order_meta?.notify_url || ''
+      order_id: orderId,
+      order_amount: Number(plan.price),
+      order_currency: 'INR',
+      customer_details: {
+        customer_id: user.id,
+        customer_name: String(b.customer_details?.customer_name || 'ReelRamp User').slice(0, 80),
+        customer_email: user.email || 'user@reelramp.com',
+        customer_phone: phone,
       },
-      order_note: order_note || ''
+      order_meta: {
+        return_url: safeReturnUrl(b.order_meta?.return_url, '?cf_order={order_id}&cf_payment={payment_id}'),
+        notify_url: `${appUrl()}/api/cashfree/webhook`,
+      },
+      order_note: String(plan.name || '').slice(0, 120),
     };
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'content-type': 'application/json',
-        'x-client-id': app_id,
-        'x-client-secret': secret_key,
-        'x-api-version': '2023-08-01'
-      },
-      body: JSON.stringify(payload)
+    const r = await fetch(`https://${cfHost(secret, b.testMode)}/pg/orders`, {
+      method: 'POST', headers: cfHeaders(appId, secret), body: JSON.stringify(payload),
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error('Cashfree response error payload:', data);
-      throw new Error(data.message || data.error_description || 'Failed to create order on Cashfree');
+    const data = await r.json();
+    if (!r.ok) {
+      await supabase.from('payments').update({ status: 'failed' }).eq('transaction_id', orderId);
+      console.error('cashfree order error:', data?.message);
+      return fail(res, 502, data?.message || 'Order create failed');
     }
-
-    return res.status(200).json({
-      order_id: data.order_id,
-      payment_session_id: data.payment_session_id
-    });
-
-  } catch (error) {
-    console.error('Cashfree order error:', error);
-    return res.status(500).json({ message: error.message });
+    return res.status(200).json({ order_id: data.order_id, payment_session_id: data.payment_session_id });
+  } catch (e) {
+    console.error('create-order error:', e.message);
+    return fail(res, 500, 'Internal server error');
   }
 }
