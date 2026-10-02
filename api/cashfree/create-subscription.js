@@ -3,8 +3,8 @@
 
 export default async function handler(req, res) {
   // CORS Headers
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
+    const o=req.headers.origin,al=(process.env.ALLOWED_ORIGINS||'').split(',');
+  if(o&&al.includes(o)){res.setHeader('Access-Control-Allow-Origin',o);res.setHeader('Vary','Origin');}
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -22,8 +22,8 @@ export default async function handler(req, res) {
   try {
     const { plan_id, customer_details, return_url, testMode } = req.body;
 
-    const app_id = process.env.CASHFREE_APP_ID || '13027093ee54013453fbcb1eb089072031';
-    const secret_key = process.env.CASHFREE_SECRET_KEY || 'cfsk_ma_prod_23c0f05b2c2f34547eee4dc55405f3f1_50516b4a';
+    const app_id = process.env.CASHFREE_APP_ID;
+    const secret_key = process.env.CASHFREE_SECRET_KEY;
 
     const cleanPhone = (customer_details?.customer_phone || '').replace(/\D/g, '').slice(-10);
     const cleanEmail = (customer_details?.customer_email || '').trim() || 'user@reelramp.com';
@@ -34,6 +34,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ message: 'Validation failed: Mobile number must be exactly 10 digits.' });
     }
 
+    if (!app_id || !secret_key) return res.status(500).json({ error: 'Payment gateway not configured' });
     const isProdKey = secret_key.startsWith('cfsk_ma_prod_') || secret_key.startsWith('cfsk_prod_');
     const actualTestMode = isProdKey ? false : !!testMode;
 
