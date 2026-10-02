@@ -1,58 +1,16 @@
 import supabase from './supabase';
 
-type GoogleAuthMessage = {
-  type?: string;
-  access_token?: string;
-  refresh_token?: string;
-  id_token?: string;
-};
-
-const isMobile = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-function buildGoogleUrl(appName: string) {
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  const redirectUri = import.meta.env.VITE_GOOGLE_AUTH_PROXY;
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!clientId || !redirectUri) return null;
-  const state = btoa(JSON.stringify({ origin: window.location.origin, appName, supabaseUrl, supabaseAnonKey }));
-  return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=openid%20email%20profile&prompt=select_account&state=${encodeURIComponent(state)}`;
-}
-
-export function signInWithGoogle(appName = 'ReelRamp Pro') {
-  const url = buildGoogleUrl(appName);
-  if (!url) {
-    console.warn('[google-auth] Missing Google client/proxy configuration');
-    return;
-  }
-  window.open(url, 'google-auth', isMobile() ? '' : 'width=500,height=600');
-  const handler = async (event: MessageEvent<GoogleAuthMessage>) => {
-    if (event.data?.type === 'google-auth-denied') {
-      window.removeEventListener('message', handler as unknown as EventListener);
-      return;
-    }
-    if (event.data?.type !== 'google-auth-success') return;
-    window.removeEventListener('message', handler as unknown as EventListener);
-    if (event.data.access_token && event.data.refresh_token) {
-      const { error } = await supabase.auth.setSession({ access_token: event.data.access_token, refresh_token: event.data.refresh_token });
-      if (error) console.error('[google-auth] setSession failed:', error.message);
-    } else if (event.data.id_token) {
-      const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token: event.data.id_token });
-      if (error) console.error('[google-auth] signInWithIdToken failed:', error.message);
-    }
-  };
-  window.addEventListener('message', handler as unknown as EventListener);
-}
-
-export async function handleGoogleRedirect() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('google_id_token');
-  if (!token) return;
-  window.history.replaceState({}, '', window.location.pathname);
-  const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token });
+/** Same-tab Supabase OAuth: works on mobile, PWA and in-app browsers (no popup/proxy). */
+export async function signInWithGoogle(_appName = 'ReelRamp Pro') {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin, queryParams: { prompt: 'select_account' } },
+  });
   if (error) {
-    console.error('[google-auth] signInWithIdToken failed:', error.message);
-    return;
+    console.error('Google login failed:', error.message);
+    alert('Google login abhi nahi ho paya. Dobara try karein ya email se login karein.');
   }
-  try { window.close(); } catch {}
 }
+
+/** Kept for compatibility: Supabase (detectSessionInUrl) handles the return itself. */
+export async function handleGoogleRedirect() {}
