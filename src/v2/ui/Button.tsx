@@ -1,28 +1,26 @@
-import { NavLink } from 'react-router-dom';
-import { Home, Compass, Coins, User } from 'lucide-react';
+import type { ButtonHTMLAttributes } from 'react';
 
-const items = [
-  { to: '/v2', label: 'Home', Icon: Home, end: true },
-  { to: '/v2/explore', label: 'Explore', Icon: Compass },
-  { to: '/v2/rewards', label: 'Rewards', Icon: Coins },
-  { to: '/v2/profile', label: 'Profile', Icon: User },
-];
+type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'gold' | 'ghost' | 'quiet';
+  block?: boolean;
+  loading?: boolean;
+};
 
-export function BottomNav() {
+const base = 'inline-flex min-h-12 items-center justify-center gap-2 rounded-full px-6 font-body text-[16px] font-bold transition active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none';
+const variants = {
+  gold: 'bg-rr-gold text-[#14100A] shadow-[0_6px_24px_-8px_var(--gold)]',
+  ghost: 'border border-rr-line bg-rr-s1 text-rr-tx',
+  quiet: 'text-rr-hi',
+};
+
+export function Button({ variant = 'gold', block, loading, className = '', children, disabled, ...rest }: Props) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-rr-line bg-rr-bg/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
-      <ul className="mx-auto flex max-w-md">
-        {items.map(({ to, label, Icon, end }) => (
-          <li key={to} className="flex-1">
-            <NavLink to={to} end={end} className={({ isActive }) =>
-              `flex min-h-14 flex-col items-center justify-center gap-0.5 text-[13px] font-semibold ${isActive ? 'text-rr-gold' : 'text-rr-dim'}`}>
-              <Icon size={22} aria-hidden />
-              {label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <button
+      {...rest}
+      disabled={disabled || loading}
+      className={`${base} ${variants[variant]} ${block ? 'w-full' : ''} ${className}`}
+    >
+      {loading ? 'Ruko…' : children}
+    </button>
   );
 }
-
