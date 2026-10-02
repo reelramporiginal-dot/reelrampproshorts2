@@ -1,45 +1,19 @@
-// api/cashfree-webhook.js
-// Vercel Serverless Function to securely handle Cashfree Webhook / payment updates
+import crypto from 'node:crypto';
+export const config = { api: { bodyParser: false } };
+
+const readRaw = async (req) => { const c = []; for await (const x of req) c.push(x); return Buffer.concat(c).toString('utf8'); };
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
-
-  try {
-    const payload = req.body;
-    console.log('Cashfree webhook payload:', payload);
-
-    // Verify webhook signature (optional, safe for direct DB updates if you check order status on Cashfree API)
-    const orderId = payload?.data?.order?.order_id || payload?.order_id;
-    const paymentStatus = payload?.data?.payment?.payment_status || payload?.txStatus;
-    const eventTime = payload?.event_time || payload?.txTime;
-
-    // Handle Subscription events too
-    const subscriptionId = payload?.data?.subscription?.subscription_id || payload?.subscription_id;
-    const subStatus = payload?.data?.subscription?.subscription_status;
-
-    if (orderId && paymentStatus === 'SUCCESS') {
-      // payment complete logic
-      // If we are linked to supabase, we can insert directly into database tables
-      const userId = payload?.data?.customer_details?.customer_id || 'guest_user';
-      const amount = payload?.data?.order?.order_amount || 1;
-      
-      // Auto-update users and payments if database has direct connection.
-      // Webhook confirms payment update was safely received.
-    }
-
-    if (subscriptionId && (subStatus === 'ACTIVE' || subStatus === 'ACTIVATED')) {
-      const userId = payload?.data?.customer_details?.customer_id;
-      // Mark mandate as verified and active.
-    }
-
-    return res.status(200).json({ status: 'OK' });
-  } catch (error) {
-    console.error('Webhook error:', error);
-    return res.status(500).json({ error: error.message });
-  }
+  if (req.method !== 'POST') return res.status(405).end();
+  const secret = process.env.CASHFREE_SECRET_KEY;
+  if (!secret) return res.status(500).end();
+  const raw = await readRaw(req);
+  const ts = String(req.headers['x-webhook-timestamp'] || '');
+  const sig = String(req.headers['x-webhook-signature'] || '');
+  const expected = crypto.createHmac('sha256', secret).update(ts + raw).digest('base64');
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (!sig || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'bad signature' });
+  // Verified event. NEXT STAGE: store in webhook_events (unique event id) and grant entitlement server-side.
+  console.log('cashfree webhook verified:', JSON.parse(raw)?.type);
+  return res.status(200).json({ ok: true });
 }
