@@ -57,6 +57,34 @@ export function useFlag(kind: 'likes' | 'bookmarks', videoId: number | undefined
   return { on, loggedIn: !!userId, set: (next: boolean) => m.mutate(next) };
 }
 
+export type Wallet = {
+  loggedIn: boolean; balance: number; unlock_cost: number; rewards: number[];
+  packs: { id: number; price: number; coins: number; tag: string }[];
+  checkin: { claimed_today: boolean; streak: number; day: number } | null;
+  unlocked: number[];
+  history: { id: number; type: 'credit' | 'debit'; coins: number; reason: string; created_at: string }[];
+};
+
+// Coins, check-in, unlocked episodes, coin packs. Works for guests too (packs only).
+export function useWallet() {
+  const { userId, ready } = useSession();
+  return useQuery({ queryKey: ['wallet', userId], queryFn: () => api<Wallet>('wallet'), enabled: ready, staleTime: 15_000 });
+}
+
+export function useWalletActions() {
+  const qc = useQueryClient();
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['wallet'] }); qc.invalidateQueries({ queryKey: ['playback'] }); };
+  const checkin = useMutation({
+    mutationFn: () => api<{ claimed: boolean; day: number; reward: number; balance: number }>('wallet', { method: 'POST', body: { action: 'checkin' } }),
+    onSuccess: refresh,
+  });
+  const unlock = useMutation({
+    mutationFn: (videoId: number) => api<{ result: 'ok' | 'already' | 'insufficient' | 'free' | 'subscribed'; balance: number }>('wallet', { method: 'POST', body: { action: 'unlock', video_id: videoId } }),
+    onSuccess: refresh,
+  });
+  return { checkin, unlock };
+}
+
 // Active entitlement comes from the server (webhook-written). Guests get [].
 export function useSubscription() {
   const { userId } = useSession();
