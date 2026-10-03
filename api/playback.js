@@ -3,17 +3,11 @@
 import { supabase } from './_lib/supabase.js';
 import { setCors, getUser, fail } from './_lib/auth.js';
 import { signDirectory, signFile } from './_lib/bunny.js';
+import { isFreeEpisode, hasActiveSubscription, hasUnlock } from './_lib/entitlement.js';
 
-const FREE = parseInt(process.env.FREE_EPISODES || '5', 10);
 const TTL = 3600;
 
 const hostOf = v => String(v || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-
-async function hasActiveSubscription(userId) {
-  const { data } = await supabase.from('subscriptions').select('id')
-    .eq('user_id', userId).eq('status', 'active').gt('expires_at', new Date().toISOString()).limit(1).maybeSingle();
-  return !!data;
-}
 
 function resolveSource(v) {
   const streamHost = hostOf(process.env.BUNNY_STREAM_HOST);
@@ -53,11 +47,11 @@ export default async function handler(req, res) {
     const { data: v } = await supabase.from('videos').select('*').eq('id', videoId).eq('is_published', true).maybeSingle();
     if (!v || (v.publish_at && new Date(v.publish_at).getTime() > Date.now())) return fail(res, 404, 'Video not found');
 
-    const isFree = !v.is_premium || Number(v.episode_number) <= FREE;
-    if (!isFree) {
+    if (!isFreeEpisode(v)) {
       const user = await getUser(req);
       if (!user) return fail(res, 401, 'login_required');
-      if (!(await hasActiveSubscription(user.id))) return fail(res, 403, 'locked');
+      const ok = (await hasActiveSubscription(user.id)) || (await hasUnlock(user.id, videoId));
+      if (!ok) return fail(res, 403, 'locked');
     }
 
     const src = resolveSource(v);
