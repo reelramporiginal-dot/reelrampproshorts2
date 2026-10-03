@@ -1,6 +1,9 @@
-export const cfHost = (secret, testMode) => {
-  const prod = String(secret || '').startsWith('cfsk_ma_prod_') || String(secret || '').startsWith('cfsk_prod_');
-  return prod ? 'api.cashfree.com' : (testMode ? 'sandbox.cashfree.com' : 'api.cashfree.com');
+// Sandbox vs production is decided here (env CASHFREE_ENV, else by key prefix). The 2nd arg is ignored on purpose.
+export const cfHost = (secret) => {
+  const env = String(process.env.CASHFREE_ENV || '').toLowerCase();
+  if (env === 'sandbox') return 'sandbox.cashfree.com';
+  if (env === 'production') return 'api.cashfree.com';
+  return String(secret || '').includes('_test_') ? 'sandbox.cashfree.com' : 'api.cashfree.com';
 };
 
 export const cfHeaders = (appId, secret) => ({
@@ -26,4 +29,3 @@ export const safeReturnUrl = (candidate, fallbackQuery = '') => {
 export const appUrl = () => origins()[0] || '';
 
 export const cleanPhone = v => String(v || '').replace(/\D/g, '').slice(-10);
-
