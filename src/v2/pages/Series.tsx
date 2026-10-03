@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Lock, Play } from 'lucide-react';
-import { Button, Sheet, Skeleton } from '../ui';
-import { useCatalog, usePlans, useSubscription } from '../api/hooks';
+import { PaywallSheet, Skeleton } from '../ui';
+import { useCatalog, useSubscription, useWallet } from '../api/hooks';
 import { FREE_EPISODES, gradientFor, isLocked, watchPath } from '../lib/poster';
 
 export default function Series() {
@@ -10,8 +10,9 @@ export default function Series() {
   const navigate = useNavigate();
   const { groups, isLoading } = useCatalog();
   const { isPremium } = useSubscription();
-  const plans = usePlans();
-  const [lockOpen, setLockOpen] = useState(false);
+  const wallet = useWallet();
+  const unlocked = new Set(wallet.data?.unlocked || []);
+  const [lockEp, setLockEp] = useState<{ id: number; episode_number: number } | null>(null);
 
   const g = groups.find(x => x.title === title);
 
@@ -50,13 +51,13 @@ export default function Series() {
       <h2 className="mb-2.5 mt-7 px-[18px] text-[22px]">Episodes</h2>
       <div className="grid grid-cols-5 gap-2 px-[18px]">
         {g.episodes.map(e => {
-          const locked = isLocked(e.episode_number, e.is_premium, isPremium);
+          const locked = isLocked(e.episode_number, e.is_premium, isPremium) && !unlocked.has(e.id);
           const cls = 'relative grid min-h-12 aspect-square place-items-center rounded-xl border border-rr-line bg-rr-s2 font-bold';
           const sub = !e.is_premium || e.episode_number <= FREE_EPISODES
             ? <small className="absolute bottom-1 text-[11px] text-rr-ok">Free</small>
             : locked ? <Lock size={12} className="absolute bottom-1 text-rr-gold" aria-hidden /> : null;
           return locked ? (
-            <button key={e.id} className={`${cls} text-rr-dim`} onClick={() => setLockOpen(true)} aria-label={`Episode ${e.episode_number}, locked`}>
+            <button key={e.id} className={`${cls} text-rr-dim`} onClick={() => setLockEp({ id: e.id, episode_number: e.episode_number })} aria-label={`Episode ${e.episode_number}, locked`}>
               {e.episode_number}{sub}
             </button>
           ) : (
@@ -65,18 +66,7 @@ export default function Series() {
         })}
       </div>
 
-      <Sheet open={lockOpen} onClose={() => setLockOpen(false)} title="Ye episode premium hai">
-        <p className="mb-3 text-rr-dim">Plan lene par is series ke saare episode khul jaate hain.</p>
-        <ul className="mb-4 space-y-2">
-          {(plans.data || []).map(p => (
-            <li key={p.id} className="flex items-center justify-between rounded-2xl border border-rr-line bg-rr-s2 px-4 py-3">
-              <span>{p.name}</span><b className="text-rr-hi">₹{p.price}</b>
-            </li>
-          ))}
-        </ul>
-        <p className="mb-3 text-[14px] text-rr-dim">Payment jald shuru hoga.</p>
-        <Button block variant="ghost" onClick={() => setLockOpen(false)}>Theek hai</Button>
-      </Sheet>
+      <PaywallSheet open={!!lockEp} onClose={() => setLockEp(null)} episode={lockEp || undefined} />
     </div>
   );
 }
