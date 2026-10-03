@@ -3,7 +3,9 @@
     { "source": "/api/cashfree/create-order", "destination": "/api/cashfree/create-order" },
     { "source": "/api/cashfree/create-subscription", "destination": "/api/cashfree/create-subscription" },
     { "source": "/api/cashfree/webhook", "destination": "/api/cashfree/webhook" },
+    { "source": "/api/playback", "destination": "/api/playback" },
     { "source": "/api/:path*", "destination": "/api/index" },
     { "source": "/v2/:path*", "destination": "/index.html" }
   ]
 }
+
