@@ -7,6 +7,8 @@ import type { Category, Plan, Series, SeriesGroup, Subscription, Video } from '.
 
 const STALE = 60_000;
 
+export type WatchRow = { id: number; user_id: string; video_id: number; current_position: number; completed: boolean; updated_at: string };
+
 export const useVideos = () => useQuery({ queryKey: ['videos'], queryFn: () => api<Video[]>('videos'), staleTime: STALE });
 export const useSeriesList = () => useQuery({ queryKey: ['series'], queryFn: () => api<Series[]>('series'), staleTime: STALE });
 export const useCategories = () => useQuery({ queryKey: ['categories'], queryFn: () => api<Category[]>('categories'), staleTime: STALE });
@@ -21,6 +23,17 @@ export function useSession() {
     return () => data.subscription.unsubscribe();
   }, []);
   return { session, ready, userId: session?.user.id ?? null };
+}
+
+// Own watch progress (logged-in only; guests get nothing).
+export function useWatchHistory() {
+  const { userId } = useSession();
+  return useQuery({
+    queryKey: ['watch_history', userId],
+    queryFn: () => api<WatchRow[]>('watch_history'),
+    enabled: !!userId,
+    staleTime: 30_000,
+  });
 }
 
 // Active entitlement comes from the server (webhook-written). Guests get [].
