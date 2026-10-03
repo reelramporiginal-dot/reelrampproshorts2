@@ -41,6 +41,12 @@ async function onOrderPaid(evt) {
     .eq('id', pay.id).eq('status', 'pending').select().maybeSingle();
   if (!claimed) return; // another delivery already handled it
 
+  if (pay.kind === 'coins') {
+    const { error } = await supabase.rpc('grant_coins', { p_user: pay.user_id, p_coins: Number(pay.coins) || 0, p_reason: 'purchase', p_ref: `pack:${orderId}` });
+    if (error) throw error; // let Cashfree retry; grant_coins is idempotent
+    return;
+  }
+
   const { data: plan } = await supabase.from('plans').select('*').eq('id', pay.plan_id).maybeSingle();
   const days = Number(plan?.duration_days) || 30;
   const start = await latestExpiry(pay.user_id);
