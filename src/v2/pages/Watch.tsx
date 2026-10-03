@@ -3,12 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Bookmark, Heart, List, Loader2, Lock, Pause, Play, Share2, Volume2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Button, Sheet } from '../ui';
+import { Button, PaywallSheet, Sheet } from '../ui';
 import { api, ApiError } from '../api/client';
-import { useCatalog, useFlag, usePlans, useSession, useSubscription, useWatchHistory } from '../api/hooks';
+import { useCatalog, useFlag, useSession, useSubscription, useWallet, useWatchHistory } from '../api/hooks';
 import { prefetchPlayback, usePlayback } from '../player/usePlayback';
 import { useVideoSource } from '../player/useVideoSource';
-import { FREE_EPISODES, gradientFor, isLocked, seriesPath, watchPath } from '../lib/poster';
+import { gradientFor, isLocked, seriesPath, watchPath } from '../lib/poster';
 
 const ds = {
   get: () => { try { return localStorage.getItem('rr_datasaver') === '1'; } catch { return false; } },
@@ -23,7 +23,8 @@ export default function Watch() {
   const { userId } = useSession();
   const { isPremium } = useSubscription();
   const history = useWatchHistory();
-  const plans = usePlans();
+  const wallet = useWallet();
+  const unlockedIds = wallet.data?.unlocked;
 
   const found = useMemo(() => {
     for (const g of groups) {
@@ -35,7 +36,8 @@ export default function Watch() {
   const g = found?.g; const ep = found?.ep;
   const prev = found && found.i > 0 ? found.g.episodes[found.i - 1] : null;
   const next = found && found.i < found.g.episodes.length - 1 ? found.g.episodes[found.i + 1] : null;
-  const locked = ep ? isLocked(ep.episode_number, ep.is_premium, isPremium) : false;
+  const isUnlocked = (vid: number) => !!unlockedIds?.includes(vid);
+  const locked = ep ? isLocked(ep.episode_number, ep.is_premium, isPremium) && !isUnlocked(ep.id) : false;
 
   const playback = usePlayback(ep && !locked ? ep.id : null);
   const serverLocked = playback.error instanceof ApiError && (playback.error.status === 401 || playback.error.status === 403);
@@ -89,7 +91,7 @@ export default function Watch() {
     const onEnd = () => {
       setPlaying(false); save(true);
       if (!next) return;
-      if (isLocked(next.episode_number, next.is_premium, isPremium)) go(next, 1); // cliffhanger paywall
+      if (isLocked(next.episode_number, next.is_premium, isPremium) && !isUnlocked(next.id)) go(next, 1); // cliffhanger paywall
       else setUpNext(3);
     };
     v.addEventListener('timeupdate', onTime); v.addEventListener('play', onPlay);
@@ -108,7 +110,7 @@ export default function Watch() {
 
   // warm next episode once this one is playing
   useEffect(() => {
-    if (playing && next && !isLocked(next.episode_number, next.is_premium, isPremium)) prefetchPlayback(qc, next.id);
+    if (playing && next && !(isLocked(next.episode_number, next.is_premium, isPremium) && !isUnlocked(next.id))) prefetchPlayback(qc, next.id);
   }, [playing, next?.id, isPremium, qc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "next episode" countdown
@@ -292,23 +294,13 @@ export default function Watch() {
       )}
 
       {/* paywall (cliffhanger) */}
-      <Sheet open={showPaywall} onClose={() => navigate(seriesPath(g.title), { replace: true })} title="Ab kya hoga? Dekhne ke liye unlock karein">
-        <div className="mb-3 flex items-center gap-2 text-rr-dim"><Lock size={16} aria-hidden /> Episode {ep.episode_number} premium hai. Pehle {FREE_EPISODES} episode free hain.</div>
-        {!userId && <p className="mb-3 text-[14.5px] text-rr-hi">Plan lene ke liye pehle login karna hoga.</p>}
-        <ul className="mb-4 space-y-2">
-          {(plans.data || []).map(p => (
-            <li key={p.id} className="flex items-center justify-between rounded-2xl border border-rr-line bg-rr-s2 px-4 py-3"><span>{p.name}</span><b className="text-rr-hi">₹{p.price}</b></li>
-          ))}
-        </ul>
-        <p className="mb-3 text-[14px] text-rr-dim">Payment jald shuru hoga.</p>
-        <Button block variant="ghost" onClick={() => navigate(seriesPath(g.title), { replace: true })}>Series par wapas</Button>
-      </Sheet>
+      <PaywallSheet open={showPaywall} onClose={() => navigate(seriesPath(g.title), { replace: true })} episode={{ id: ep.id, episode_number: ep.episode_number }} />
 
       {/* episodes */}
       <Sheet open={epsOpen} onClose={() => setEpsOpen(false)} title={g.title}>
         <div className="grid grid-cols-5 gap-2">
           {g.episodes.map(e => {
-            const lk = isLocked(e.episode_number, e.is_premium, isPremium);
+            const lk = isLocked(e.episode_number, e.is_premium, isPremium) && !isUnlocked(e.id);
             return (
               <button key={e.id} onClick={() => { setEpsOpen(false); if (e.id !== ep.id) go(e, e.episode_number > ep.episode_number ? 1 : -1); }}
                 className={`relative grid aspect-square min-h-12 place-items-center rounded-xl border font-bold ${e.id === ep.id ? 'border-rr-gold bg-rr-gold/15 text-rr-hi' : 'border-rr-line bg-rr-s2'} ${lk ? 'text-rr-dim' : ''}`}>
