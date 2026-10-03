@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Session } from '@supabase/supabase-js';
 import supabase from '../../lib/supabase';
 import { api } from './client';
@@ -34,6 +34,27 @@ export function useWatchHistory() {
     enabled: !!userId,
     staleTime: 30_000,
   });
+}
+
+// Like / My List flag for one video, with instant (optimistic) UI. Guests see loggedIn=false.
+export function useFlag(kind: 'likes' | 'bookmarks', videoId: number | undefined) {
+  const { userId } = useSession();
+  const qc = useQueryClient();
+  const key = [kind, userId];
+  const q = useQuery({ queryKey: key, queryFn: () => api<{ video_id: number }[]>(kind), enabled: !!userId, staleTime: 30_000 });
+  const on = !!videoId && (q.data || []).some(r => r.video_id === videoId);
+  const m = useMutation({
+    mutationFn: (next: boolean) => api(kind, { method: next ? 'POST' : 'DELETE', body: { video_id: videoId } }),
+    onMutate: async (next: boolean) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<{ video_id: number }[]>(key);
+      qc.setQueryData<{ video_id: number }[]>(key, (old = []) => next ? [...old, { video_id: videoId as number }] : old.filter(r => r.video_id !== videoId));
+      return { prev };
+    },
+    onError: (_e, _n, ctx) => qc.setQueryData(key, ctx?.prev),
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
+  });
+  return { on, loggedIn: !!userId, set: (next: boolean) => m.mutate(next) };
 }
 
 // Active entitlement comes from the server (webhook-written). Guests get [].
