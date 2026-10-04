@@ -7,6 +7,10 @@ import Series from './pages/Series';
 import Watch from './pages/Watch';
 import Rewards from './pages/Rewards';
 import PaymentReturn from './pay/PaymentReturn';
+import Profile from './pages/Profile';
+import Login from './pages/Login';
+import MyList from './pages/MyList';
+import Policy from './pages/Policy';
 import Stub from './pages/Stub';
 
 function Layout() {
@@ -29,7 +33,10 @@ export default function V2App() {
         <Route path="explore" element={<Explore />} />
         <Route path="series/:title" element={<Series />} />
         <Route path="rewards" element={<Rewards />} />
-        <Route path="profile" element={<Stub name="Profile" stage="S5" />} />
+        <Route path="mylist" element={<MyList />} />
+        <Route path="profile" element={<Profile />} />
+        <Route path="login" element={<Login />} />
+        <Route path="policy/:slug" element={<Policy />} />
         <Route path="*" element={<Stub name="Nahi mila" stage="404" />} />
       </Route>
     </Routes>
