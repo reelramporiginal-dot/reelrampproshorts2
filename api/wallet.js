@@ -3,6 +3,7 @@
 // POST /api/wallet {action:'unlock', video_id} -> spend coins on one premium episode
 import { supabase } from './_lib/supabase.js';
 import { setCors, getUser, fail } from './_lib/auth.js';
+import { allow } from './_lib/ratelimit.js';
 import { isFreeEpisode, hasActiveSubscription, UNLOCK_COINS } from './_lib/entitlement.js';
 
 const REWARDS = [10, 10, 10, 10, 10, 10, 50]; // keep in sync with claim_checkin() in SQL
@@ -17,6 +18,7 @@ export default async function handler(req, res) {
   setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   res.setHeader('Cache-Control', 'no-store');
+  if (!allow(req, res, req.method === 'GET' ? 'wallet-read' : 'wallet-write', req.method === 'GET' ? 120 : 20)) return;
 
   try {
     const user = await getUser(req);
