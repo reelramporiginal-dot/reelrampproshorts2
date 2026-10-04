@@ -1,12 +1,14 @@
 // Creates a Cashfree order. Price comes from the `plans` table, never from the browser.
 import { supabase } from '../_lib/supabase.js';
 import { setCors, getUser, fail } from '../_lib/auth.js';
+import { allow } from '../_lib/ratelimit.js';
 import { cfHost, cfHeaders, safeReturnUrl, appUrl, cleanPhone } from '../_lib/cashfree.js';
 
 export default async function handler(req, res) {
   setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return fail(res, 405, 'Method not allowed');
+  if (!allow(req, res, 'create-order', 10)) return;
 
   try {
     const user = await getUser(req);
