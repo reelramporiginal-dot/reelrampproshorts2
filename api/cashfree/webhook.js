@@ -41,19 +41,23 @@ async function onOrderPaid(evt) {
     .eq('id', pay.id).eq('status', 'pending').select().maybeSingle();
   if (!claimed) return; // another delivery already handled it
 
+  // If granting fails after we claimed the payment, un-claim it so the retry can finish the job.
+  const unclaim = () => supabase.from('payments').update({ status: 'pending' }).eq('id', pay.id).eq('status', 'success');
+
   if (pay.kind === 'coins') {
     const { error } = await supabase.rpc('grant_coins', { p_user: pay.user_id, p_coins: Number(pay.coins) || 0, p_reason: 'purchase', p_ref: `pack:${orderId}` });
-    if (error) throw error; // let Cashfree retry; grant_coins is idempotent
+    if (error) { await unclaim(); throw error; } // grant_coins is idempotent, so the retry is safe
     return;
   }
 
   const { data: plan } = await supabase.from('plans').select('*').eq('id', pay.plan_id).maybeSingle();
   const days = Number(plan?.duration_days) || 30;
   const start = await latestExpiry(pay.user_id);
-  await supabase.from('subscriptions').insert({
+  const { error: subErr } = await supabase.from('subscriptions').insert({
     user_id: pay.user_id, plan: plan?.name || pay.notes || 'premium', plan_id: pay.plan_id, status: 'active',
     expires_at: addDays(start, days).toISOString(), provider: 'cashfree', provider_ref: orderId, amount: pay.amount,
   });
+  if (subErr) { await unclaim(); throw subErr; }
 }
 
 async function onOrderFailed(evt) {
@@ -106,6 +110,7 @@ export default async function handler(req, res) {
   let evt;
   try { evt = JSON.parse(raw); } catch { return res.status(400).json({ error: 'bad json' }); }
 
+  let eventKey = null;
   try {
     // Idempotency: one row per delivery key. Duplicate => already processed.
     const key = crypto.createHash('sha256').update(`${evt.type}|${ts}|${raw}`).digest('hex');
@@ -114,6 +119,7 @@ export default async function handler(req, res) {
       if (dupErr.code === '23505') return res.status(200).json({ ok: true, duplicate: true });
       throw dupErr;
     }
+    eventKey = key;
 
     switch (evt.type) {
       case 'PAYMENT_SUCCESS_WEBHOOK': await onOrderPaid(evt); break;
@@ -127,6 +133,8 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (e) {
     console.error('webhook processing error:', e.message);
+    // Free the dedupe key so Cashfree's retry is processed instead of being skipped as a duplicate.
+    if (eventKey) { try { await supabase.from('webhook_events').delete().eq('event_key', eventKey); } catch { /* ignore */ } }
     return res.status(500).json({ error: 'processing failed' }); // Cashfree will retry
   }
 }
