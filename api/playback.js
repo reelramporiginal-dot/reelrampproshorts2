@@ -2,6 +2,7 @@
 // Decides access on the server (free episode, or active subscription) and returns a short-lived signed URL.
 import { supabase } from './_lib/supabase.js';
 import { setCors, getUser, fail } from './_lib/auth.js';
+import { allow } from './_lib/ratelimit.js';
 import { signDirectory, signFile } from './_lib/bunny.js';
 import { isFreeEpisode, hasActiveSubscription, hasUnlock } from './_lib/entitlement.js';
 
@@ -39,6 +40,7 @@ export default async function handler(req, res) {
   setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return fail(res, 405, 'Method not allowed');
+  if (!allow(req, res, 'playback', 60)) return;
 
   try {
     const videoId = Number(req.body?.video_id);
