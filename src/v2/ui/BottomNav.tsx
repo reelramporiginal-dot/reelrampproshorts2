@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
-import { Home, Compass, Coins, User } from 'lucide-react';
+import { Home, Compass, Coins, Bookmark, User } from 'lucide-react';
 
 const items = [
   { to: '/v2', label: 'Home', Icon: Home, end: true },
   { to: '/v2/explore', label: 'Explore', Icon: Compass },
   { to: '/v2/rewards', label: 'Rewards', Icon: Coins },
+  { to: '/v2/mylist', label: 'My List', Icon: Bookmark },
   { to: '/v2/profile', label: 'Profile', Icon: User },
 ];
 
