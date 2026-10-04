@@ -57,6 +57,17 @@ export function useFlag(kind: 'likes' | 'bookmarks', videoId: number | undefined
   return { on, loggedIn: !!userId, set: (next: boolean) => m.mutate(next) };
 }
 
+// Own My List (logged-in only). Same cache key as useFlag('bookmarks') so both stay in sync.
+export function useBookmarks() {
+  const { userId } = useSession();
+  return useQuery({
+    queryKey: ['bookmarks', userId],
+    queryFn: () => api<{ video_id: number }[]>('bookmarks'),
+    enabled: !!userId,
+    staleTime: 30_000,
+  });
+}
+
 export type Wallet = {
   loggedIn: boolean; balance: number; unlock_cost: number; rewards: number[];
   packs: { id: number; price: number; coins: number; tag: string }[];
