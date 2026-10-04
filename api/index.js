@@ -3,6 +3,7 @@
 // Admin = verified JWT whose confirmed email is in ADMIN_EMAILS. Money/coins/entitlement = server only.
 import { supabase } from './_lib/supabase.js';
 import { setCors, getUser, fail } from './_lib/auth.js';
+import { allow } from './_lib/ratelimit.js';
 
 const CATALOG = {
   videos: q => q.eq('is_published', true).or(`publish_at.is.null,publish_at.lte.${new Date().toISOString()}`),
@@ -39,6 +40,8 @@ const EVENTS = {
 const ADMIN_READ = [...Object.keys(CATALOG), ...Object.keys(OWNER_COL), ...Object.keys(EVENTS), 'referrals', 'audit_logs'];
 const ADMIN_PUT = [...Object.keys(CATALOG), 'users', 'support_tickets', 'content_reports'];
 const ADMIN_DELETE = [...Object.keys(CATALOG), 'support_tickets', 'content_reports'];
+// Set HIDE_VIDEO_SOURCES=1 once the legacy app (which plays from video_filename) is retired.
+const HIDE_SOURCES = process.env.HIDE_VIDEO_SOURCES === '1';
 const IMPORTABLE = Object.keys(CATALOG).filter(t => t !== 'admin_settings');
 
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => o && k in o).map(k => [k, o[k]]));
@@ -65,6 +68,8 @@ export default async function handler(req, res) {
   const resource = u.pathname.replace(/^\/api\/?/, '').split('/')[0] || 'videos';
   const sp = u.searchParams;
 
+  if (!allow(req, res, req.method === 'GET' ? 'api-read' : 'api-write', req.method === 'GET' ? 300 : 60)) return;
+
   try {
     const user = await getUser(req); // null for guests / bad token
     const admin = !!user?.isAdmin;
@@ -90,7 +95,15 @@ export default async function handler(req, res) {
       }
       const { data, error } = await q.order('id', { ascending: false }).limit(500);
       if (error) return fail(res, 400, error.message);
-      return res.status(200).json(data || []);
+      let rows = data || [];
+      if (resource === 'videos' && HIDE_SOURCES && !admin) {
+        rows = rows.map(({ video_filename, bunny_video_id, ...rest }) => rest); // playback.js resolves the real source
+      }
+      // Only anonymous catalog reads may be cached at the CDN; anything user-specific never is.
+      const publicRead = !req.headers.authorization && !!CATALOG[resource];
+      res.setHeader('Vary', 'Authorization');
+      res.setHeader('Cache-Control', publicRead ? 'public, s-maxage=30, stale-while-revalidate=120' : 'private, no-store');
+      return res.status(200).json(rows);
     }
 
     // ---------- POST ----------
